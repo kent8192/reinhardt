@@ -8,14 +8,61 @@ use crate::reactive::{QueryConsumer, QueryDefaults};
 use crate::router::NavigationType;
 use crate::router::loader::{LoaderStore, RouteLoaderError, route_context};
 use crate::router::loader_registry::{LoaderConsumer, LoaderRegistry, execute_loader};
-use crate::router::navigation_guard::{NavigationContext, NavigationDecision, NavigationKind};
+use crate::router::navigation_guard::{
+	NavigationContext, NavigationDecision, NavigationGuardError, NavigationKind,
+};
 use crate::router::navigation_guard_registry::{
 	NavigationGuardRegistry, execute_navigation_guards,
 };
 use futures_util::future::{join_all, try_join_all};
 use reinhardt_urls::routers::client_router::{ClientRouteTreeMatch, ClientRouter};
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::rc::Rc;
+use url::Url;
+
+const REDIRECT_NORMALIZATION_BASE: &str = "http://reinhardt.invalid/";
+
+#[derive(Clone, Debug)]
+struct RedirectChain {
+	visited: HashSet<String>,
+}
+
+impl RedirectChain {
+	fn new(destination: &str) -> Result<Self, NavigationGuardError> {
+		let mut visited = HashSet::new();
+		visited.insert(Self::normalize(destination)?);
+		Ok(Self { visited })
+	}
+
+	fn redirect(&self, destination: &str) -> Result<Self, NavigationGuardError> {
+		let mut chain = self.clone();
+		if !chain.visited.insert(Self::normalize(destination)?) {
+			return Err(NavigationGuardError::with_status(
+				"navigation guard redirect loop detected",
+				500,
+			));
+		}
+		Ok(chain)
+	}
+
+	fn normalize(destination: &str) -> Result<String, NavigationGuardError> {
+		let base = Url::parse(REDIRECT_NORMALIZATION_BASE).expect("fixed redirect base is valid");
+		let url = base.join(destination).map_err(|error| {
+			NavigationGuardError::with_status(
+				format!("navigation guard redirect destination is invalid: {error}"),
+				500,
+			)
+		})?;
+		if url.origin() != base.origin() {
+			return Err(NavigationGuardError::with_status(
+				"navigation guard redirect destination must be same-origin",
+				500,
+			));
+		}
+		Ok(url.into())
+	}
+}
 
 // Pop and initial intents are supplied by the browser launcher; native unit
 // tests exercise the synchronous push path only.
@@ -57,6 +104,7 @@ struct NavigationAttempt {
 	intent: NavigationIntent,
 	path: String,
 	matched: ClientRouteTreeMatch,
+	redirect_chain: RedirectChain,
 	cancellation: CancellationSource,
 	_task: AbortableTaskGuard,
 }
@@ -210,6 +258,29 @@ impl NavigationCoordinator {
 		path: String,
 		intent: NavigationIntent,
 	) -> Result<(), NavigateError> {
+		let redirect_chain = RedirectChain::new(&path)
+			.map_err(|error| NavigateError::RouterRejected(error.to_string()))?;
+		self.navigate_with_redirect_chain_in_context(path, intent, redirect_chain)
+	}
+
+	fn navigate_with_redirect_chain(
+		self: &Rc<Self>,
+		path: String,
+		intent: NavigationIntent,
+		redirect_chain: RedirectChain,
+	) -> Result<(), NavigateError> {
+		let query_client = self.query_client.clone();
+		with_query_client(&query_client, || {
+			self.navigate_with_redirect_chain_in_context(path, intent, redirect_chain)
+		})
+	}
+
+	fn navigate_with_redirect_chain_in_context(
+		self: &Rc<Self>,
+		path: String,
+		intent: NavigationIntent,
+		redirect_chain: RedirectChain,
+	) -> Result<(), NavigateError> {
 		let matched = self.router.match_tree(&path);
 
 		self.cancel_active_attempt();
@@ -236,6 +307,7 @@ impl NavigationCoordinator {
 		let coordinator = Rc::clone(self);
 		let path_for_task = path.clone();
 		let matched_for_task = matched.clone();
+		let redirect_chain_for_task = redirect_chain.clone();
 		let task_cancellation = cancellation_handle.clone();
 		let task = crate::cancellation::spawn_abortable_task(async move {
 			let guard_context = NavigationContext::new(
@@ -267,8 +339,13 @@ impl NavigationCoordinator {
 				return;
 			}
 			if decision != NavigationDecision::Allow {
-				let _ =
-					coordinator.finish_guard_decision(generation, path_for_task, intent, decision);
+				let _ = coordinator.finish_guard_decision(
+					generation,
+					path_for_task,
+					intent,
+					redirect_chain_for_task.clone(),
+					decision,
+				);
 				return;
 			}
 
@@ -328,8 +405,13 @@ impl NavigationCoordinator {
 			}
 			if decision != NavigationDecision::Allow {
 				drop(store);
-				let _ =
-					coordinator.finish_guard_decision(generation, path_for_task, intent, decision);
+				let _ = coordinator.finish_guard_decision(
+					generation,
+					path_for_task,
+					intent,
+					redirect_chain_for_task,
+					decision,
+				);
 				return;
 			}
 			let _ = coordinator.commit_success(
@@ -346,6 +428,7 @@ impl NavigationCoordinator {
 			intent,
 			path,
 			matched,
+			redirect_chain,
 			cancellation,
 			_task: task,
 		});
@@ -357,6 +440,7 @@ impl NavigationCoordinator {
 		generation: u64,
 		path: String,
 		intent: NavigationIntent,
+		redirect_chain: RedirectChain,
 		decision: NavigationDecision,
 	) -> Result<(), NavigateError> {
 		if !self.is_current_generation(generation) {
@@ -372,14 +456,21 @@ impl NavigationCoordinator {
 				);
 				Ok(())
 			}
-			NavigationDecision::Redirect { location, replace } => self.navigate(
-				location,
-				if replace {
+			NavigationDecision::Redirect { location, replace } => {
+				let redirect_chain = match redirect_chain.redirect(&location) {
+					Ok(redirect_chain) => redirect_chain,
+					Err(error) => {
+						self.finish_error(generation, error.into());
+						return Ok(());
+					}
+				};
+				let redirect_intent = if replace {
 					NavigationIntent::Replace
 				} else {
 					NavigationIntent::Push
-				},
-			),
+				};
+				self.navigate_with_redirect_chain(location, redirect_intent, redirect_chain)
+			}
 		}
 	}
 
@@ -392,22 +483,41 @@ impl NavigationCoordinator {
 		let Some(matched) = self.router.match_tree(&path) else {
 			return Ok(());
 		};
-		let ids = matched.loader_ids().to_vec();
-		if ids.is_empty() {
+		let loader_ids = matched.loader_ids().to_vec();
+		let guard_ids = matched.navigation_guard_ids().to_vec();
+		if loader_ids.is_empty() && guard_ids.is_empty() {
 			return Ok(());
 		}
-		let context = route_context(&matched);
+		let route_context = route_context(&matched);
 		let cancellation = CancellationSource::new();
 		let handle = cancellation.handle();
 		let prefetch_id = self.next_prefetch_id.get().wrapping_add(1);
 		self.next_prefetch_id.set(prefetch_id);
 		let coordinator = Rc::clone(self);
 		let task = crate::cancellation::spawn_abortable_task(async move {
-			let futures = ids.into_iter().map(|id| {
+			let guard_context = NavigationContext::new(
+				path,
+				route_context.clone(),
+				NavigationKind::Prefetch,
+				coordinator.query_client.clone(),
+				handle.clone(),
+				QueryConsumer::Prefetch,
+				#[cfg(native)]
+				None,
+			);
+			if !matches!(
+				execute_navigation_guards(&coordinator.guard_registry, &guard_ids, guard_context)
+					.await,
+				Ok(NavigationDecision::Allow)
+			) {
+				coordinator.finish_prefetch(prefetch_id);
+				return;
+			}
+			let futures = loader_ids.into_iter().map(|id| {
 				execute_loader(
 					&coordinator.registry,
 					id,
-					&context,
+					&route_context,
 					handle.clone(),
 					LoaderConsumer::Prefetch,
 				)
@@ -592,6 +702,19 @@ mod tests {
 		});
 	}
 
+	#[test]
+	fn redirect_chain_normalizes_paths_without_collapsing_distinct_queries() {
+		let chain =
+			RedirectChain::new("/protected?next=one").expect("initial destination is valid");
+		let chain = chain
+			.redirect("/protected?next=two")
+			.expect("different query destination remains distinct");
+		assert!(chain.redirect("/protected?next=one").is_err());
+
+		let chain = RedirectChain::new("/protected/").expect("initial destination is valid");
+		assert!(chain.redirect("/protected/./").is_err());
+	}
+
 	#[cfg(native)]
 	mod native_async_tests {
 		use super::*;
@@ -606,7 +729,7 @@ mod tests {
 		};
 		use reinhardt_core::page::{IntoPage, Outlet};
 		use std::cell::{Cell, RefCell};
-		use std::collections::VecDeque;
+		use std::collections::{HashMap, VecDeque};
 		use std::future::{Future, poll_fn};
 		use std::pin::Pin;
 		use std::rc::Rc;
@@ -629,6 +752,7 @@ mod tests {
 			static ROOT_GUARD_OPEN: Cell<bool> = const { Cell::new(false) };
 			static CHILD_GUARD_BLOCKED: Cell<bool> = const { Cell::new(false) };
 			static CHILD_GUARD_OPEN: Cell<bool> = const { Cell::new(false) };
+			static REDIRECTS: RefCell<HashMap<String, NavigationDecision>> = RefCell::new(HashMap::new());
 		}
 
 		fn record_navigation_guard(name: &'static str) -> NavigationDecision {
@@ -716,6 +840,19 @@ mod tests {
 			})
 		}
 
+		#[navigation_guard]
+		async fn coordinator_redirect_guard(
+			context: NavigationContext,
+		) -> Result<NavigationDecision, NavigationGuardError> {
+			Ok(REDIRECTS.with(|redirects| {
+				redirects
+					.borrow()
+					.get(context.destination())
+					.cloned()
+					.unwrap_or(NavigationDecision::Allow)
+			}))
+		}
+
 		#[layout(
 			"/guarded/",
 			name = "coordinator-root-guarded",
@@ -779,6 +916,24 @@ mod tests {
 		)]
 		fn coordinator_guarded_loaded(Loader(value): Loader<String>) -> Page {
 			Page::text(value)
+		}
+
+		#[component(
+			"/redirect-a/",
+			name = "coordinator-redirect-a",
+			navigation_guard = coordinator_redirect_guard,
+		)]
+		fn coordinator_redirect_a() -> Page {
+			Page::text("redirect a")
+		}
+
+		#[component(
+			"/redirect-b/",
+			name = "coordinator-redirect-b",
+			navigation_guard = coordinator_redirect_guard,
+		)]
+		fn coordinator_redirect_b() -> Page {
+			Page::text("redirect b")
 		}
 
 		#[loader]
@@ -892,6 +1047,7 @@ mod tests {
 			ROOT_GUARD_OPEN.with(|open| open.set(false));
 			CHILD_GUARD_BLOCKED.with(|blocked| blocked.set(false));
 			CHILD_GUARD_OPEN.with(|open| open.set(false));
+			REDIRECTS.with(|redirects| redirects.borrow_mut().clear());
 		}
 
 		fn provide_test_query_client() -> QueryClientGuard {
@@ -903,6 +1059,8 @@ mod tests {
 				.route("root", "/", || Page::text("old route"))
 				.component(coordinator_loaded)
 				.component(coordinator_guarded_loaded)
+				.component(coordinator_redirect_a)
+				.component(coordinator_redirect_b)
 				.component(coordinator_error)
 				.routes(|routes| {
 					routes
@@ -950,6 +1108,178 @@ mod tests {
 				);
 				assert_eq!(router.current_path().get(), "/guarded/child/leaf/");
 				assert!(!coordinator.pending().get());
+			});
+		}
+
+		#[test]
+		fn redirect_loop_detection_normalizes_destinations_and_preserves_query_distinctions() {
+			ReactiveScope::run(|| {
+				reset_test_state();
+				let _query_client = provide_test_query_client();
+				let tasks = Rc::new(RefCell::new(VecDeque::new()));
+				let tasks_for_sink = Rc::clone(&tasks);
+				let _sink = crate::platform::install_task_sink(move |task| {
+					tasks_for_sink.borrow_mut().push_back(task);
+				});
+				let router = Rc::new(router_with_loaded_routes());
+				let coordinator = NavigationCoordinator::new(router).expect("registry builds");
+
+				REDIRECTS.with(|redirects| {
+					redirects.borrow_mut().insert(
+						"/redirect-a/".to_owned(),
+						NavigationDecision::Redirect {
+							location: "/redirect-a/./".to_owned(),
+							replace: false,
+						},
+					);
+				});
+				coordinator
+					.navigate("/redirect-a/".to_owned(), NavigationIntent::Push)
+					.expect("redirect navigation starts");
+				poll_rounds(&tasks, 8);
+				assert_eq!(coordinator.committed_index(), 0);
+				assert_eq!(
+					coordinator.error().get().and_then(|error| error.status()),
+					Some(500)
+				);
+
+				reset_test_state();
+				REDIRECTS.with(|redirects| {
+					redirects.borrow_mut().extend([
+						(
+							"/redirect-a/?next=one".to_owned(),
+							NavigationDecision::Redirect {
+								location: "/redirect-b/?next=two".to_owned(),
+								replace: false,
+							},
+						),
+						(
+							"/redirect-b/?next=two".to_owned(),
+							NavigationDecision::Redirect {
+								location: "/redirect-a/?next=one".to_owned(),
+								replace: false,
+							},
+						),
+					]);
+				});
+				coordinator
+					.navigate("/redirect-a/?next=one".to_owned(), NavigationIntent::Push)
+					.expect("multi-target redirect starts");
+				poll_rounds(&tasks, 12);
+				assert_eq!(coordinator.committed_index(), 0);
+				assert_eq!(
+					coordinator.error().get().and_then(|error| error.status()),
+					Some(500)
+				);
+			});
+		}
+
+		#[test]
+		fn redirects_honor_history_intent_without_committing_the_denied_target() {
+			ReactiveScope::run(|| {
+				for (replace, expected_index) in [(true, 4), (false, 5)] {
+					reset_test_state();
+					let _query_client = provide_test_query_client();
+					let tasks = Rc::new(RefCell::new(VecDeque::new()));
+					let tasks_for_sink = Rc::clone(&tasks);
+					let _sink = crate::platform::install_task_sink(move |task| {
+						tasks_for_sink.borrow_mut().push_back(task);
+					});
+					REDIRECTS.with(|redirects| {
+						redirects.borrow_mut().insert(
+							"/redirect-a/".to_owned(),
+							NavigationDecision::Redirect {
+								location: "/".to_owned(),
+								replace,
+							},
+						);
+					});
+					let router = Rc::new(router_with_loaded_routes());
+					let coordinator =
+						NavigationCoordinator::new(Rc::clone(&router)).expect("registry builds");
+					coordinator.initialize_committed_index(4);
+
+					coordinator
+						.navigate(
+							"/redirect-a/".to_owned(),
+							NavigationIntent::Pop {
+								target_index: Some(3),
+							},
+						)
+						.expect("guarded pop starts");
+					poll_rounds(&tasks, 8);
+
+					assert_eq!(router.current_path().get(), "/");
+					assert_eq!(coordinator.committed_index(), expected_index);
+				}
+			});
+		}
+
+		#[test]
+		fn prefetch_only_loads_after_allow_and_click_reuses_the_guard_query() {
+			ReactiveScope::run(|| {
+				for decision in [
+					Ok(NavigationDecision::Redirect {
+						location: "/".to_owned(),
+						replace: true,
+					}),
+					Ok(NavigationDecision::NotFound),
+					Ok(NavigationDecision::Forbidden),
+					Err(NavigationGuardError::new("prefetch guard failed")),
+				] {
+					reset_test_state();
+					let _query_client = provide_test_query_client();
+					let tasks = Rc::new(RefCell::new(VecDeque::new()));
+					let tasks_for_sink = Rc::clone(&tasks);
+					let _sink = crate::platform::install_task_sink(move |task| {
+						tasks_for_sink.borrow_mut().push_back(task);
+					});
+					CONTROLLED_GUARD_RESULTS
+						.with(|results| results.borrow_mut().push_back(decision));
+					let router = Rc::new(router_with_loaded_routes());
+					let coordinator =
+						NavigationCoordinator::new(Rc::clone(&router)).expect("registry builds");
+					coordinator
+						.prefetch("/guarded-loaded/".to_owned())
+						.expect("prefetch starts");
+					poll_rounds(&tasks, 8);
+					assert_eq!(SLOW_LOADER_STARTS.with(Cell::get), 0);
+					assert_eq!(router.current_path().get(), "/");
+					assert!(coordinator.error().get().is_none());
+				}
+
+				reset_test_state();
+				let runtime = TestQueryRuntime::new();
+				let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+				let _query_client = provide_query_client(client);
+				let tasks = Rc::new(RefCell::new(VecDeque::new()));
+				let tasks_for_sink = Rc::clone(&tasks);
+				let _sink = crate::platform::install_task_sink(move |task| {
+					tasks_for_sink.borrow_mut().push_back(task);
+				});
+				CONTROLLED_GUARD_SESSION_QUERY.with(|query| query.set(true));
+				GATE_OPEN.with(|gate| gate.set(true));
+				let router = Rc::new(router_with_loaded_routes());
+				let coordinator =
+					NavigationCoordinator::new(Rc::clone(&router)).expect("registry builds");
+				coordinator
+					.prefetch("/guarded-loaded/".to_owned())
+					.expect("allowed prefetch starts");
+				poll_rounds(&tasks, 4);
+				runtime.run_until_stalled();
+				poll_rounds(&tasks, 8);
+				assert_eq!(SESSION_FETCHES.with(Cell::get), 1);
+				assert_eq!(SLOW_LOADER_STARTS.with(Cell::get), 1);
+
+				coordinator
+					.navigate("/guarded-loaded/".to_owned(), NavigationIntent::Push)
+					.expect("click starts a new guard evaluation");
+				poll_rounds(&tasks, 4);
+				runtime.run_until_stalled();
+				poll_rounds(&tasks, 8);
+				assert_eq!(CONTROLLED_GUARD_RUNS.with(Cell::get), 3);
+				assert_eq!(SESSION_FETCHES.with(Cell::get), 1);
+				assert_eq!(router.current_path().get(), "/guarded-loaded/");
 			});
 		}
 

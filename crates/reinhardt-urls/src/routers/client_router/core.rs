@@ -60,6 +60,7 @@ type NavigationSignals = (
 	Signal<String>,
 	Signal<HashMap<String, String>>,
 	Signal<Option<String>>,
+	Signal<bool>,
 	Option<Rc<ReactiveScope>>,
 );
 
@@ -69,22 +70,26 @@ fn create_navigation_signals(initial_path: String) -> NavigationSignals {
 			Signal::new(initial_path),
 			Signal::new(HashMap::new()),
 			Signal::new(None),
+			Signal::new(false),
 			None,
 		);
 	}
 
 	let scope = Rc::new(ReactiveScope::new());
-	let (current_path, current_params, current_route_name) = scope.enter(|| {
-		(
-			Signal::new(initial_path),
-			Signal::new(HashMap::new()),
-			Signal::new(None),
-		)
-	});
+	let (current_path, current_params, current_route_name, current_match_is_unmatched) = scope
+		.enter(|| {
+			(
+				Signal::new(initial_path),
+				Signal::new(HashMap::new()),
+				Signal::new(None),
+				Signal::new(false),
+			)
+		});
 	(
 		current_path,
 		current_params,
 		current_route_name,
+		current_match_is_unmatched,
 		Some(scope),
 	)
 }
@@ -483,6 +488,8 @@ pub struct ClientRouter {
 	current_params: Signal<HashMap<String, String>>,
 	/// Current matched route name signal.
 	current_route_name: Signal<Option<String>>,
+	/// Whether the current committed state intentionally selected the not-found surface.
+	current_match_is_unmatched: Signal<bool>,
 	/// Owns navigation state created outside an active reactive scope.
 	///
 	/// The final router clone drops this scope and disposes its navigation
@@ -544,8 +551,13 @@ impl ClientRouter {
 		let initial_path = current_location_path().unwrap_or_else(|_| "/".to_string());
 		#[cfg(native)]
 		let initial_path = current_path().unwrap_or_else(|_| "/".to_string());
-		let (current_path, current_params, current_route_name, navigation_scope) =
-			create_navigation_signals(initial_path);
+		let (
+			current_path,
+			current_params,
+			current_route_name,
+			current_match_is_unmatched,
+			navigation_scope,
+		) = create_navigation_signals(initial_path);
 
 		Self {
 			routes: Vec::new(),
@@ -555,6 +567,7 @@ impl ClientRouter {
 			current_path,
 			current_params,
 			current_route_name,
+			current_match_is_unmatched,
 			_navigation_scope: navigation_scope,
 			not_found: None,
 			// (Fixes #4258) Reactive observation state is wasm-only; see field
@@ -1221,6 +1234,7 @@ impl ClientRouter {
 		self.current_params.set(leaf.params.clone());
 		self.current_route_name
 			.set(leaf.route.name().map(str::to_string));
+		self.current_match_is_unmatched.set(false);
 		self.notify_observers(path, &leaf.params);
 		Ok(())
 	}
@@ -1246,6 +1260,7 @@ impl ClientRouter {
 		let params = HashMap::new();
 		self.current_params.set(params.clone());
 		self.current_route_name.set(None);
+		self.current_match_is_unmatched.set(true);
 		self.notify_observers(path, &params);
 		Ok(())
 	}
@@ -1439,8 +1454,20 @@ impl ClientRouter {
 	/// Returns the registered `not_found` page when no route matches, or a
 	/// default 404 page if no `not_found` handler has been set.
 	pub fn render_current(&self) -> Page {
+		if self.current_match_is_unmatched.get() {
+			return self.__render_not_found();
+		}
 		let path = self.current_path.get();
 		self.render_path(&path)
+	}
+
+	/// Renders the configured not-found handler without inspecting the current path.
+	#[doc(hidden)]
+	pub fn __render_not_found(&self) -> Page {
+		self.not_found
+			.as_ref()
+			.map(|render| render())
+			.unwrap_or(Page::Empty)
 	}
 
 	/// Returns the number of registered routes.
@@ -1985,6 +2012,21 @@ mod tests {
 			let router = ClientRouter::new().not_found(not_found_page);
 
 			let _view = router.render_current();
+		});
+	}
+
+	#[test]
+	fn commit_unmatched_renders_not_found_even_when_path_matches_a_route() {
+		ReactiveScope::run(|| {
+			let router = ClientRouter::new()
+				.route("item", "/items/{id}/", || page_with_text("item"))
+				.not_found(not_found_page);
+
+			router
+				.commit_unmatched("/items/7/", NavigationType::Push, 1)
+				.expect("unmatched navigation commits");
+
+			assert_eq!(router.render_current().render_to_string(), "NotFound");
 		});
 	}
 

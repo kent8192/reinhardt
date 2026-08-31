@@ -1928,16 +1928,21 @@ mod tests {
 		let scope = ReactiveScope::new();
 		scope.enter(|| {
 			for input_type in ["text", "search", "tel", "url", "email", "password", "color"] {
+				let value = if input_type == "color" {
+					"#123456"
+				} else {
+					"non-empty"
+				};
 				let element = element("input");
 				let input: web_sys::HtmlInputElement =
 					element.as_web_sys().clone().unchecked_into();
 				input.set_type(input_type);
 				let _controller = ControlBindingController::mount(
 					element,
-					ControlBinding::text(Signal::new("non-empty".to_owned())),
+					ControlBinding::text(Signal::new(value.to_owned())),
 				)
 				.expect("supported text input type should mount");
-				assert_eq!(input.value(), "non-empty");
+				assert_eq!(input.value(), value);
 			}
 		});
 	}

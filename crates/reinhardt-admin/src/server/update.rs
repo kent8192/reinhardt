@@ -273,6 +273,12 @@ pub(crate) async fn update_record_with_trusted_file_fields(
 			inline
 				.validate_child_table(child_admin.table_name())
 				.map_server_fn_error()?;
+			auth.require_model_permission(
+				child_admin.as_ref(),
+				user.as_ref(),
+				ModelPermission::View,
+			)
+			.await?;
 			let query = child_admin
 				.get_queryset(
 					user.as_ref(),

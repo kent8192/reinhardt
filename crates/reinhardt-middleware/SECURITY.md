@@ -62,10 +62,13 @@ unless their owning control validates them.
   authenticated state.
 - Caches that can affect authorization or responses must key and invalidate by
   the complete security context, including principal, tenant, authorization
-  scope, relevant credentials, and response variation. `CacheMiddleware` does
-  not infer that context; applications must skip private responses by default
-  or provide a principal/tenant-aware strategy instead of using `UrlOnly` for
-  authenticated endpoints.
+  scope, relevant credentials, and response variation. `CacheMiddleware`
+  bypasses requests carrying standard credentials or authenticated state and
+  does not store responses marked private, non-storable, non-reusable,
+  cookie-setting, or carrying variations unsupported by the selected key
+  strategy. Applications using custom credential carriers or additional tenant
+  and scope context must exclude those paths or provide a principal/tenant-aware
+  strategy.
 - Rate-limit identities derive from authenticated principals or validated
   network identity. Client-controlled headers, request IDs, and arbitrary
   forwarded addresses cannot select another caller's bucket or evade limits.

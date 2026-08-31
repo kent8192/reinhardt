@@ -25,7 +25,7 @@ fn main() {
 	assert_eq!(DocumentCreateForm::title().name, "title");
 	assert_eq!(DocumentCreateFormField::Published.name(), "published");
 	assert_eq!(
-		<DocumentCreateFormSchema as ModelFormContractSchema>::fields().len(),
+		<DocumentCreateFormSchema as ModelFormContractSchema>::contract_fields().len(),
 		2
 	);
 	assert_eq!(<DocumentCreateForm as ModelFormContract>::fields().len(), 2);

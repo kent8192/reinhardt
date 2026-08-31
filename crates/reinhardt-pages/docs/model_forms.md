@@ -85,6 +85,12 @@ but keep relation imports and other ORM-only surrounding items explicitly
 native-gated. WASM then needs only the contract types, not `Cluster`, its
 relationship graph, or a database driver.
 
+The additive [`ModelFormContractSchema`](https://docs.rs/reinhardt-core/latest/reinhardt_core/model_form/trait.ModelFormContractSchema.html)
+bridge uses `contract_fields()` and `contract_default_boolean_is_true()` so
+legacy `ModelFormSchema::fields()` calls remain unambiguous for glob imports.
+Existing legacy schemas are adapted automatically and keep their original
+associated methods.
+
 `form = true`, `QuestionFormSchema`, `QuestionModelFormData<P>`, and the
 legacy `form! { model, policy, fields | exclude, ... }` form remain supported.
 Use the legacy path when its generic policy behavior is required; do not mix it

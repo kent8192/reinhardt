@@ -88,7 +88,7 @@ const QUESTION_CREATE_FIELDS: [ModelFormFieldDescriptor; 1] = [ModelFormFieldDes
 }];
 
 impl ModelFormContractSchema for QuestionCreateFormSchema {
-	fn fields() -> &'static [ModelFormFieldDescriptor] {
+	fn contract_fields() -> &'static [ModelFormFieldDescriptor] {
 		&QUESTION_CREATE_FIELDS
 	}
 }

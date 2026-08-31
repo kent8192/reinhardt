@@ -2558,12 +2558,35 @@ fn parse_base_type_string(
 	Ok(field_type)
 }
 
-/// Extract `Option<T>` and return (is_option, inner_type)
+/// Return whether a path names one of the canonical `Option` spellings.
+///
+/// A last-segment check would incorrectly treat application types such as
+/// `custom::Option<T>` as the standard wrapper and would let them cross the
+/// target-neutral payload boundary.
+fn is_canonical_option_path(path: &syn::Path) -> bool {
+	let is_bare_option = path.segments.len() == 1
+		&& path
+			.segments
+			.first()
+			.is_some_and(|segment| segment.ident == "Option");
+	let is_qualified_option = |root: &str| {
+		path.segments.len() == 3
+			&& path.segments[0].ident == root
+			&& path.segments[1].ident == "option"
+			&& path.segments[2].ident == "Option"
+			&& matches!(path.segments[0].arguments, PathArguments::None)
+			&& matches!(path.segments[1].arguments, PathArguments::None)
+	};
+	is_bare_option || is_qualified_option("core") || is_qualified_option("std")
+}
+
+/// Extract canonical `Option<T>` and return `(is_option, inner_type)`.
 fn extract_option_type(ty: &Type) -> (bool, &Type) {
 	if let Type::Path(type_path) = ty
+		&& is_canonical_option_path(&type_path.path)
 		&& let Some(last_segment) = type_path.path.segments.last()
-		&& last_segment.ident == "Option"
 		&& let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments
+		&& args.args.len() == 1
 		&& let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first()
 	{
 		return (true, inner_ty);
@@ -3961,6 +3984,91 @@ fn is_canonical_chrono_datetime_utc(path: &syn::Path) -> bool {
 	)
 }
 
+fn is_canonical_string_path(path: &syn::Path) -> bool {
+	path.is_ident("String") || path_has_exact_segments(path, &["std", "string", "String"])
+}
+
+fn canonical_primitive_name(path: &syn::Path) -> Option<&'static str> {
+	let segments: Vec<_> = path.segments.iter().collect();
+	let primitive = match segments.as_slice() {
+		[segment] if matches!(segment.arguments, PathArguments::None) => &segment.ident,
+		[first, second, segment]
+			if matches!(first.arguments, PathArguments::None)
+				&& matches!(second.arguments, PathArguments::None)
+				&& matches!(segment.arguments, PathArguments::None)
+				&& (first.ident == "core" || first.ident == "std")
+				&& second.ident == "primitive" =>
+		{
+			&segment.ident
+		}
+		_ => return None,
+	};
+	match primitive.to_string().as_str() {
+		"i8" => Some("i8"),
+		"i16" => Some("i16"),
+		"i32" => Some("i32"),
+		"i64" => Some("i64"),
+		"isize" => Some("isize"),
+		"u8" => Some("u8"),
+		"u16" => Some("u16"),
+		"u32" => Some("u32"),
+		"u64" => Some("u64"),
+		"usize" => Some("usize"),
+		"f32" => Some("f32"),
+		"f64" => Some("f64"),
+		"bool" => Some("bool"),
+		_ => None,
+	}
+}
+
+/// Return the canonical target-neutral scalar type for a supported source path.
+///
+/// The generated assertion below compares the source type after Rust name
+/// resolution with this absolute type. This keeps a local type named `String`
+/// (or a shadowed primitive) from crossing the payload boundary merely because
+/// its syntax resembles a supported scalar.
+fn named_model_form_canonical_scalar_type(path: &syn::Path) -> Option<TokenStream> {
+	if is_canonical_string_path(path) {
+		return Some(quote!(::std::string::String));
+	}
+	if let Some(name) = canonical_primitive_name(path) {
+		let name = Ident::new(name, path.segments.last()?.ident.span());
+		return Some(quote!(::core::primitive::#name));
+	}
+
+	if path_has_exact_segments(path, &["rust_decimal", "Decimal"]) {
+		Some(quote!(::rust_decimal::Decimal))
+	} else if path_has_exact_segments(path, &["uuid", "Uuid"]) {
+		Some(quote!(::uuid::Uuid))
+	} else if path_has_exact_segments(path, &["chrono", "NaiveDate"]) {
+		Some(quote!(::chrono::NaiveDate))
+	} else if path_has_exact_segments(path, &["chrono", "NaiveTime"]) {
+		Some(quote!(::chrono::NaiveTime))
+	} else if path_has_exact_segments(path, &["chrono", "NaiveDateTime"]) {
+		Some(quote!(::chrono::NaiveDateTime))
+	} else if is_canonical_chrono_datetime_utc(path) {
+		Some(quote!(::chrono::DateTime<::chrono::Utc>))
+	} else if path_has_exact_segments(path, &["serde_json", "Value"]) {
+		Some(quote!(::serde_json::Value))
+	} else {
+		None
+	}
+}
+
+/// Return the canonical wire type for a supported field declaration.
+fn named_model_form_canonical_type(ty: &Type) -> Option<TokenStream> {
+	let (optional, inner) = extract_option_type(ty);
+	let Type::Path(type_path) = inner else {
+		return None;
+	};
+	let scalar = named_model_form_canonical_scalar_type(&type_path.path)?;
+	Some(if optional {
+		quote!(::core::option::Option<#scalar>)
+	} else {
+		scalar
+	})
+}
+
 fn named_model_form_type_is_supported(ty: &Type) -> bool {
 	let (optional, inner) = extract_option_type(ty);
 	if optional && extract_option_type(inner).0 {
@@ -3969,21 +4077,7 @@ fn named_model_form_type_is_supported(ty: &Type) -> bool {
 	let Type::Path(type_path) = inner else {
 		return false;
 	};
-	let path = &type_path.path;
-	let primitive_or_string = [
-		"String", "i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize", "f32",
-		"f64", "bool",
-	]
-	.into_iter()
-	.any(|name| path.is_ident(name));
-	primitive_or_string
-		|| path_has_exact_segments(path, &["rust_decimal", "Decimal"])
-		|| path_has_exact_segments(path, &["uuid", "Uuid"])
-		|| path_has_exact_segments(path, &["chrono", "NaiveDate"])
-		|| path_has_exact_segments(path, &["chrono", "NaiveTime"])
-		|| path_has_exact_segments(path, &["chrono", "NaiveDateTime"])
-		|| is_canonical_chrono_datetime_utc(path)
-		|| path_has_exact_segments(path, &["serde_json", "Value"])
+	named_model_form_canonical_scalar_type(&type_path.path).is_some()
 }
 
 fn named_model_form_variant(field: &Ident) -> Ident {
@@ -4117,11 +4211,15 @@ pub(crate) fn generate_named_model_form_contract(
 		}
 		model_form_kind(field)?;
 
-		let getter = selected_string.clone();
-		let setter = format!("set_{selected_string}");
+		let getter = selected_string
+			.strip_prefix("r#")
+			.unwrap_or(&selected_string)
+			.to_owned();
+		let setter = format!("set_{getter}");
 		let reserved = [
 			"fields",
 			"model_form",
+			"default",
 			"supplied_fields",
 			"forbidden_fields",
 			"get_json",
@@ -4156,6 +4254,12 @@ pub(crate) fn generate_named_model_form_contract(
 	let field_count = selected.len();
 	let field_idents: Vec<_> = selected.iter().map(|field| &field.name).collect();
 	let field_types: Vec<_> = selected.iter().map(|field| &field.ty).collect();
+	let wire_type_assertions = field_types.iter().filter_map(|source_type| {
+		let canonical_type = named_model_form_canonical_type(source_type)?;
+		Some(quote! {
+			const _: fn(#source_type) = |_: #canonical_type| {};
+		})
+	});
 	let field_literals: Vec<_> = selected
 		.iter()
 		.map(|field| LitStr::new(&field.name.to_string(), field.name.span()))
@@ -4164,6 +4268,14 @@ pub(crate) fn generate_named_model_form_contract(
 		.iter()
 		.map(|field| named_model_form_variant(&field.name))
 		.collect();
+	let variant_docs = selected.iter().map(|field| {
+		let field_name = LitStr::new(&field.name.to_string(), field.name.span());
+		let variant = named_model_form_variant(&field.name);
+		quote! {
+			#[doc = concat!("Field token for `", #field_name, "`. Parity: P2.")]
+			#variant,
+		}
+	});
 	let kinds = selected
 		.iter()
 		.map(|field| model_form_kind(field))
@@ -4192,29 +4304,39 @@ pub(crate) fn generate_named_model_form_contract(
 		contract_name.span(),
 	);
 	let descriptor_accessors = field_idents.iter().enumerate().map(|(index, name)| {
+		let field_name = LitStr::new(&name.to_string(), name.span());
 		quote! {
+			#[doc = concat!("Returns the descriptor for `", #field_name, "`. Parity: P2.")]
 			pub const fn #name() -> &'static #core_crate::model_form::ModelFormFieldDescriptor {
 				&#descriptor_const[#index]
 			}
 		}
 	});
 	let marker_accessors = field_idents.iter().map(|name| {
+		let field_name = LitStr::new(&name.to_string(), name.span());
 		quote! {
+			#[doc = concat!("Returns the descriptor for `", #field_name, "`. Parity: P2.")]
 			pub const fn #name() -> &'static #core_crate::model_form::ModelFormFieldDescriptor {
 				#schema_name::#name()
 			}
 		}
 	});
 	let getters = field_idents.iter().zip(&field_types).map(|(name, ty)| {
+		let field_name = LitStr::new(&name.to_string(), name.span());
 		quote! {
+			#[doc = concat!("Returns the supplied value for `", #field_name, "`. Parity: P2.")]
 			pub fn #name(&self) -> ::core::option::Option<&#ty> {
 				self.#name.as_ref()
 			}
 		}
 	});
 	let setters = field_idents.iter().zip(&field_types).map(|(name, ty)| {
-		let setter = Ident::new(&format!("set_{name}"), name.span());
+		let bare_name = name.to_string();
+		let bare_name = bare_name.strip_prefix("r#").unwrap_or(&bare_name);
+		let setter = Ident::new(&format!("set_{bare_name}"), name.span());
+		let field_name = LitStr::new(&name.to_string(), name.span());
 		quote! {
+			#[doc = concat!("Sets the supplied value for `", #field_name, "`. Parity: P2.")]
 			pub fn #setter(&mut self, value: #ty) {
 				self.#name = ::core::option::Option::Some(value);
 			}
@@ -4321,6 +4443,7 @@ pub(crate) fn generate_named_model_form_contract(
 		quote! {
 			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 			impl #contract_name {
+				#[doc = "Converts target-neutral payload data into the native ORM-backed model form.\n\nParity: P0. This trusted adapter is intentionally absent on WASM."]
 				pub fn model_form(
 					data: #data_name,
 				) -> #forms_crate::model_form::ModelForm<#model_name, #policy_name> {
@@ -4333,22 +4456,28 @@ pub(crate) fn generate_named_model_form_contract(
 	});
 
 	Ok(quote! {
+		#[doc = "A target-neutral named model form contract marker.\n\nParity: P2. This marker is generated on native and `wasm32-unknown-unknown` targets."]
 		#visibility struct #contract_name;
 
 		#[derive(Clone, Debug, Default, PartialEq)]
+		#[doc = "The target-neutral JSON payload for a named model form contract.\n\nParity: P2. This payload is generated on native and `wasm32-unknown-unknown` targets."]
 		#visibility struct #data_name {
 			#(#field_idents: ::core::option::Option<#field_types>,)*
 		}
 
+		#[doc = "The target-neutral field descriptor schema for a named model form contract.\n\nParity: P2. This schema is generated on native and `wasm32-unknown-unknown` targets."]
 		#visibility struct #schema_name;
 
 		#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+		#[doc = "Typed field tokens for a named model form contract.\n\nParity: P2. This field-token type is generated on native and `wasm32-unknown-unknown` targets."]
 		#visibility enum #field_name {
-			#(#variants,)*
+			#(#variant_docs)*
 		}
 
 		#[doc(hidden)]
 		#visibility struct #policy_name;
+
+		#(#wire_type_assertions)*
 
 		const #descriptor_const: [#core_crate::model_form::ModelFormFieldDescriptor; #field_count] = [
 			#(#descriptors,)*
@@ -4370,11 +4499,11 @@ pub(crate) fn generate_named_model_form_contract(
 		}
 
 		impl #core_crate::model_form::ModelFormContractSchema for #schema_name {
-			fn fields() -> &'static [#core_crate::model_form::ModelFormFieldDescriptor] {
+			fn contract_fields() -> &'static [#core_crate::model_form::ModelFormFieldDescriptor] {
 				&#descriptor_const
 			}
 
-			fn default_boolean_is_true(field: &str) -> bool {
+			fn contract_default_boolean_is_true(field: &str) -> bool {
 				#default_true_boolean_body
 			}
 		}

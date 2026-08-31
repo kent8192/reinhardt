@@ -5,6 +5,9 @@ use std::fmt;
 use crate::model_form::{ModelFormContractSchema, ModelFormFieldKind};
 
 /// Determines which known model fields a form may accept.
+///
+/// Parity: P2. The policy decision is target-neutral and can be evaluated on
+/// native and `wasm32-unknown-unknown` targets.
 pub trait ModelFormPolicy: Send + Sync + 'static {
 	/// Returns whether the named model field is permitted by this policy.
 	fn allows(field: &str) -> bool;
@@ -20,6 +23,9 @@ impl ModelFormPolicy for AllEditableModelFields {
 }
 
 /// A target-neutral payload accepted by a model-backed form.
+///
+/// Parity: P2. Payload inspection and JSON updates are available on native and
+/// `wasm32-unknown-unknown` targets.
 pub trait ModelFormPayload<P: ModelFormPolicy>: Sized {
 	/// Returns the statically known fields supplied by this payload.
 	fn supplied_fields(&self) -> Vec<&'static str>;
@@ -76,7 +82,7 @@ where
 	};
 
 	values.remove("csrfmiddlewaretoken");
-	for descriptor in S::fields() {
+	for descriptor in S::contract_fields() {
 		if !descriptor.editable || !P::allows(descriptor.name) {
 			continue;
 		}

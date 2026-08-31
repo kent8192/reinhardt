@@ -2199,7 +2199,7 @@ fn generate_model_form(
 				},
 				quote! {
 					__REINHARDT_MODEL_FORM_FIELDS.get_or_init(|| {
-						<#schema_path as #pages_crate::form::ModelFormContractSchema>::fields()
+						<#schema_path as #pages_crate::form::ModelFormContractSchema>::contract_fields()
 							.iter()
 							.filter(|descriptor| {
 								descriptor.editable
@@ -2241,7 +2241,7 @@ fn generate_model_form(
 		}
 	} else {
 		quote! {
-			<#schema_path as #pages_crate::form::ModelFormContractSchema>::fields()
+			<#schema_path as #pages_crate::form::ModelFormContractSchema>::contract_fields()
 				.iter()
 				.find(|descriptor| {
 					descriptor.editable
@@ -2769,7 +2769,7 @@ fn generate_model_form(
 						let default_true = matches!(
 							descriptor.kind,
 							#pages_crate::form::ModelFormFieldKind::Boolean
-						) && <#schema_path as #pages_crate::form::ModelFormContractSchema>::default_boolean_is_true(field_name);
+						) && <#schema_path as #pages_crate::form::ModelFormContractSchema>::contract_default_boolean_is_true(field_name);
 						let uses_nullable_boolean_select = input_type == "checkbox"
 							&& descriptor.nullable
 							&& !default_true;
@@ -3195,7 +3195,7 @@ fn generate_model_form(
 													descriptor.kind,
 													#pages_crate::form::ModelFormFieldKind::Boolean
 												) && !(descriptor.nullable
-											&& !<#schema_path as #pages_crate::form::ModelFormContractSchema>::default_boolean_is_true(
+											&& !<#schema_path as #pages_crate::form::ModelFormContractSchema>::contract_default_boolean_is_true(
 														descriptor.name,
 													)),
 													descriptor.nullable,
@@ -3338,7 +3338,7 @@ fn generate_model_form(
 					}
 					drop(state);
 					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-					for descriptor in <#schema_path as #pages_crate::form::ModelFormContractSchema>::fields() {
+					for descriptor in <#schema_path as #pages_crate::form::ModelFormContractSchema>::contract_fields() {
 						if !descriptor.editable
 							|| !<#policy_ident as #pages_crate::form::ModelFormPolicy>::allows(descriptor.name)
 						{
@@ -3408,7 +3408,7 @@ fn generate_model_form(
 					if field_name.is_empty() {
 						return current != defaults;
 					}
-					if <#schema_path as #pages_crate::form::ModelFormContractSchema>::fields()
+					if <#schema_path as #pages_crate::form::ModelFormContractSchema>::contract_fields()
 						.iter()
 						.find(|descriptor| descriptor.name == field_name)
 						.is_some_and(|descriptor| {

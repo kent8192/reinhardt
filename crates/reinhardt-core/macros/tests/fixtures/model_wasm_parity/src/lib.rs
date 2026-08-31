@@ -53,7 +53,7 @@ mod tests {
 	#[wasm_bindgen_test]
 	fn generated_named_contract_executes_in_wasm_runtime() {
 		assert_eq!(
-			<ClusterCreateFormSchema as ModelFormContractSchema>::fields()
+			<ClusterCreateFormSchema as ModelFormContractSchema>::contract_fields()
 				.iter()
 				.map(|field| field.name)
 				.collect::<Vec<_>>(),

@@ -37,6 +37,7 @@ async-trait = { workspace = true }
 chrono = { workspace = true }
 linkme = { workspace = true }
 rstest = { workspace = true }
+rust_decimal = { workspace = true }
 tempfile = { workspace = true }
 uuid = { workspace = true }
 # reinhardt-auth uses path-only (no version) to avoid crates.io resolution failures

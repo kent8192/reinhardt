@@ -134,25 +134,25 @@ pub mod model_form {
 	}
 
 	pub trait ModelFormContractSchema {
-		fn fields() -> &'static [ModelFormFieldDescriptor];
-		fn default_boolean_is_true(_field: &str) -> bool {
+		fn contract_fields() -> &'static [ModelFormFieldDescriptor];
+		fn contract_default_boolean_is_true(_field: &str) -> bool {
 			false
 		}
-		fn relation_target_matches<T: 'static>(_field: &str) -> bool {
+		fn contract_relation_target_matches<T: 'static>(_field: &str) -> bool {
 			false
 		}
 	}
 
 	impl<S: ModelFormSchema> ModelFormContractSchema for S {
-		fn fields() -> &'static [ModelFormFieldDescriptor] {
+		fn contract_fields() -> &'static [ModelFormFieldDescriptor] {
 			<S as ModelFormSchema>::fields()
 		}
 
-		fn default_boolean_is_true(field: &str) -> bool {
+		fn contract_default_boolean_is_true(field: &str) -> bool {
 			<S as ModelFormSchema>::default_boolean_is_true(field)
 		}
 
-		fn relation_target_matches<T: 'static>(field: &str) -> bool {
+		fn contract_relation_target_matches<T: 'static>(field: &str) -> bool {
 			<S as ModelFormSchema>::relation_target_matches::<T>(field)
 		}
 	}
@@ -201,7 +201,7 @@ pub mod model_form {
 		P: ModelFormPolicy,
 	{
 		if let serde_json::Value::Object(values) = &mut value {
-			for descriptor in S::fields() {
+			for descriptor in S::contract_fields() {
 				if descriptor.editable
 					&& P::allows(descriptor.name)
 					&& matches!(descriptor.kind, ModelFormFieldKind::Boolean)
@@ -1182,6 +1182,7 @@ pub mod db {
 		scalar_codec!(f64, F64);
 		scalar_codec!(String, String);
 		scalar_codec!(Decimal, Decimal);
+		scalar_codec!(rust_decimal::Decimal, Decimal);
 		scalar_codec!(uuid::Uuid, Uuid);
 		scalar_codec!(chrono::NaiveDate, Date);
 		scalar_codec!(chrono::NaiveTime, Time);

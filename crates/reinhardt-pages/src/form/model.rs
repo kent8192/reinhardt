@@ -208,7 +208,7 @@ where
 	/// Creates empty model-form control state.
 	pub fn new() -> Self {
 		let mut values = HashMap::new();
-		for descriptor in S::fields() {
+		for descriptor in S::contract_fields() {
 			if descriptor.editable
 				&& P::allows(descriptor.name)
 				&& !descriptor.nullable
@@ -239,7 +239,7 @@ where
 		field: &str,
 		value: serde_json::Value,
 	) -> Result<(), ModelFormPayloadError> {
-		let descriptor = S::fields()
+		let descriptor = S::contract_fields()
 			.iter()
 			.find(|descriptor| descriptor.name == field)
 			.ok_or_else(|| ModelFormPayloadError::UnknownField {
@@ -318,7 +318,7 @@ where
 	/// Removes one model-form value and any selected file associated with it.
 	#[doc(hidden)]
 	pub fn clear_value(&mut self, field: &str) -> Result<(), ModelFormPayloadError> {
-		let descriptor = S::fields()
+		let descriptor = S::contract_fields()
 			.iter()
 			.find(|descriptor| descriptor.name == field)
 			.ok_or_else(|| ModelFormPayloadError::UnknownField {
@@ -353,7 +353,7 @@ where
 	where
 		T: serde::de::DeserializeOwned,
 	{
-		let descriptor = S::fields()
+		let descriptor = S::contract_fields()
 			.iter()
 			.find(|descriptor| descriptor.name == field)
 			.ok_or_else(|| ModelFormPayloadError::UnknownField {
@@ -468,7 +468,7 @@ where
 
 	/// Returns selected editable descriptors in generated schema order.
 	pub fn selected_descriptors(&self) -> Vec<&'static ModelFormFieldDescriptor> {
-		S::fields()
+		S::contract_fields()
 			.iter()
 			.filter(|descriptor| descriptor.editable && P::allows(descriptor.name))
 			.collect()
@@ -477,13 +477,13 @@ where
 	/// Clears every value that belongs to the active form policy.
 	pub fn clear_selected_values(&mut self) {
 		self.values.retain(|field, _| {
-			!S::fields().iter().any(|descriptor| {
+			!S::contract_fields().iter().any(|descriptor| {
 				descriptor.name == *field && descriptor.editable && P::allows(field)
 			})
 		});
 		#[cfg(wasm)]
 		self.selected_files.retain(|field, _| {
-			!S::fields().iter().any(|descriptor| {
+			!S::contract_fields().iter().any(|descriptor| {
 				descriptor.name == *field && descriptor.editable && P::allows(field)
 			})
 		});
@@ -562,7 +562,7 @@ where
 	fn file_descriptor(
 		field: &str,
 	) -> Result<&'static ModelFormFieldDescriptor, ModelFormPayloadError> {
-		let descriptor = S::fields()
+		let descriptor = S::contract_fields()
 			.iter()
 			.find(|descriptor| descriptor.name == field)
 			.ok_or_else(|| ModelFormPayloadError::UnknownField {

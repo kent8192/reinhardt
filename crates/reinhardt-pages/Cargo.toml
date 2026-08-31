@@ -324,6 +324,8 @@ serial_test = "3"
 trybuild = "1.0"
 rstest = { workspace = true }
 tempfile = { workspace = true }
+# Compile the real model attribute in the WASM model-form proof fixture.
+reinhardt-macros = { workspace = true }
 # `form!`'s `DateField` / `TimeField` / `DateTimeField` codegen emits bare
 # `chrono::Naive*` paths, so trybuild fixtures exercising those fields need
 # `chrono` resolvable in the generated fixture binary.

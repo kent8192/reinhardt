@@ -7,10 +7,6 @@ use serde::{Deserialize, Serialize};
 
 include!("ui/model/support.rs");
 
-mod rust_decimal {
-	pub(crate) use crate::db::orm::Decimal;
-}
-
 use model_form::{
 	AllEditableModelFields, ModelFormContract, ModelFormContractField, ModelFormContractSchema,
 	ModelFormFieldKind, ModelFormPayload, ModelFormPolicy, ModelFormPrimaryKeyFields,
@@ -163,7 +159,7 @@ fn native_form_payload_defaults_an_omitted_boolean_without_changing_json_deseria
 #[test]
 fn named_contract_is_strict_and_preserves_selected_field_order() {
 	assert_eq!(
-		<ClusterCreateFormSchema as ModelFormContractSchema>::fields()
+		<ClusterCreateFormSchema as ModelFormContractSchema>::contract_fields()
 			.iter()
 			.map(|field| field.name)
 			.collect::<Vec<_>>(),
@@ -228,7 +224,7 @@ fn named_contract_native_payload_reuses_checkbox_normalization() {
 
 #[test]
 fn named_contract_supports_wire_safe_scalar_types() {
-	let kinds = <SupportedScalarCreateFormSchema as ModelFormContractSchema>::fields()
+	let kinds = <SupportedScalarCreateFormSchema as ModelFormContractSchema>::contract_fields()
 		.iter()
 		.map(|field| field.kind)
 		.collect::<Vec<_>>();

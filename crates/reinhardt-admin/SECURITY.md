@@ -32,9 +32,9 @@ state are attacker-controlled until the server validates them.
   caller's authorized scope, and must neutralize spreadsheet formula prefixes
   before CSV/TSV values are opened by spreadsheet software. Protected
   applications must also apply the selected `ModelAdmin` field allowlist,
-  read-only, ownership, and tenant checks to every imported record;
-  `import_data` does not independently apply `create_record` mutation
-  validation. The server-function import path deserializes its complete
+  read-only, ownership, and tenant checks to every imported record. The
+  server-function import path applies the same create-field validation and
+  sanitization to each record before insertion. It deserializes its complete
   request body before calling `import_data`, so its file-size check does not
   bound request-body buffering or JSON parsing; callers must enforce a body
   limit before server-function deserialization. `CsvExporter` and `TsvExporter`

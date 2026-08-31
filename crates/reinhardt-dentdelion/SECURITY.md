@@ -33,10 +33,9 @@ malicious. A plugin's requested capabilities do not establish trust.
   or a broader database identity, and untrusted values remain parameterized or
   use validated query structure.
 - Installation and loading confine manifest, module, cache, and extracted paths
-  to their configured roots after normalization and symlink resolution. The
-  current discovery path follows symlinks, so protected deployments must reject
-  symlinked module, directory, and manifest entries or canonicalize each target
-  and verify containment before reading it. Plugin identifiers, dependency
+	to their configured roots after normalization and symlink resolution. The
+	WASM loader canonicalizes discovered and explicitly supplied paths and
+	verifies containment before reading or loading them. Plugin identifiers, dependency
   names, versions, and manifests are parsed and validated before they select
   files, registries, capabilities, or dependencies.
 - JavaScript and TypeScript plugins have no ambient filesystem, process,
@@ -45,8 +44,9 @@ malicious. A plugin's requested capabilities do not establish trust.
   a running Boa worker; protected deployments must terminate or replace a
   timed-out runtime and enforce the corresponding resource limits.
 - Plugin SSR treats plugin output as untrusted rendered content: it preserves
-  the caller's output-encoding and response-security rules and cannot gain
-  ambient server privileges through rendering context or serialization.
+	the caller's output-encoding and response-security rules and cannot gain
+	ambient server privileges through rendering context or serialization. Both
+	direct and WIT host calls pass through the same plugin trust check.
 - Registry entries, lifecycle state, and event delivery must be isolated by
   plugin identity. Host integrations must carry the authenticated owner into
   poll and unsubscribe operations; the current `HostState` forwards only the

@@ -7,7 +7,7 @@ use crate::error::{PluginError, PluginResult};
 use crate::manifest::WasmPluginConfig;
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use super::host::HostState;
 use super::instance::WasmPluginInstance;
@@ -43,7 +43,7 @@ pub struct WasmPluginLoader {
 	/// Directory containing WASM plugins.
 	plugin_dir: PathBuf,
 	#[cfg(not(target_arch = "wasm32"))]
-	plugin_root: Option<Arc<cap_std::fs::Dir>>,
+	plugin_root: Arc<OnceLock<Arc<cap_std::fs::Dir>>>,
 	/// WASM runtime for loading components.
 	runtime: Arc<WasmRuntime>,
 }
@@ -58,9 +58,15 @@ impl WasmPluginLoader {
 	pub fn new<P: AsRef<Path>>(plugin_dir: P, runtime: Arc<WasmRuntime>) -> Self {
 		let plugin_dir = plugin_dir.as_ref().to_path_buf();
 		#[cfg(not(target_arch = "wasm32"))]
-		let plugin_root = cap_std::fs::Dir::open_ambient_dir(&plugin_dir, cap_std::ambient_authority())
-			.ok()
-			.map(Arc::new);
+		let plugin_root = {
+			let root = Arc::new(OnceLock::new());
+			if let Ok(directory) =
+				cap_std::fs::Dir::open_ambient_dir(&plugin_dir, cap_std::ambient_authority())
+			{
+				let _ = root.set(Arc::new(directory));
+			}
+			root
+		};
 		Self {
 			plugin_dir,
 			#[cfg(not(target_arch = "wasm32"))]
@@ -112,12 +118,21 @@ impl WasmPluginLoader {
 	}
 
 	async fn read_plugin_file(&self, path: &Path) -> PluginResult<(PathBuf, Vec<u8>)> {
-		let relative = path.strip_prefix(&self.plugin_dir).map_err(|_| {
-			PluginError::Custom(format!(
-				"Plugin path {} is outside plugin directory",
-				path.display()
-			))
-		})?;
+		let relative = if let Ok(relative) = path.strip_prefix(&self.plugin_dir) {
+			relative.to_path_buf()
+		} else {
+			let root = tokio::fs::canonicalize(&self.plugin_dir).await?;
+			let candidate = tokio::fs::canonicalize(path).await?;
+			candidate
+				.strip_prefix(root)
+				.map(Path::to_path_buf)
+				.map_err(|_| {
+					PluginError::Custom(format!(
+						"Plugin path {} is outside plugin directory",
+						path.display()
+					))
+				})?
+		};
 		if relative.components().any(|component| {
 			matches!(
 				component,
@@ -131,21 +146,24 @@ impl WasmPluginLoader {
 				path.display()
 			)));
 		}
-		let resolved = self.plugin_dir.join(relative);
+		let resolved = self.plugin_dir.join(&relative);
 
 		#[cfg(not(target_arch = "wasm32"))]
 		let bytes = {
 			let plugin_root = self.plugin_root.clone();
-			let relative = relative.to_path_buf();
+			let plugin_dir = self.plugin_dir.clone();
 			tokio::task::spawn_blocking(move || -> std::io::Result<Vec<u8>> {
 				use std::io::Read;
+				if plugin_root.get().is_none() {
+					let opened = Arc::new(cap_std::fs::Dir::open_ambient_dir(
+						plugin_dir,
+						cap_std::ambient_authority(),
+					)?);
+					let _ = plugin_root.set(opened);
+				}
 				let directory = plugin_root
-					.ok_or_else(|| {
-						std::io::Error::new(
-							std::io::ErrorKind::NotFound,
-							"plugin root was unavailable when the loader was created",
-						)
-					})?
+					.get()
+					.expect("plugin root is initialized")
 					.try_clone()?;
 				let mut file = directory.open(relative)?;
 				let mut bytes = Vec::new();
@@ -239,8 +257,8 @@ impl WasmPluginLoader {
 		// Look for accompanying manifest
 		let manifest_path = wasm_path.with_extension("toml");
 		let (manifest_path, config) = if manifest_path.exists() {
-			let resolved_manifest_path = self.resolve_plugin_path(&manifest_path).await?;
-			match self.parse_plugin_manifest(&resolved_manifest_path).await {
+			self.resolve_plugin_path(&manifest_path).await?;
+			match self.parse_plugin_manifest(&manifest_path).await {
 				Ok(config) => (Some(manifest_path), Some(config)),
 				Err(e) => {
 					tracing::warn!("Failed to parse manifest for {}: {}", name, e);
@@ -298,8 +316,8 @@ impl WasmPluginLoader {
 
 		let manifest_path = manifest_paths.iter().find(|p| p.exists());
 		let (manifest_path, config) = if let Some(mp) = manifest_path {
-			let resolved_manifest_path = self.resolve_plugin_path(mp).await?;
-			match self.parse_plugin_manifest(&resolved_manifest_path).await {
+			self.resolve_plugin_path(mp).await?;
+			match self.parse_plugin_manifest(mp).await {
 				Ok(config) => (Some(mp.clone()), Some(config)),
 				Err(e) => {
 					tracing::warn!("Failed to parse manifest in {}: {}", dir.display(), e);
@@ -518,6 +536,23 @@ mod tests {
 
 		let result = loader.load_by_name("nonexistent-plugin").await;
 		assert!(matches!(result, Err(PluginError::NotFound(_))));
+	}
+
+	#[tokio::test]
+	async fn loader_can_anchor_a_plugin_directory_created_after_construction() {
+		let temp = TempDir::new().expect("temporary directory should be created");
+		let plugin_dir = temp.path().join("plugins");
+		let plugin_path = plugin_dir.join("plugin.wasm");
+		let loader = new_test_loader(&plugin_dir);
+		fs::create_dir(&plugin_dir).expect("plugin directory should be created");
+		write_valid_wasm(&plugin_path);
+
+		let (_, bytes) = loader
+			.read_plugin_file(&plugin_path)
+			.await
+			.expect("late-created plugin directory should be anchored");
+
+		assert_eq!(bytes, b"\0asm\x01\0\0\0");
 	}
 
 	#[tokio::test]

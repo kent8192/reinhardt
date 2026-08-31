@@ -1,5 +1,5 @@
 error: `trim` is only valid on editable text, email, or URL ModelForm fields
-  --> tests/ui/model/fail/form_trim_non_editable.rs:11:2
+  --> tests/ui/model/fail/form_trim_non_editable.rs:10:9
    |
-11 |     name: String,
-   |     ^^^^
+10 |     #[form(trim)]
+   |         ^^^^

@@ -1718,6 +1718,7 @@ struct FieldInfo {
 #[derive(Debug, Clone, Default)]
 struct FieldFormConfig {
 	trim: bool,
+	trim_span: Option<Span>,
 }
 
 impl FieldFormConfig {
@@ -1739,6 +1740,7 @@ impl FieldFormConfig {
 						return Err(meta.error("`trim` does not accept a value"));
 					}
 					config.trim = true;
+					config.trim_span = Some(meta.path.span());
 					Ok(())
 				} else {
 					Err(meta.error("unknown form field option; expected `trim`"))
@@ -2892,11 +2894,14 @@ fn model_form_kind(field: &FieldInfo) -> Result<TokenStream> {
 	Ok(kind)
 }
 
-fn validate_model_form_trim(field_infos: &[FieldInfo]) -> Result<()> {
+fn validate_model_form_trim(field_infos: &[FieldInfo], model_form_enabled: bool) -> Result<()> {
 	for field in field_infos.iter().filter(|field| field.form.trim) {
-		if !is_model_form_editable(field, field_infos) || !is_string_type(&field.ty) {
-			return Err(syn::Error::new_spanned(
-				&field.name,
+		if !model_form_enabled
+			|| !is_model_form_editable(field, field_infos)
+			|| !is_string_type(&field.ty)
+		{
+			return Err(syn::Error::new(
+				field.form.trim_span.unwrap_or_else(|| field.name.span()),
 				"`trim` is only valid on editable text, email, or URL ModelForm fields",
 			));
 		}
@@ -2983,7 +2988,6 @@ fn generate_model_form_support(
 	struct_vis: &syn::Visibility,
 	field_infos: &[FieldInfo],
 ) -> Result<TokenStream> {
-	validate_model_form_trim(field_infos)?;
 	let core_crate = get_reinhardt_core_crate();
 	let forms_crate = get_reinhardt_forms_crate();
 	let native_form_cfg = if forms_crate.is_some() {
@@ -5137,6 +5141,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			is_fk_id_field,
 		});
 	}
+	validate_model_form_trim(&field_infos, model_config.form)?;
 
 	let latest_by_fields = model_config
 		.get_latest_by

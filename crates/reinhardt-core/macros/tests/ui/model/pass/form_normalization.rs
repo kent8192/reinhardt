@@ -12,8 +12,16 @@ struct Profile {
 	#[field(max_length = 64)]
 	#[form(trim)]
 	name: String,
+	#[field(email = true)]
+	#[form(trim)]
+	email: String,
+	#[field(url = true)]
+	#[form(trim)]
+	website: String,
 }
 
 fn main() {
 	assert!(ProfileFormSchema::name().trim);
+	assert!(ProfileFormSchema::email().trim);
+	assert!(ProfileFormSchema::website().trim);
 }

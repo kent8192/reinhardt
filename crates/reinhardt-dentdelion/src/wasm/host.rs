@@ -1434,9 +1434,7 @@ impl crate::wasm::runtime::reinhardt::dentdelion::ssr::Host for HostState {
 		options: GeneratedRenderOptions,
 	) -> wasmtime::Result<Result<GeneratedRenderResult, GeneratedPluginError>> {
 		let internal_options = from_generated_render_options(options);
-		let result = self
-			.ssr_proxy
-			.render_react(&component_path, &props, internal_options)
+		let result = Self::render_react(self, &component_path, &props, internal_options)
 			.await
 			.map(to_generated_render_result)
 			.map_err(ssr_error_to_plugin_error);
@@ -1886,6 +1884,35 @@ mod tests {
 
 		// Assert
 		assert!(matches!(result, Err(SsrError::PermissionDenied(_))));
+	}
+
+	#[cfg(feature = "wasm")]
+	#[tokio::test]
+	async fn wit_render_react_denies_untrusted_plugin() {
+		use crate::wasm::runtime::reinhardt::dentdelion::ssr::Host;
+
+		let mut state = HostStateBuilder::new("untrusted-plugin")
+			.trust_level(TrustLevel::Untrusted)
+			.ssr_proxy(Arc::new(SsrProxy::with_availability(true)))
+			.build();
+
+		let result = Host::render_react(
+			&mut state,
+			"test.jsx".to_string(),
+			Vec::new(),
+			GeneratedRenderOptions {
+				include_hydration: false,
+				extract_css: false,
+				extract_meta: false,
+			},
+		)
+		.await
+		.expect("host adapter should return a plugin result");
+
+		assert_eq!(
+			result.expect_err("untrusted SSR should be denied").code,
+			403
+		);
 	}
 
 	#[test]

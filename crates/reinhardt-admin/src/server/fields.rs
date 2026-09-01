@@ -29,7 +29,7 @@ use super::limits::RELATION_LOOKUP_PAGE_SIZE;
 #[cfg(server)]
 use super::relation::{current_relation_options, relation_options_with_executor, resolve_relation};
 #[cfg(server)]
-use super::validation::retain_allowed_fields;
+use super::validation::retain_allowed_fields_with_aliases;
 #[cfg(server)]
 use crate::server::form::resolve_admin_form;
 
@@ -131,7 +131,7 @@ pub async fn get_fields(
 				.iter()
 				.map(|field| field.name.as_str())
 				.collect::<Vec<_>>();
-			retain_allowed_fields(values, &allowed_fields);
+			retain_allowed_fields_with_aliases(values, &allowed_fields, &form.aliases);
 			translate_physical_field_names_to_logical(table_name, values).map_server_fn_error()?;
 		}
 		values

@@ -384,14 +384,30 @@ impl ControlBindingController {
 	) -> Result<(Self, bool), ControlBindingError> {
 		validate_control(&element, binding.kind())?;
 		write_radio_value(&element, &binding)?;
+		let password_value_was_omitted = element
+			.get_attribute(crate::control_binding::SSR_OMITTED_PASSWORD_ATTRIBUTE)
+			.as_deref()
+			== Some("true");
+		if password_value_was_omitted {
+			let _ =
+				element.remove_attribute(crate::control_binding::SSR_OMITTED_PASSWORD_ATTRIBUTE);
+		}
 		let number_binding_registration = NumberBindingRegistration::register(&element, &binding);
 		let number_position = number_binding_registration
 			.as_ref()
 			.map(|registration| registration.position);
 		let (listeners, state) = install_listeners(&element, &binding, None, number_position);
 		let live_value = read_control(&element, binding.kind())?;
+		let password_value_was_omitted = password_value_was_omitted
+			&& binding.kind() == ControlKind::Text
+			&& element
+				.as_web_sys()
+				.dyn_ref::<web_sys::HtmlInputElement>()
+				.is_some_and(|input| input.type_().eq_ignore_ascii_case("password"))
+			&& matches!(&live_value, ControlValue::Text(value) if value.is_empty());
 		let expected_value = untracked(|| binding.read());
-		let should_restore_expected = hydration_target_was_adopted(&binding)
+		let should_restore_expected = password_value_was_omitted
+			|| hydration_target_was_adopted(&binding)
 			|| (matches!(
 				binding.kind(),
 				ControlKind::SelectOne | ControlKind::SelectMany
@@ -585,7 +601,11 @@ fn install_effect(
 					editor.pending_edit = None;
 				}
 			}
-			let _ = write_control_and_reconcile(&element, &binding, &value);
+			if let Err(error) = write_control_and_reconcile(&element, &binding, &value) {
+				web_sys::console::error_1(
+					&format!("controlled input update failed: {error}").into(),
+				);
+			}
 			crate::component::into_page::initialize_control_default(&element, &binding);
 		},
 		EffectTiming::Layout,
@@ -1299,10 +1319,45 @@ fn write_control_and_reconcile(
 	if matches!(binding.kind(), ControlKind::Text | ControlKind::Number) {
 		let live_value = read_control(element, binding.kind())?;
 		if live_value != *value {
-			binding.write(live_value)?;
+			if preserves_unrepresentable_temporal_value(element, value, &live_value) {
+				return Ok(());
+			}
+			if let ControlWriteOutcome::Rejected(error) = binding.write(live_value)? {
+				return Err(ControlBindingError::RejectedValue {
+					control: binding.kind(),
+					error,
+				});
+			}
 		}
 	}
 	Ok(())
+}
+
+fn preserves_unrepresentable_temporal_value(
+	element: &Element,
+	expected: &ControlValue,
+	live: &ControlValue,
+) -> bool {
+	let (ControlValue::Text(expected), ControlValue::Text(live)) = (expected, live) else {
+		return false;
+	};
+	if expected.is_empty() || !live.is_empty() {
+		return false;
+	}
+	let Some(input) = element.as_web_sys().dyn_ref::<web_sys::HtmlInputElement>() else {
+		return false;
+	};
+	["date", "datetime-local", "month", "time", "week"]
+		.iter()
+		.any(|input_type| input.type_().eq_ignore_ascii_case(input_type))
+}
+
+pub(crate) fn reconcile_control_binding(
+	element: &Element,
+	binding: &ControlBinding,
+) -> Result<(), ControlBindingError> {
+	let value = untracked(|| binding.read());
+	write_control_and_reconcile(element, binding, &value)
 }
 
 fn missing(control: ControlKind, property: &'static str) -> ControlBindingError {
@@ -1312,7 +1367,9 @@ fn missing(control: ControlKind, property: &'static str) -> ControlBindingError 
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::component::{ControlBinding, ControlBindingError, ControlKind};
+	use crate::component::{
+		ControlBinding, ControlBindingError, ControlKind, NumberParseErrorKind,
+	};
 	use crate::dom::Element;
 	use crate::reactive::{ReactiveScope, Signal};
 	use wasm_bindgen::JsCast;
@@ -1967,6 +2024,62 @@ mod tests {
 				.expect("supported text input type should mount");
 				assert_eq!(input.value(), value);
 			}
+		});
+	}
+
+	#[wasm_bindgen_test]
+	fn hydration_restores_a_password_value_omitted_by_ssr() {
+		let scope = ReactiveScope::new();
+		scope.enter(|| {
+			let element = element("input");
+			let input: web_sys::HtmlInputElement = element.as_web_sys().clone().unchecked_into();
+			input.set_type("password");
+			element
+				.set_attribute(
+					crate::control_binding::SSR_OMITTED_PASSWORD_ATTRIBUTE,
+					"true",
+				)
+				.expect("marker");
+			let value = Signal::new("secret".to_owned());
+
+			let (controller, refresh_required) =
+				ControlBindingController::hydrate(element, ControlBinding::text(value.clone()))
+					.expect("password binding");
+
+			assert!(!refresh_required);
+			assert_eq!(value.get(), "secret");
+			assert_eq!(input.value(), "secret");
+			assert_eq!(
+				input.get_attribute(crate::control_binding::SSR_OMITTED_PASSWORD_ATTRIBUTE),
+				None
+			);
+			drop(controller);
+		});
+	}
+
+	#[wasm_bindgen_test]
+	fn mount_rejects_unrepresentable_browser_normalized_range_value() {
+		let scope = ReactiveScope::new();
+		scope.enter(|| {
+			let element = element("input");
+			let input: web_sys::HtmlInputElement = element.as_web_sys().clone().unchecked_into();
+			input.set_type("range");
+			input.set_min("300");
+			input.set_max("400");
+
+			let error = ControlBindingController::mount(
+				element,
+				ControlBinding::number(Signal::new(100_u8)),
+			)
+			.expect_err("range value should be representable by the binding");
+
+			assert!(matches!(
+				error,
+				ControlBindingError::RejectedValue {
+					control: ControlKind::Number,
+					error
+				} if error.raw() == "300" && error.kind() == NumberParseErrorKind::OutOfRange
+			));
 		});
 	}
 

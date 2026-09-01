@@ -17,6 +17,8 @@ pub use reinhardt_core::types::page::{
 	ControlBindingError, NumberParseError, NumberParseErrorKind, NumberValue,
 };
 
+pub(crate) const SSR_OMITTED_PASSWORD_ATTRIBUTE: &str = "data-rh-password-omitted";
+
 #[cfg(any(wasm, test, feature = "testing"))]
 pub(crate) fn is_text_input_type(input_type: &str) -> bool {
 	[

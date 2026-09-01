@@ -2185,9 +2185,16 @@ fn render_element_opening(
 	let mut html = String::new();
 	html.push('<');
 	html.push_str(element.tag_name());
+	let omits_bound_password_value = element.tag_name().eq_ignore_ascii_case("input")
+		&& element.attrs().iter().any(|(name, value)| {
+			name.eq_ignore_ascii_case("type") && value.eq_ignore_ascii_case("password")
+		}) && element
+		.bound_control()
+		.is_some_and(|binding| binding.kind() == ControlKind::Text);
 
-	let projects_value =
-		element.tag_name().eq_ignore_ascii_case("input") && projection.value.is_some();
+	let projects_value = element.tag_name().eq_ignore_ascii_case("input")
+		&& projection.value.is_some()
+		&& !omits_bound_password_value;
 	let projects_checked = element.bound_control().is_some_and(|binding| {
 		matches!(binding.kind(), ControlKind::Checkbox | ControlKind::Radio)
 	});
@@ -2203,7 +2210,7 @@ fn render_element_opening(
 			.reactive_attrs()
 			.iter()
 			.any(|attribute| attribute.name().eq_ignore_ascii_case(name));
-		if (name.eq_ignore_ascii_case("value") && projects_value)
+		if (name.eq_ignore_ascii_case("value") && (projects_value || omits_bound_password_value))
 			|| (name.eq_ignore_ascii_case("checked") && projects_checked)
 			|| (name.eq_ignore_ascii_case("selected") && projected_option_selection.is_some())
 			|| has_reactive_attribute

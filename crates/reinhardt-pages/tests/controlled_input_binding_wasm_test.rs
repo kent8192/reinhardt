@@ -18,6 +18,15 @@ wasm_bindgen_test_configure!(run_in_browser);
 
 struct SsrStateElement(web_sys::Element);
 
+struct AttachedRootCleanup(web_sys::Element);
+
+impl Drop for AttachedRootCleanup {
+	fn drop(&mut self) {
+		reinhardt_pages::cleanup_reactive_nodes();
+		self.0.remove();
+	}
+}
+
 impl SsrStateElement {
 	fn install(document: &web_sys::Document) -> Self {
 		if let Some(existing) = document.get_element_by_id("ssr-state") {
@@ -92,11 +101,14 @@ fn public_page_mount_supports_all_additional_bound_input_types() {
 			.expect("body")
 			.append_child(&raw_root)
 			.expect("attach root");
+		let _cleanup = AttachedRootCleanup(raw_root.clone());
 		let root = Element::new(raw_root.clone());
 		let search = Signal::new("initial search".to_owned());
 		let tel = Signal::new("+81-3-1234-5678".to_owned());
-		let url = Signal::new("https://example.test".to_owned());
-		let email = Signal::new("old@example.test".to_owned());
+		let url_raw = "https://example.test\n";
+		let url = Signal::new(url_raw.to_owned());
+		let email_raw = "old@example.test\n";
+		let email = Signal::new(email_raw.to_owned());
 		let password = Signal::new("old-secret".to_owned());
 		let color = Signal::new("#112233".to_owned());
 		let date = Signal::new("2026-08-30".to_owned());
@@ -104,7 +116,7 @@ fn public_page_mount_supports_all_additional_bound_input_types() {
 		let month = Signal::new("2026-08".to_owned());
 		let week = Signal::new("2026-W35".to_owned());
 		let time = Signal::new("09:15".to_owned());
-		let range = Signal::new(10_i32);
+		let range = Signal::new(200_i32);
 
 		page!({
 			input {
@@ -183,6 +195,31 @@ fn public_page_mount_supports_all_additional_bound_input_types() {
 		.mount(&root)
 		.expect("mount");
 
+		let initial_url: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.query_selector("#url")
+			.expect("query")
+			.expect("url input")
+			.unchecked_into();
+		assert_eq!(url.get(), initial_url.value());
+		assert_ne!(url.get(), url_raw);
+		let initial_email: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.query_selector("#email")
+			.expect("query")
+			.expect("email input")
+			.unchecked_into();
+		assert_eq!(email.get(), initial_email.value());
+		assert_ne!(email.get(), email_raw);
+		let initial_range: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.query_selector("#range")
+			.expect("query")
+			.expect("range input")
+			.unchecked_into();
+		assert_eq!(range.get(), 100);
+		assert_eq!(initial_range.value(), "100");
+
 		let check_text = |id: &str, signal: &Signal<String>, next: &str, empty: &str| {
 			let input: web_sys::HtmlInputElement = root
 				.as_web_sys()
@@ -239,6 +276,11 @@ fn public_page_mount_supports_all_additional_bound_input_types() {
 		check_text("month", &month, "2026-09", "");
 		check_text("week", &week, "2026-W36", "");
 		check_text("time", &time, "10:30", "");
+		check_text("date", &date, "2026-08-31", "");
+		check_text("datetime-local", &datetime_local, "2026-08-31T10:30", "");
+		check_text("month", &month, "2026-09", "");
+		check_text("week", &week, "2026-W36", "");
+		check_text("time", &time, "10:30", "");
 
 		let input: web_sys::HtmlInputElement = root
 			.as_web_sys()
@@ -287,9 +329,6 @@ fn public_page_mount_supports_all_additional_bound_input_types() {
 				.active_element()
 				.is_some_and(|active| active.is_same_node(Some(&element)))
 		);
-
-		reinhardt_pages::cleanup_reactive_nodes();
-		raw_root.remove();
 	});
 }
 

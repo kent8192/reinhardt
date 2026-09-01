@@ -1591,6 +1591,8 @@ where
 		});
 	}
 
+	// Native dispatch returns before the WASM-only validation path calls this helper.
+	#[cfg_attr(not(wasm), allow(dead_code))]
 	pub(crate) fn complete_mutation_validation_error(
 		&self,
 		error: FormValidationError<Form::Field>,

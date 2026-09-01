@@ -255,12 +255,12 @@ where
 				if let Some(path) = &redirect
 					&& let Err(error) =
 						crate::navigate_or_reload(path.clone(), crate::NavigationType::Push)
-					{
-						crate::error_log!("server mutation redirect failed: {error}");
-						for callback in &on_redirect_error {
-							callback(&error);
-						}
+				{
+					crate::error_log!("server mutation redirect failed: {error}");
+					for callback in &on_redirect_error {
+						callback(&error);
 					}
+				}
 			})
 			.on_error(move |error| {
 				for callback in &before_error {

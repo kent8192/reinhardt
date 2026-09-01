@@ -28,20 +28,34 @@
 //! ```
 
 use crate::reactive::{ReactiveScope, Signal};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::rc::Rc;
 
 thread_local! {
-	static AUTHENTICATION_INVALIDATION_SCHEDULED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+	static AUTHENTICATION_INVALIDATION_SCHEDULED: Cell<Option<u64>> = const { Cell::new(None) };
 }
 
-struct AuthenticationInvalidationScheduleGuard;
+struct AuthenticationInvalidationScheduleGuard {
+	generation: u64,
+}
 
 impl Drop for AuthenticationInvalidationScheduleGuard {
 	fn drop(&mut self) {
-		AUTHENTICATION_INVALIDATION_SCHEDULED.with(|scheduled| scheduled.set(false));
+		AUTHENTICATION_INVALIDATION_SCHEDULED.with(|scheduled| {
+			if scheduled.get() == Some(self.generation) {
+				scheduled.set(None);
+			}
+		});
 	}
+}
+
+/// Authentication context captured when a generated server-function request starts.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ServerFnAuthenticationContext {
+	established: bool,
+	generation: u64,
 }
 
 /// Deserializes a user ID that may be either a JSON string or a JSON number.
@@ -74,15 +88,32 @@ pub const SESSION_KEY_USERNAME: &str = "_auth_username";
 pub const SESSION_COOKIE_NAME: &str = "sessionid";
 
 /// Clears authentication-dependent client state and revalidates the active route.
+///
+/// Duplicate notifications are coalesced only while they refer to the current
+/// [`AuthState`] generation. A login, update, or state-changing logout advances
+/// that generation and supersedes any older replacement navigation.
 pub fn invalidate_authentication() {
+	let generation = auth_state().authentication_generation();
+	invalidate_authentication_generation(generation);
+}
+
+fn invalidate_authentication_generation(generation: u64) {
 	let coordinator = crate::app::try_with_navigation_coordinator(Rc::clone);
 	if let Some(coordinator) = coordinator {
-		if AUTHENTICATION_INVALIDATION_SCHEDULED.with(|scheduled| scheduled.replace(true)) {
+		let already_scheduled = AUTHENTICATION_INVALIDATION_SCHEDULED.with(|scheduled| {
+			if scheduled.get() == Some(generation) {
+				true
+			} else {
+				scheduled.set(Some(generation));
+				false
+			}
+		});
+		if already_scheduled {
 			return;
 		}
 
 		coordinator.clear_for_authentication_change();
-		let schedule_guard = AuthenticationInvalidationScheduleGuard;
+		let schedule_guard = AuthenticationInvalidationScheduleGuard { generation };
 		crate::platform::spawn_task(async move {
 			crate::platform::defer_yield().await;
 			let path = coordinator.current_path();
@@ -98,10 +129,18 @@ pub fn invalidate_authentication() {
 	if let Some(client) = crate::reactive::query::current_query_client() {
 		client.clear_for_authentication_change();
 	}
-	AUTHENTICATION_INVALIDATION_SCHEDULED.with(|scheduled| scheduled.set(false));
+	AUTHENTICATION_INVALIDATION_SCHEDULED.with(|scheduled| {
+		if scheduled.get() == Some(generation) {
+			scheduled.set(None);
+		}
+	});
 }
 
-/// Reports an HTTP status observed by a generated server-function client stub.
+/// Reports an HTTP status for a caller that already established authentication.
+///
+/// Generated server-function stubs use [`observe_server_fn_status_for_request`]
+/// with a request-time context so an anonymous endpoint's expected 401 remains
+/// an ordinary application error.
 #[doc(hidden)]
 pub fn observe_server_fn_status(status: u16) {
 	if status == 401 {
@@ -109,6 +148,35 @@ pub fn observe_server_fn_status(status: u16) {
 		auth_state().logout();
 		invalidate_authentication();
 	}
+}
+
+/// Captures whether a generated request carries an established authentication context.
+#[doc(hidden)]
+pub fn server_fn_authentication_context() -> ServerFnAuthenticationContext {
+	let state = auth_state();
+	ServerFnAuthenticationContext {
+		established: state.is_authenticated_untracked() || get_jwt_token().is_some(),
+		generation: state.authentication_generation(),
+	}
+}
+
+/// Reports a generated server-function response against its request-time auth context.
+#[doc(hidden)]
+pub fn observe_server_fn_status_for_request(status: u16, context: ServerFnAuthenticationContext) {
+	if status != 401 || !context.established {
+		return;
+	}
+
+	let state = auth_state();
+	let current_context_is_established =
+		state.is_authenticated_untracked() || get_jwt_token().is_some();
+	if context.generation != state.authentication_generation() || !current_context_is_established {
+		return;
+	}
+
+	clear_jwt_token();
+	state.logout();
+	invalidate_authentication();
 }
 
 struct AuthStateStore {
@@ -149,6 +217,8 @@ pub fn auth_state() -> AuthState {
 pub struct AuthState {
 	/// Scope that owns this state's reactive signals.
 	_scope: Rc<ReactiveScope>,
+	/// Monotonic identity for authentication-bound cache and navigation work.
+	authentication_generation: Rc<Cell<u64>>,
 	/// Whether the user is authenticated.
 	is_authenticated: Signal<bool>,
 	/// The authenticated user's ID (string to support both integer and UUID PKs).
@@ -216,6 +286,7 @@ impl AuthState {
 		let scope = Rc::new(ReactiveScope::new());
 		scope.enter(|| Self {
 			_scope: Rc::clone(&scope),
+			authentication_generation: Rc::new(Cell::new(0)),
 			is_authenticated: Signal::new(data.is_authenticated),
 			user_id: Signal::new(data.user_id),
 			username: Signal::new(data.username),
@@ -229,6 +300,19 @@ impl AuthState {
 	/// Returns whether the user is authenticated.
 	pub fn is_authenticated(&self) -> bool {
 		self.is_authenticated.get()
+	}
+
+	fn is_authenticated_untracked(&self) -> bool {
+		self.is_authenticated.get_untracked()
+	}
+
+	fn authentication_generation(&self) -> u64 {
+		self.authentication_generation.get()
+	}
+
+	fn advance_authentication_generation(&self) {
+		self.authentication_generation
+			.set(self.authentication_generation.get().wrapping_add(1));
 	}
 
 	/// Returns the authenticated user's ID.
@@ -293,6 +377,7 @@ impl AuthState {
 	/// This is typically called after a successful login or
 	/// when session data is refreshed from the server.
 	pub fn update(&self, data: AuthData) {
+		self.advance_authentication_generation();
 		self.is_authenticated.set(data.is_authenticated);
 		self.user_id.set(data.user_id);
 		self.username.set(data.username);
@@ -307,6 +392,7 @@ impl AuthState {
 	/// Resets `email`, `is_staff`, `is_superuser`, and `permissions` to defaults
 	/// to prevent stale data from a previous session.
 	pub fn login(&self, user_id: impl Into<String>, username: impl Into<String>) {
+		self.advance_authentication_generation();
 		self.is_authenticated.set(true);
 		self.user_id.set(Some(user_id.into()));
 		self.username.set(Some(username.into()));
@@ -325,6 +411,7 @@ impl AuthState {
 		is_staff: bool,
 		is_superuser: bool,
 	) {
+		self.advance_authentication_generation();
 		self.is_authenticated.set(true);
 		self.user_id.set(Some(user_id.into()));
 		self.username.set(Some(username.into()));
@@ -335,6 +422,16 @@ impl AuthState {
 
 	/// Clears the authentication state (logout).
 	pub fn logout(&self) {
+		let changed = self.is_authenticated.get_untracked()
+			|| self.user_id.get_untracked().is_some()
+			|| self.username.get_untracked().is_some()
+			|| self.email.get_untracked().is_some()
+			|| self.is_staff.get_untracked()
+			|| self.is_superuser.get_untracked()
+			|| !self.permissions.get_untracked().is_empty();
+		if changed {
+			self.advance_authentication_generation();
+		}
 		self.is_authenticated.set(false);
 		self.user_id.set(None);
 		self.username.set(None);
@@ -1007,6 +1104,48 @@ mod tests {
 		state.logout();
 	}
 
+	#[rstest::rstest]
+	#[case(false, false)]
+	#[case(true, true)]
+	#[cfg(not(target_arch = "wasm32"))]
+	fn request_scoped_401_requires_the_current_established_authentication(
+		#[case] authenticated: bool,
+		#[case] expect_invalidation: bool,
+	) {
+		use crate::reactive::query::{
+			QueryClient, QueryDefaults, QueryFamily, QueryOptions, TestQueryRuntime,
+			provide_query_client,
+		};
+
+		// Arrange
+		clear_global_auth_state();
+		let runtime = TestQueryRuntime::new();
+		let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+		let family = QueryFamily::<(), String, String>::new("auth.request-context");
+		let query = client.observe(
+			family.query((), || async { Ok("authenticated".to_owned()) }),
+			QueryOptions::default(),
+		);
+		runtime.run_until_stalled();
+		let _client_guard = provide_query_client(client);
+		let state = auth_state();
+		if authenticated {
+			state.login("1", "authenticated");
+		}
+		let context = server_fn_authentication_context();
+
+		// Act
+		observe_server_fn_status_for_request(401, context);
+
+		// Assert
+		assert_eq!(query.data().is_none(), expect_invalidation);
+		assert_eq!(
+			state.is_authenticated(),
+			authenticated && !expect_invalidation
+		);
+		clear_global_auth_state();
+	}
+
 	#[cfg(native)]
 	#[test]
 	fn authentication_invalidation_resets_coalescing_when_native_scheduler_is_unavailable() {
@@ -1014,11 +1153,11 @@ mod tests {
 			let router = reinhardt_urls::routers::ClientRouter::new()
 				.route("root", "/", || crate::Page::text("root"));
 			crate::app::__install_client_router_for_test(router);
-			AUTHENTICATION_INVALIDATION_SCHEDULED.with(|scheduled| scheduled.set(false));
+			AUTHENTICATION_INVALIDATION_SCHEDULED.with(|scheduled| scheduled.set(None));
 
 			invalidate_authentication();
 
-			assert!(!AUTHENTICATION_INVALIDATION_SCHEDULED.with(std::cell::Cell::get));
+			assert_eq!(AUTHENTICATION_INVALIDATION_SCHEDULED.with(Cell::get), None);
 			crate::app::__clear_spa_router_for_test();
 		});
 	}

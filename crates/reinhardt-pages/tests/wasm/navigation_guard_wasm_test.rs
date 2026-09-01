@@ -3,22 +3,68 @@
 #![cfg(wasm)]
 
 use gloo_timers::future::TimeoutFuture;
+use js_sys::{Function, Reflect};
 use reinhardt_pages::app::ClientLauncher;
-use reinhardt_pages::auth::{invalidate_authentication, observe_server_fn_status};
+use reinhardt_pages::auth::{
+	auth_state, clear_jwt_token, invalidate_authentication, observe_server_fn_status,
+};
 use reinhardt_pages::component::{Component, IntoPage, Page, PageElement};
 use reinhardt_pages::reactive::hooks::RouterHandle;
 use reinhardt_pages::router::{Link, PrefetchMode};
+use reinhardt_pages::server_fn::ServerFnError;
 use reinhardt_pages::{
 	Loader, NavigationContext, NavigationDecision, NavigationGuardError, QueryFamily, QueryOptions,
 	SsrState, component, loader, navigation_guard,
 };
+use reinhardt_pages_macros::server_fn;
 use reinhardt_urls::routers::ClientRouter;
+use rstest::rstest;
 use std::cell::{Cell, RefCell};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::*;
 
 wasm_bindgen_test_configure!(run_in_browser);
+
+#[server_fn(no_csrf = true)]
+async fn anonymous_login_probe(username: String) -> Result<(), ServerFnError> {
+	let _ = username;
+	Ok(())
+}
+
+struct UnauthorizedFetchGuard {
+	window: web_sys::Window,
+	previous_fetch: JsValue,
+}
+
+impl UnauthorizedFetchGuard {
+	fn install() -> Self {
+		let window = web_sys::window().expect("browser window");
+		let previous_fetch = Reflect::get(window.as_ref(), &JsValue::from_str("fetch"))
+			.expect("window.fetch must be readable");
+		let stub = Function::new_with_args(
+			"request",
+			"return Promise.resolve(new Response('Invalid credentials', { status: 401 }));",
+		);
+		Reflect::set(window.as_ref(), &JsValue::from_str("fetch"), stub.as_ref())
+			.expect("install unauthorized fetch stub");
+
+		Self {
+			window,
+			previous_fetch,
+		}
+	}
+}
+
+impl Drop for UnauthorizedFetchGuard {
+	fn drop(&mut self) {
+		let _ = Reflect::set(
+			self.window.as_ref(),
+			&JsValue::from_str("fetch"),
+			&self.previous_fetch,
+		);
+	}
+}
 
 thread_local! {
 	static GUARD_MODE: Cell<u8> = const { Cell::new(0) };
@@ -248,6 +294,33 @@ fn current_location() -> String {
 		location.pathname().expect("pathname"),
 		location.search().expect("query string")
 	)
+}
+
+#[rstest]
+#[test_attr(wasm_bindgen_test)]
+async fn anonymous_server_fn_401_preserves_the_login_route() {
+	// Arrange
+	let root = install_app_root_at("/login/");
+	auth_state().logout();
+	clear_jwt_token();
+	ClientLauncher::new("#app")
+		.router_client(build_router)
+		.launch()
+		.expect("login launch");
+	settle_navigation().await;
+	assert_eq!(root.inner_html(), "<div id=\"guard-login\">LOGIN</div>");
+	let _fetch = UnauthorizedFetchGuard::install();
+
+	// Act
+	let result = anonymous_login_probe("invalid-user".to_owned()).await;
+
+	// Assert
+	assert!(
+		result.is_err(),
+		"invalid credentials must remain a form error"
+	);
+	assert_eq!(current_location(), "/login/");
+	assert_eq!(root.inner_html(), "<div id=\"guard-login\">LOGIN</div>");
 }
 
 #[wasm_bindgen_test]

@@ -907,6 +907,7 @@ mod tests {
 			component, layout, loader, navigation_guard,
 		};
 		use reinhardt_core::page::{IntoPage, Outlet};
+		use rstest::rstest;
 		use std::cell::{Cell, RefCell};
 		use std::collections::{HashMap, VecDeque};
 		use std::future::{Future, poll_fn};
@@ -1394,6 +1395,62 @@ mod tests {
 					1,
 					"anonymous redirect replaces the protected entry"
 				);
+				crate::app::__clear_spa_router_for_test();
+			});
+		}
+
+		#[rstest]
+		fn distinct_authentication_change_supersedes_pending_revalidation() {
+			ReactiveScope::run(|| {
+				// Arrange
+				reset_test_state();
+				let _query_client = provide_test_query_client();
+				let tasks = Rc::new(RefCell::new(VecDeque::new()));
+				let tasks_for_sink = Rc::clone(&tasks);
+				let _sink = crate::platform::install_task_sink(move |task| {
+					tasks_for_sink.borrow_mut().push_back(task);
+				});
+				let router = Rc::new(router_with_loaded_routes());
+				crate::app::__install_client_router_for_test((*router).clone());
+				let coordinator = crate::app::try_with_navigation_coordinator(Rc::clone)
+					.expect("the test app installs a navigation coordinator");
+				let auth = crate::auth::auth_state();
+				auth.login("initial", "initial-user");
+				CONTROLLED_GUARD_SESSION_QUERY.with(|query| query.set(true));
+				GATE_OPEN.with(|gate| gate.set(true));
+				coordinator
+					.navigate("/guarded-loaded/".to_owned(), NavigationIntent::Initial)
+					.expect("initial authenticated route starts");
+				poll_rounds(&tasks, 16);
+				assert_eq!(SESSION_FETCHES.with(Cell::get), 1);
+
+				GATE_OPEN.with(|gate| gate.set(false));
+				CONTROLLED_GUARD_GATE.with(|gate| gate.set(true));
+				auth.login("intermediate", "intermediate-user");
+				crate::auth::invalidate_authentication();
+				poll_rounds(&tasks, 16);
+				assert!(coordinator.pending().get());
+				assert_eq!(SESSION_FETCHES.with(Cell::get), 2);
+
+				// Act
+				auth.login("latest", "latest-user");
+				crate::auth::invalidate_authentication();
+
+				// Assert
+				assert!(
+					!coordinator.pending().get(),
+					"a newer authentication generation must cancel the pending replacement"
+				);
+				GATE_OPEN.with(|gate| gate.set(true));
+				poll_rounds(&tasks, 24);
+				assert_eq!(
+					SESSION_FETCHES.with(Cell::get),
+					3,
+					"the newer generation must clear data fetched by the intermediate account"
+				);
+				assert_eq!(router.current_path().get(), "/guarded-loaded/");
+				assert_eq!(auth.user_id(), Some("latest".to_owned()));
+				auth.logout();
 				crate::app::__clear_spa_router_for_test();
 			});
 		}

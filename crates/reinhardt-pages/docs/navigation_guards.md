@@ -230,17 +230,25 @@ installed launcher coordinator to replace-revalidate the active branch. The
 launcher unmounts the active route before revalidation so a rejected guard or
 loader failure cannot leave content from the previous authentication state in
 the DOM.
-Repeated invalidations in one transition are coalesced. The revalidation is
-deferred until the triggering guard or request settles, so a guard-originated
-401 cannot recursively start nested navigation. Coalescing remains active
-until the replacement route attempt settles, so another managed 401 from that
-attempt neither cancels it nor schedules a replacement loop.
+Repeated invalidations for the same authentication generation are coalesced.
+`AuthState::login`, `AuthState::login_full`, `AuthState::update`, and a
+state-changing `AuthState::logout` advance that generation, so a newer account
+or session boundary always clears caches again and supersedes an in-flight
+replacement from the previous generation. The revalidation is deferred until
+the triggering guard or request settles, so a guard-originated 401 cannot
+recursively start nested navigation. Coalescing remains active until the
+replacement route attempt settles, so another managed 401 from that same
+generation neither cancels it nor schedules a replacement loop.
 
 Managed server-function clients invoke the same invalidation path after HTTP
-401. HTTP 403 does not invalidate authentication: it normally means the user
-is authenticated but lacks permission. No session-expiry timer or polling loop
-is installed; silent expiry is observed on the next guarded navigation,
-explicit invalidation, or managed request that returns 401.
+401 only when the request started with an established hydrated auth state or a
+JWT bearer token. An expected 401 from an anonymous endpoint such as login is
+returned to its form without clearing or remounting the active route. A stale
+401 from an older authentication generation cannot log out a newer session.
+HTTP 403 does not invalidate authentication: it normally means the user is
+authenticated but lacks permission. No session-expiry timer or polling loop is
+installed; silent expiry is observed on the next guarded navigation, explicit
+invalidation, or authenticated managed request that returns 401.
 
 For route-loader details and the shared prepare/commit cache model, see
 [Route-level data loaders](route_loaders.md).

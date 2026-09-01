@@ -289,6 +289,11 @@ impl PersistentLayoutRenderer {
 }
 
 #[cfg(wasm)]
+pub(super) fn reset_persistent_layout_renderer() {
+	PERSISTENT_LAYOUT_RENDERER.with(|renderer| renderer.borrow_mut().reset());
+}
+
+#[cfg(wasm)]
 fn common_layout_prefix_len(previous: &[LayoutKey], next: &[LayoutKey]) -> usize {
 	previous
 		.iter()

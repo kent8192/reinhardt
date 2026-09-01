@@ -248,6 +248,8 @@ impl NavigationCoordinator {
 		self.cancel_active_attempt();
 		self.cancel_prefetch_tasks();
 		self.pending.set(false);
+		#[cfg(wasm)]
+		super::launcher::reset_persistent_layout_renderer();
 	}
 
 	#[cfg(test)]

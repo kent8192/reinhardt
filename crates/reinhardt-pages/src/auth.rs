@@ -102,6 +102,7 @@ pub fn invalidate_authentication() {
 #[doc(hidden)]
 pub fn observe_server_fn_status(status: u16) {
 	if status == 401 {
+		clear_jwt_token();
 		auth_state().logout();
 		invalidate_authentication();
 	}

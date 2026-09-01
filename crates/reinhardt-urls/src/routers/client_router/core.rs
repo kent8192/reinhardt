@@ -934,14 +934,20 @@ impl ClientRouter {
 		P: FromRequest + Send + Sync + 'static,
 	{
 		let index = self.routes.len();
-		let loader_id = inventory::iter::<ComponentMetadata>
-			.into_iter()
-			.find(|metadata| metadata.name == name && metadata.path == pattern)
-			.and_then(|metadata| metadata.loader_id);
-		let navigation_guard_id = inventory::iter::<ComponentNavigationGuardMetadata>
-			.into_iter()
-			.find(|metadata| metadata.name == name && metadata.path == pattern)
-			.map(|metadata| metadata.navigation_guard_id);
+		let (loader_id, navigation_guard_id) = P::component_route_metadata().map_or_else(
+			|| {
+				let loader_id = inventory::iter::<ComponentMetadata>
+					.into_iter()
+					.find(|metadata| metadata.name == name && metadata.path == pattern)
+					.and_then(|metadata| metadata.loader_id);
+				let navigation_guard_id = inventory::iter::<ComponentNavigationGuardMetadata>
+					.into_iter()
+					.find(|metadata| metadata.name == name && metadata.path == pattern)
+					.map(|metadata| metadata.navigation_guard_id);
+				(loader_id, navigation_guard_id)
+			},
+			|metadata| metadata,
+		);
 		let mut route = ClientRoute::from_route_handler(
 			Some(name.to_string()),
 			ClientPathPattern::new(pattern)
@@ -1954,6 +1960,34 @@ mod tests {
 		}
 	}
 
+	struct TypedMetadataPageProps;
+
+	impl FromRequest for TypedMetadataPageProps {
+		fn from_request(_ctx: &RouteContext) -> Result<Self, ExtractError> {
+			Ok(Self)
+		}
+
+		fn component_route_metadata() -> Option<(Option<RouteLoaderId>, Option<NavigationGuardId>)>
+		{
+			Some((
+				None,
+				Some(NavigationGuardId::new("test:typed-metadata-guard")),
+			))
+		}
+	}
+
+	inventory::submit! {
+		ComponentNavigationGuardMetadata {
+			path: "/metadata-bound/",
+			name: "metadata-bound-page",
+			navigation_guard_id: NavigationGuardId::new("test:inventory-metadata-guard"),
+		}
+	}
+
+	fn typed_metadata_page(_props: TypedMetadataPageProps) -> Page {
+		Page::Empty
+	}
+
 	struct GuardOnlyPageProps;
 
 	impl FromRequest for GuardOnlyPageProps {
@@ -2646,6 +2680,25 @@ mod tests {
 				Err(RouterError::NavigationFailed(message))
 					if message == "route loaders require navigation through reinhardt-pages"
 			));
+		});
+	}
+
+	#[test]
+	fn page_registration_uses_props_type_route_metadata() {
+		ReactiveScope::run(|| {
+			let router = ClientRouter::new().page(
+				"metadata-bound-page",
+				"/metadata-bound/",
+				typed_metadata_page,
+			);
+			let matched = router
+				.match_tree("/metadata-bound/")
+				.expect("route matches");
+
+			assert_eq!(
+				matched.navigation_guard_ids(),
+				&[NavigationGuardId::new("test:typed-metadata-guard")]
+			);
 		});
 	}
 

@@ -374,6 +374,13 @@ fn expand_component(args: ComponentArgs, input: ItemFn) -> syn::Result<proc_macr
 					#(#from_request_fields,)*
 				})
 			}
+
+			fn component_route_metadata() -> ::core::option::Option<(
+				::core::option::Option<#pages_crate::RouteLoaderId>,
+				::core::option::Option<#pages_crate::NavigationGuardId>,
+			)> {
+				::core::option::Option::Some((#loader_id_method, #navigation_guard_id_method))
+			}
 		}
 
 		impl #pages_crate::__private::reinhardt_urls::routers::client_router::ComponentInfo

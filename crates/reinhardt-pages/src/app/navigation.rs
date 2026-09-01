@@ -249,7 +249,7 @@ impl NavigationCoordinator {
 		self.cancel_prefetch_tasks();
 		self.pending.set(false);
 		#[cfg(wasm)]
-		super::launcher::reset_persistent_layout_renderer();
+		super::launcher::clear_mounted_route_for_authentication_change();
 	}
 
 	#[cfg(test)]

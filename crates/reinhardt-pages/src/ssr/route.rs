@@ -165,7 +165,7 @@ impl SsrRenderer {
 						500,
 					));
 				}
-				self.set_route_redirect_location(location);
+				self.set_route_redirect_location(redirect_target);
 				SsrRouteOutput {
 					html: String::new(),
 					status: 302,
@@ -202,7 +202,12 @@ fn normalize_redirect_target(target: &str) -> Result<String, NavigationGuardErro
 		));
 	}
 	url.set_fragment(None);
-	Ok(url.into())
+	let mut normalized = url.path().to_owned();
+	if let Some(query) = url.query() {
+		normalized.push('?');
+		normalized.push_str(query);
+	}
+	Ok(normalized)
 }
 
 enum RouteAttempt {

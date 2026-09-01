@@ -27,7 +27,7 @@ async fn ssr_guard(context: NavigationContext) -> Result<NavigationDecision, Nav
 	}
 	match context.destination() {
 		"/ssr-redirect/" => Ok(NavigationDecision::Redirect {
-			location: "/login?next=%2Faccount".to_owned(),
+			location: "login?next=%2Faccount".to_owned(),
 			replace: true,
 		}),
 		"/ssr-self-redirect/" => Ok(NavigationDecision::Redirect {

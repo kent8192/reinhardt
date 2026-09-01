@@ -216,7 +216,9 @@ if output.status == 302 {
 ```
 
 The redirect location is reset at the beginning of each route render and is
-`Some` only for the most recent redirect decision.
+`Some` only for the most recent redirect decision. Its value is the normalized
+same-origin path and query used by browser navigation; relative destinations
+are rooted at `/`, and URL fragments are omitted.
 
 ## Authentication boundaries
 
@@ -224,7 +226,10 @@ Call `auth::invalidate_authentication()`
 after logout, account switching, or another local session boundary. It
 clears the current query and normalized-entity state, including in-flight and
 hydrated protected data, cancels current navigation preparation, and asks an
-installed launcher coordinator to replace-revalidate the active branch.
+installed launcher coordinator to replace-revalidate the active branch. The
+launcher unmounts the active route before revalidation so a rejected guard or
+loader failure cannot leave content from the previous authentication state in
+the DOM.
 Repeated invalidations in one transition are coalesced. The revalidation is
 deferred until the triggering guard or request settles, so a guard-originated
 401 cannot recursively start nested navigation.

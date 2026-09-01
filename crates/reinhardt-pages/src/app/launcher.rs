@@ -57,6 +57,7 @@ thread_local! {
 	static RENDER_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 	static PERSISTENT_LAYOUT_RENDERER: RefCell<PersistentLayoutRenderer> =
 		RefCell::new(PersistentLayoutRenderer::new());
+	static ACTIVE_APP_ROOT: RefCell<Option<web_sys::Element>> = const { RefCell::new(None) };
 	static ROOT_CONTEXT_GUARDS: RefCell<Vec<Box<dyn Any>>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -289,8 +290,14 @@ impl PersistentLayoutRenderer {
 }
 
 #[cfg(wasm)]
-pub(super) fn reset_persistent_layout_renderer() {
+pub(super) fn clear_mounted_route_for_authentication_change() {
 	PERSISTENT_LAYOUT_RENDERER.with(|renderer| renderer.borrow_mut().reset());
+	crate::component::cleanup_reactive_nodes();
+	ACTIVE_APP_ROOT.with(|root| {
+		if let Some(root) = root.borrow().as_ref() {
+			root.set_inner_html("");
+		}
+	});
 }
 
 #[cfg(wasm)]
@@ -1251,6 +1258,9 @@ impl ClientLauncher {
 					self.root_selector
 				))
 			})?;
+		ACTIVE_APP_ROOT.with(|root| {
+			root.borrow_mut().replace(root_el.clone());
+		});
 		with_document_head_manager(&document_head_manager, || {
 			PERSISTENT_LAYOUT_RENDERER.with(|renderer| renderer.borrow_mut().reset());
 		});

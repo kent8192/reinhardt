@@ -499,6 +499,27 @@ async fn explicit_auth_invalidation_replaces_the_protected_route() {
 }
 
 #[wasm_bindgen_test]
+async fn failed_auth_revalidation_unmounts_the_protected_route() {
+	let root = install_app_root_at("/protected/");
+	GUARD_MODE.with(|mode| mode.set(1));
+
+	ClientLauncher::new("#app")
+		.router_client(build_router)
+		.launch()
+		.expect("protected launch");
+	settle_navigation().await;
+	assert!(root.inner_html().contains("PROTECTED"));
+
+	GUARD_MODE.with(|mode| mode.set(4));
+	invalidate_authentication();
+	assert!(root.inner_html().is_empty());
+	settle_navigation().await;
+
+	assert_eq!(current_location(), "/protected/");
+	assert!(root.inner_html().is_empty());
+}
+
+#[wasm_bindgen_test]
 async fn managed_auth_statuses_apply_401_but_ignore_403() {
 	let root = install_app_root_at("/protected/");
 	GUARD_MODE.with(|mode| mode.set(1));

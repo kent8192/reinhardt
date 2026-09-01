@@ -126,7 +126,7 @@ async fn relation_database(
 ) -> (AdminDatabase, RelationDatabaseLease) {
 	let (pool, _) = shared_db_pool.await;
 	pool.execute(
-		"CREATE TABLE admin_relation_articles (id INTEGER PRIMARY KEY, title VARCHAR(200) NOT NULL)",
+		"CREATE TABLE admin_relation_articles (id INTEGER PRIMARY KEY, headline_col VARCHAR(200) NOT NULL)",
 	)
 	.await
 	.unwrap();
@@ -140,7 +140,7 @@ async fn relation_database(
 	)
 	.await
 	.unwrap();
-	pool.execute("INSERT INTO admin_relation_articles (id, title) VALUES (1, 'Selectors')")
+	pool.execute("INSERT INTO admin_relation_articles (id, headline_col) VALUES (1, 'Selectors')")
 		.await
 		.unwrap();
 	pool.execute(
@@ -164,8 +164,10 @@ async fn relation_database(
 		FieldMetadata::new(DatabaseFieldType::Integer),
 	);
 	source.add_field(
-		"title".to_string(),
-		FieldMetadata::new(DatabaseFieldType::VarChar(200)),
+		"headline_col".to_string(),
+		FieldMetadata::new(DatabaseFieldType::VarChar(200))
+			.with_param("rust_field_name", "title")
+			.with_param("db_column", "headline_col"),
 	);
 	source.add_many_to_many(ManyToManyMetadata::new(
 		"tags",
@@ -563,6 +565,13 @@ async fn get_fields_retains_selected_relation_options_outside_first_page(
 			.map(|field| field.name.as_str())
 			.collect::<Vec<_>>(),
 		vec!["id", "title", "tags"]
+	);
+	assert_eq!(
+		response
+			.values
+			.as_ref()
+			.and_then(|values| values.get("title")),
+		Some(&json!("Selectors"))
 	);
 	let field = response
 		.fields

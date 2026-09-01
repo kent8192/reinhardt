@@ -470,14 +470,12 @@ async fn multipart_mutation_callbacks_continue_after_form_success_disposes_scope
 			})
 			.build();
 		let mutation_success_calls_for_callback = Rc::clone(&mutation_success_calls);
-		let mutation = form
-			.server_mutation(&runtime)
+		form.server_mutation(&runtime)
 			.on_success(move |_| {
 				mutation_success_calls_for_callback
 					.set(mutation_success_calls_for_callback.get() + 1);
 			})
-			.build();
-		mutation
+			.build()
 	});
 
 	let title = query_input(&root.0, "upload-form-title");

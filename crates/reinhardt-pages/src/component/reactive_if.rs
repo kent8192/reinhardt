@@ -1176,6 +1176,70 @@ fn mount_before_marker(marker: &web_sys::Comment, view: Page) -> Vec<web_sys::No
 					}
 				}
 
+				let initializing_reactive_attributes = std::rc::Rc::new(std::cell::Cell::new(true));
+				let reactive_attribute_effects = reactive_attrs
+					.iter()
+					.enumerate()
+					.filter(|(index, attribute)| {
+						!reactive_attrs[*index + 1..]
+							.iter()
+							.any(|later| later.name().eq_ignore_ascii_case(attribute.name()))
+					})
+					.filter(|(_, attribute)| {
+						!crate::component::into_page::controlled_attribute_is_overridden(
+							control_binding.as_ref(),
+							attribute.name(),
+						)
+					})
+					.map(|(_, attribute)| {
+						let attribute = attribute.clone();
+						let element = element_wrapper.clone();
+						let binding = control_binding.clone();
+						let initializing = std::rc::Rc::clone(&initializing_reactive_attributes);
+						Effect::new(move || {
+							match attribute.value() {
+								Some(value)
+									if !is_safe_html_attribute(attribute.name(), &value) =>
+								{
+									let _ = element.remove_attribute(attribute.name());
+								}
+								Some(value)
+									if is_boolean_attr(attribute.name())
+										&& !is_boolean_attr_truthy(&value) =>
+								{
+									let _ = element.remove_attribute(attribute.name());
+								}
+								Some(value) => {
+									let _ = element.set_attribute(attribute.name(), &value);
+								}
+								None => {
+									let _ = element.remove_attribute(attribute.name());
+								}
+							}
+							if !initializing.get()
+								&& let Some(binding) = binding.as_ref()
+								&& let Err(error) =
+									crate::dom::control_binding::reconcile_control_binding(
+										&element, binding,
+									) {
+								web_sys::console::error_1(
+									&format!("controlled input attribute update failed: {error}")
+										.into(),
+								);
+							}
+						})
+					})
+					.collect::<Vec<_>>();
+				if !reactive_attribute_effects.is_empty() {
+					initializing_reactive_attributes.set(false);
+					if let Some(binding) = control_binding.as_ref() {
+						crate::dom::control_binding::reconcile_control_binding(
+							&element_wrapper,
+							binding,
+						)?;
+					}
+				}
+
 				if let Some(binding) = control_binding.as_ref() {
 					crate::component::into_page::initialize_control_default(
 						&element_wrapper,
@@ -1226,42 +1290,6 @@ fn mount_before_marker(marker: &web_sys::Comment, view: Page) -> Vec<web_sys::No
 				parent
 					.insert_before(&element, Some(marker))
 					.map_err(|_| MountError::AppendChildFailed)?;
-				let reactive_attribute_effects = reactive_attrs
-					.iter()
-					.enumerate()
-					.filter(|(index, attribute)| {
-						!reactive_attrs[*index + 1..]
-							.iter()
-							.any(|later| later.name().eq_ignore_ascii_case(attribute.name()))
-					})
-					.filter(|(_, attribute)| {
-						!crate::component::into_page::controlled_attribute_is_overridden(
-							control_binding.as_ref(),
-							attribute.name(),
-						)
-					})
-					.map(|(_, attribute)| {
-						let attribute = attribute.clone();
-						let element = element.clone();
-						Effect::new(move || match attribute.value() {
-							Some(value) if !is_safe_html_attribute(attribute.name(), &value) => {
-								let _ = element.remove_attribute(attribute.name());
-							}
-							Some(value)
-								if is_boolean_attr(attribute.name())
-									&& !is_boolean_attr_truthy(&value) =>
-							{
-								let _ = element.remove_attribute(attribute.name());
-							}
-							Some(value) => {
-								let _ = element.set_attribute(attribute.name(), &value);
-							}
-							None => {
-								let _ = element.remove_attribute(attribute.name());
-							}
-						})
-					})
-					.collect::<Vec<_>>();
 				store_reactive_node((
 					binding_controller,
 					event_handles,

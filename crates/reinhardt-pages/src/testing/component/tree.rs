@@ -417,6 +417,17 @@ impl TestDom {
 			};
 			node.selected_values.clone_from(selected_values);
 		} else if let Some(value) = &patch.value {
+			let value = node
+				.control_binding
+				.as_ref()
+				.map(|binding| {
+					normalize_native_control_value(node, binding, ControlValue::Text(value.clone()))
+				})
+				.and_then(|value| match value {
+					ControlValue::Text(value) => Some(value),
+					_ => None,
+				})
+				.unwrap_or_else(|| value.clone());
 			node.value = Some(value.clone());
 			if node.tag.eq_ignore_ascii_case("select") {
 				node.selected_values = vec![value.clone()];
@@ -583,11 +594,12 @@ impl TestDom {
 			let Some(binding) = element.control_binding.clone() else {
 				continue;
 			};
-			let mut value = binding.read();
+			let value = binding.read();
 			let normalized = normalize_native_control_value(element, &binding, value.clone());
-			if normalized != value {
+			if normalized != value
+				&& should_commit_native_normalization(element, &binding, &value, &normalized)
+			{
 				let _ = binding.write(normalized.clone());
-				value = normalized;
 			}
 			let signal_revision = reinhardt_core::reactive::with_runtime(|runtime| {
 				runtime.signal_revision(binding.target())
@@ -598,7 +610,7 @@ impl TestDom {
 				&& element.last_observed_signal_revision == Some(signal_revision);
 			if !retain_invalid_raw {
 				element.pending_raw = None;
-				element.apply_control_value(&binding, value.clone());
+				element.apply_control_value(&binding, normalized);
 			}
 			element.last_observed_control_value = Some(value);
 			element.last_observed_signal_revision = Some(signal_revision);
@@ -734,16 +746,23 @@ impl TestDom {
 						element_node.control_binding.clone(),
 						last_observed_control_value,
 					) {
-					let value = normalize_native_control_value(&element_node, &binding, value);
-					if value != binding.read() {
-						let _ = binding.write(value.clone());
+					let normalized =
+						normalize_native_control_value(&element_node, &binding, value.clone());
+					if normalized != binding.read()
+						&& should_commit_native_normalization(
+							&element_node,
+							&binding,
+							&value,
+							&normalized,
+						) {
+						let _ = binding.write(normalized.clone());
 					}
-					element_node.last_observed_control_value = Some(value.clone());
+					element_node.last_observed_control_value = Some(binding.read());
 					element_node.last_observed_signal_revision =
 						Some(reinhardt_core::reactive::with_runtime(|runtime| {
 							runtime.signal_revision(binding.target())
 						}));
-					element_node.apply_control_value(&binding, value);
+					element_node.apply_control_value(&binding, normalized);
 				}
 				if let Some(raw) = rejected_number_raw {
 					element_node.value = Some(raw);
@@ -1265,18 +1284,29 @@ fn normalize_native_control_value(
 	binding: &ControlBinding,
 	value: ControlValue,
 ) -> ControlValue {
-	// ponytail: model range min/max clamping only; add full step sanitization if native parity requires it.
-	if binding.kind() != ControlKind::Number
-		|| !element.tag.eq_ignore_ascii_case("input")
-		|| !element
-			.attr("type")
-			.is_some_and(|input_type| input_type.eq_ignore_ascii_case("range"))
-	{
-		return value;
-	}
 	let ControlValue::Text(raw) = value else {
 		return value;
 	};
+	if !element.tag.eq_ignore_ascii_case("input") {
+		return ControlValue::Text(raw);
+	}
+	let input_type = element.attr("type").unwrap_or("text");
+	if binding.kind() == ControlKind::Text && crate::control_binding::is_text_input_type(input_type)
+	{
+		let mut normalized = raw.replace(['\r', '\n'], "");
+		if ["url", "email"]
+			.iter()
+			.any(|known| input_type.eq_ignore_ascii_case(known))
+		{
+			normalized = normalized
+				.trim_matches(|character: char| character.is_ascii_whitespace())
+				.to_owned();
+		}
+		return ControlValue::Text(normalized);
+	}
+	if binding.kind() != ControlKind::Number || !input_type.eq_ignore_ascii_case("range") {
+		return ControlValue::Text(raw);
+	}
 	let Ok(number) = raw.parse::<f64>() else {
 		return ControlValue::Text(raw);
 	};
@@ -1296,7 +1326,40 @@ fn normalize_native_control_value(
 	let normalized = if max < min {
 		min
 	} else {
-		number.clamp(min, max)
+		let clamped = number.clamp(min, max);
+		let step = match element.attr("step") {
+			Some(value) if value.eq_ignore_ascii_case("any") => None,
+			Some(value) => value
+				.parse::<f64>()
+				.ok()
+				.filter(|value| value.is_finite() && *value > 0.0)
+				.or(Some(1.0)),
+			None => Some(1.0),
+		};
+		match step {
+			None => clamped,
+			Some(step) => {
+				let quotient = (clamped - min) / step;
+				let lower = min + quotient.floor() * step;
+				let upper = min + quotient.ceil() * step;
+				let epsilon = step * 1e-12 + f64::EPSILON;
+				let lower = (lower >= min - epsilon && lower <= max + epsilon).then_some(lower);
+				let upper = (upper >= min - epsilon && upper <= max + epsilon).then_some(upper);
+				match (lower, upper) {
+					(Some(lower), Some(upper)) => {
+						let lower = lower.clamp(min, max);
+						let upper = upper.clamp(min, max);
+						if clamped - lower < upper - clamped {
+							lower
+						} else {
+							upper
+						}
+					}
+					(Some(value), None) | (None, Some(value)) => value.clamp(min, max),
+					(None, None) => clamped,
+				}
+			}
+		}
 	};
 	let normalized = normalized.to_string();
 	if normalized == raw {
@@ -1304,6 +1367,28 @@ fn normalize_native_control_value(
 	} else {
 		ControlValue::Text(normalized)
 	}
+}
+
+fn should_commit_native_normalization(
+	element: &ElementNode,
+	binding: &ControlBinding,
+	original: &ControlValue,
+	normalized: &ControlValue,
+) -> bool {
+	if binding.kind() != ControlKind::Text {
+		return true;
+	}
+	let (ControlValue::Text(original), ControlValue::Text(normalized)) = (original, normalized)
+	else {
+		return true;
+	};
+	if original.is_empty() || !normalized.is_empty() || !element.tag.eq_ignore_ascii_case("input") {
+		return true;
+	}
+	let input_type = element.attr("type").unwrap_or("text");
+	["date", "datetime-local", "month", "time", "week"]
+		.iter()
+		.all(|known| !input_type.eq_ignore_ascii_case(known))
 }
 
 #[cfg(test)]
@@ -1405,6 +1490,54 @@ mod case_normalization_tests {
 			checked.set(false);
 			dom.refresh_control_bindings();
 			assert_eq!(dom.element(node).unwrap().attr("checked"), None);
+		});
+	}
+
+	#[test]
+	fn native_text_controls_apply_browser_value_sanitization() {
+		ReactiveScope::run(|| {
+			let binding = ControlBinding::text(Signal::new(String::new()));
+			let url = element("input", Some("url"));
+			assert_eq!(
+				normalize_native_control_value(
+					&url,
+					&binding,
+					ControlValue::Text("  https://example.test\n".to_owned()),
+				),
+				ControlValue::Text("https://example.test".to_owned())
+			);
+
+			let textarea = element("textarea", None);
+			assert_eq!(
+				normalize_native_control_value(
+					&textarea,
+					&binding,
+					ControlValue::Text("line\nbreak".to_owned()),
+				),
+				ControlValue::Text("line\nbreak".to_owned())
+			);
+		});
+	}
+
+	#[test]
+	fn native_range_values_align_to_the_declared_step() {
+		ReactiveScope::run(|| {
+			let mut range = element("input", Some("range"));
+			range.attrs.extend([
+				("min".to_owned(), "0".to_owned()),
+				("max".to_owned(), "10".to_owned()),
+				("step".to_owned(), "2".to_owned()),
+			]);
+			let binding = ControlBinding::number(Signal::new(3_i32));
+
+			assert_eq!(
+				normalize_native_control_value(
+					&range,
+					&binding,
+					ControlValue::Text("3".to_owned()),
+				),
+				ControlValue::Text("4".to_owned())
+			);
 		});
 	}
 

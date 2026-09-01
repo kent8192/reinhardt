@@ -2213,6 +2213,9 @@ fn render_element_opening(
 		if (name.eq_ignore_ascii_case("value") && (projects_value || omits_bound_password_value))
 			|| (name.eq_ignore_ascii_case("checked") && projects_checked)
 			|| (name.eq_ignore_ascii_case("selected") && projected_option_selection.is_some())
+			|| (omits_bound_password_value
+				&& name
+					.eq_ignore_ascii_case(crate::control_binding::SSR_OMITTED_PASSWORD_ATTRIBUTE))
 			|| has_reactive_attribute
 		{
 			continue;
@@ -2238,6 +2241,10 @@ fn render_element_opening(
 		}
 		if let Some(value) = attribute.value()
 			&& (!is_boolean_attr(attribute.name()) || is_boolean_attr_truthy(&value))
+			&& !(omits_bound_password_value
+				&& attribute
+					.name()
+					.eq_ignore_ascii_case(crate::control_binding::SSR_OMITTED_PASSWORD_ATTRIBUTE))
 		{
 			push_escaped_attribute(&mut html, attribute.name(), &value);
 		}
@@ -2248,6 +2255,13 @@ fn render_element_opening(
 			&mut html,
 			"value",
 			projection.value.as_deref().unwrap_or_default(),
+		);
+	}
+	if omits_bound_password_value {
+		push_escaped_attribute(
+			&mut html,
+			crate::control_binding::SSR_OMITTED_PASSWORD_ATTRIBUTE,
+			"true",
 		);
 	}
 	if projects_checked && projection.checked {
@@ -2607,6 +2621,22 @@ mod tests {
 			assert_eq!(
 				render_element_opening(&element, &projection, None),
 				"<INPUT value=\"current\""
+			);
+		});
+	}
+
+	#[test]
+	fn render_element_opening_marks_omitted_bound_password_values() {
+		ReactiveScope::run(|| {
+			let element = PageElement::new("input")
+				.attr("type", "password")
+				.attr("value", "stale")
+				.control_binding(ControlBinding::text(Signal::new("secret".to_owned())));
+			let projection = project(element.bound_control());
+
+			assert_eq!(
+				render_element_opening(&element, &projection, None),
+				"<input type=\"password\" data-rh-password-omitted=\"true\""
 			);
 		});
 	}

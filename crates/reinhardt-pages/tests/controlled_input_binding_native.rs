@@ -1129,6 +1129,51 @@ fn number_binding_accepts_range_input_type(reactive_scope: ReactiveScope) {
 }
 
 #[rstest]
+fn native_text_binding_applies_browser_value_sanitization(reactive_scope: ReactiveScope) {
+	// Arrange
+	let value = signal_in_scope(&reactive_scope, "  https://example.test\n".to_owned());
+
+	// Act
+	let screen = render(
+		PageElement::new("input")
+			.attr("aria-label", "URL")
+			.attr("type", "url")
+			.control_binding(ControlBinding::text(value.clone())),
+	);
+
+	// Assert
+	assert_eq!(value.get(), "https://example.test");
+	assert_eq!(
+		screen.get_by_label("URL").value().as_deref(),
+		Some("https://example.test")
+	);
+}
+
+#[rstest]
+fn native_range_binding_applies_declared_step(reactive_scope: ReactiveScope) {
+	// Arrange
+	let value = signal_in_scope(&reactive_scope, 3_i32);
+
+	// Act
+	let screen = render(
+		PageElement::new("input")
+			.attr("aria-label", "Stepped range")
+			.attr("type", "range")
+			.attr("min", "0")
+			.attr("max", "10")
+			.attr("step", "2")
+			.control_binding(ControlBinding::number(value.clone())),
+	);
+
+	// Assert
+	assert_eq!(value.get(), 4);
+	assert_eq!(
+		screen.get_by_label("Stepped range").value().as_deref(),
+		Some("4")
+	);
+}
+
+#[rstest]
 #[tokio::test]
 async fn range_binding_reconciles_native_control_bounds(reactive_scope: ReactiveScope) {
 	// Arrange

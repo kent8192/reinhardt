@@ -1325,25 +1325,36 @@ fn attach_hydrated_element_events(
 		.cloned()
 		.map(|attribute| {
 			let element = element.clone();
-			crate::reactive::Effect::new(move || match attribute.value() {
-				Some(value)
-					if !reinhardt_core::types::page::is_safe_html_attribute(
-						attribute.name(),
-						&value,
-					) =>
+			let binding = element_view.bound_control().cloned();
+			crate::reactive::Effect::new(move || {
+				match attribute.value() {
+					Some(value)
+						if !reinhardt_core::types::page::is_safe_html_attribute(
+							attribute.name(),
+							&value,
+						) =>
+					{
+						let _ = element.remove_attribute(attribute.name());
+					}
+					Some(value)
+						if is_boolean_attr(attribute.name()) && !is_boolean_attr_truthy(&value) =>
+					{
+						let _ = element.remove_attribute(attribute.name());
+					}
+					Some(value) => {
+						let _ = element.set_attribute(attribute.name(), &value);
+					}
+					None => {
+						let _ = element.remove_attribute(attribute.name());
+					}
+				}
+				if let Some(binding) = binding.as_ref()
+					&& let Err(error) =
+						crate::dom::control_binding::reconcile_control_binding(&element, binding)
 				{
-					let _ = element.remove_attribute(attribute.name());
-				}
-				Some(value)
-					if is_boolean_attr(attribute.name()) && !is_boolean_attr_truthy(&value) =>
-				{
-					let _ = element.remove_attribute(attribute.name());
-				}
-				Some(value) => {
-					let _ = element.set_attribute(attribute.name(), &value);
-				}
-				None => {
-					let _ = element.remove_attribute(attribute.name());
+					web_sys::console::error_1(
+						&format!("controlled input attribute update failed: {error}").into(),
+					);
 				}
 			})
 		})

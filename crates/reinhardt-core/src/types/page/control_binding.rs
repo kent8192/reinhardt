@@ -143,6 +143,13 @@ pub enum ControlBindingError {
 		/// The missing property name.
 		property: &'static str,
 	},
+	/// A browser-normalized numeric value cannot be represented by the binding.
+	RejectedValue {
+		/// The binding's control kind.
+		control: ControlKind,
+		/// The numeric value rejected by the binding.
+		error: NumberParseError,
+	},
 }
 
 impl fmt::Display for ControlBindingError {
@@ -160,6 +167,12 @@ impl fmt::Display for ControlBindingError {
 			),
 			Self::MissingProperty { control, property } => {
 				write!(f, "{control} control is missing the {property} property")
+			}
+			Self::RejectedValue { control, error } => {
+				write!(
+					f,
+					"{control} control rejected its browser-normalized value: {error}"
+				)
 			}
 		}
 	}

@@ -2372,7 +2372,11 @@ fn generate_model_form(
 						.borrow_mut()
 						.clear_selected_files_matching(submitted);
 					if changed {
-						self.__state_version.update(|version| *version = version.wrapping_add(1));
+						if let ::core::result::Result::Ok(version) =
+							self.__state_version.try_get_untracked()
+						{
+							let _ = self.__state_version.try_set(version.wrapping_add(1));
+						}
 					}
 				}
 

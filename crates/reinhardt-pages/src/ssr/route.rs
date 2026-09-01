@@ -189,7 +189,7 @@ impl SsrRenderer {
 
 fn normalize_redirect_target(target: &str) -> Result<String, NavigationGuardError> {
 	let base = Url::parse(REDIRECT_NORMALIZATION_BASE).expect("fixed redirect base is valid");
-	let url = base.join(target).map_err(|error| {
+	let mut url = base.join(target).map_err(|error| {
 		NavigationGuardError::with_status(
 			format!("navigation guard redirect destination is invalid: {error}"),
 			500,
@@ -201,6 +201,7 @@ fn normalize_redirect_target(target: &str) -> Result<String, NavigationGuardErro
 			500,
 		));
 	}
+	url.set_fragment(None);
 	Ok(url.into())
 }
 

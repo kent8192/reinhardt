@@ -34,6 +34,10 @@ async fn ssr_guard(context: NavigationContext) -> Result<NavigationDecision, Nav
 			location: "/ssr-self-redirect/./".to_owned(),
 			replace: true,
 		}),
+		"/ssr-self-redirect-fragment/" => Ok(NavigationDecision::Redirect {
+			location: "/ssr-self-redirect-fragment/#anchor".to_owned(),
+			replace: true,
+		}),
 		"/ssr-cross-origin-redirect/" => Ok(NavigationDecision::Redirect {
 			location: "https://evil.example/login".to_owned(),
 			replace: true,
@@ -91,6 +95,15 @@ fn ssr_redirect(Loader(value): Loader<String>) -> Page {
 )]
 fn ssr_self_redirect() -> Page {
 	Page::text("self redirect route")
+}
+
+#[component(
+	"/ssr-self-redirect-fragment/",
+	name = "ssr-self-redirect-fragment",
+	navigation_guard = ssr_guard,
+)]
+fn ssr_self_redirect_fragment() -> Page {
+	Page::text("fragment redirect route")
 }
 
 #[component(
@@ -160,6 +173,7 @@ fn router() -> ClientRouter {
 		.not_found(|| Page::text("configured not found"))
 		.component(ssr_redirect)
 		.component(ssr_self_redirect)
+		.component(ssr_self_redirect_fragment)
 		.component(ssr_cross_origin_redirect)
 		.component(ssr_not_found)
 		.component(ssr_forbidden)
@@ -177,6 +191,10 @@ fn reset_counts() {
 
 #[rstest]
 #[case("/ssr-self-redirect/", "navigation guard redirect loop detected")]
+#[case(
+	"/ssr-self-redirect-fragment/",
+	"navigation guard redirect loop detected"
+)]
 #[case(
 	"/ssr-cross-origin-redirect/",
 	"navigation guard redirect destination must be same-origin"

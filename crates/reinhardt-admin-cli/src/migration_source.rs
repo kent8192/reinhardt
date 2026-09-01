@@ -49,6 +49,32 @@ struct PlannedUpgrade {
 	source: String,
 }
 
+struct TemporaryFileGuard {
+	path: PathBuf,
+	committed: bool,
+}
+
+impl TemporaryFileGuard {
+	fn new(path: PathBuf) -> Self {
+		Self {
+			path,
+			committed: false,
+		}
+	}
+
+	fn commit(&mut self) {
+		self.committed = true;
+	}
+}
+
+impl Drop for TemporaryFileGuard {
+	fn drop(&mut self) {
+		if !self.committed {
+			let _ = fs::remove_file(&self.path);
+		}
+	}
+}
+
 /// Upgrade all generated migration sources below `args.path`.
 ///
 /// The complete tree is parsed and converted before any destination is
@@ -219,19 +245,26 @@ fn write_atomically(path: &Path, content: &str) -> Result<()> {
 		.duration_since(UNIX_EPOCH)
 		.unwrap_or_default()
 		.as_nanos();
-	let temporary = parent.join(format!(".{name}.{}.{}.tmp", std::process::id(), nonce));
+	let mut temporary = TemporaryFileGuard::new(parent.join(format!(
+		".{name}.{}.{}.tmp",
+		std::process::id(),
+		nonce
+	)));
 	let write_result = (|| -> std::io::Result<()> {
 		let mut file = OpenOptions::new()
 			.write(true)
 			.create_new(true)
-			.open(&temporary)?;
+			.open(&temporary.path)?;
 		file.write_all(content.as_bytes())?;
 		file.sync_all()?;
-		fs::rename(&temporary, path)?;
+		file.set_permissions(metadata.permissions())?;
+		file.sync_all()?;
+		fs::rename(&temporary.path, path)?;
+		// The rename transferred ownership of the temporary path to the destination.
+		temporary.commit();
 		Ok(())
 	})();
 	if let Err(error) = write_result {
-		let _ = fs::remove_file(&temporary);
 		return Err(MigrationSourceError::Write(format!(
 			"{}: {error}",
 			path.display()
@@ -259,5 +292,39 @@ mod tests {
 
 		assert!(error.to_string().contains("require upgrade"));
 		assert_eq!(fs::read_to_string(path).expect("read fixture"), original);
+	}
+
+	#[test]
+	fn temporary_file_guard_removes_files_during_unwinding() {
+		let directory = tempfile::tempdir().expect("temporary directory");
+		let path = directory.path().join("migration.tmp");
+		fs::write(&path, "incomplete").expect("write temporary file");
+
+		let result = std::panic::catch_unwind(|| {
+			let _guard = TemporaryFileGuard::new(path.clone());
+			panic!("abort the write");
+		});
+
+		assert!(result.is_err());
+		assert!(!path.exists());
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn atomic_upgrade_preserves_destination_permissions() {
+		use std::os::unix::fs::PermissionsExt;
+
+		let directory = tempfile::tempdir().expect("temporary directory");
+		let path = directory.path().join("0001_initial.rs");
+		fs::write(&path, "old").expect("write destination");
+		fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).expect("set permissions");
+
+		write_atomically(&path, "new").expect("replace destination");
+
+		let mode = fs::metadata(path)
+			.expect("read destination metadata")
+			.permissions()
+			.mode() & 0o777;
+		assert_eq!(mode, 0o640);
 	}
 }

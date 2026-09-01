@@ -219,8 +219,18 @@ Provides compile-time code generation for common patterns.
     explicit `form = true` opt-in
   - Defaults `table_name` to the app label plus struct name in snake_case without pluralization
   - Example: `#[model(app_label = "polls", form = true)]` generates
-    `QuestionFormSchema` and `QuestionModelFormData<P>` for a `Question` model
+    `QuestionFormSchema`, `QuestionModelFormData<P>`, and
+    `CleanedQuestionModelFormData<P>` for a `Question` model
   - Models without `form = true` generate no model-form symbols
+  - `#[form(validate = path)]` declares one synchronous validator over the
+    generated cleaned payload
+  - `#[form(trim)]` opts a generated text, email, or URL field into trimming;
+    generated fields otherwise preserve surrounding whitespace
+  - `#[field(...)]` remains database and model metadata; form-only behavior
+    belongs in `#[form(...)]`
+  - Native code consumes raw payloads with `clean_and_validate()`, then uses
+    cleaned `into_model(context)` for creation or `apply_to(existing)` for an
+    update
 
 - **`#[derive(Model)]`** - Derive macro for automatic Model implementation
   - Implements `Model` trait

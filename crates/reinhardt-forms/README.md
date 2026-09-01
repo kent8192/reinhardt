@@ -111,8 +111,14 @@ use reinhardt::forms::{Form, Field, CharField, IntegerField};
   - Explicit `#[model(form = true)]` opt-in
   - Generated `{Model}FormSchema` metadata and
     `{Model}ModelFormData<P>` typed payload
+  - Generated `Cleaned{Model}ModelFormData<P>` after consuming
+    `clean_and_validate()`
+  - `#[form(trim)]` opt-in normalization for generated text, email, and URL
+    fields
+  - `#[form(validate = path)]` synchronous cross-field validation
   - `ModelFormPolicy`-controlled public field selection
-  - Typed trusted setters for server-owned values
+  - Typed trusted setters for excluded editable values
+  - Typed server context for required server-owned values during creation
   - `from_payload` for explicit create intent
   - `from_payload_and_instance` for explicit update intent
   - Database-free, cached `build_instance()` candidate construction
@@ -364,6 +370,31 @@ where
 Use `from_payload_and_instance(payload, instance)` for an update. Create and
 update intent is selected by the constructor, not by a database existence
 query or a primary-key guess.
+
+Generated payloads also provide a direct server trust boundary. The raw
+payload is deserializable; its cleaned counterpart is not. Repeat validation
+on the server, run application-owned async checks on normalized values, and
+then construct or update the model:
+
+```rust,ignore
+let cleaned = payload.clean_and_validate()?;
+ensure_cluster_name_available(&cleaned).await?;
+let cluster = cleaned.into_model(
+    ClusterModelFormServerContext::new().organization_id(organization_id),
+)?;
+
+let cleaned = update_payload.clean_and_validate()?;
+let updated = cleaned.apply_to(existing)?;
+```
+
+Required server-owned create values enter through the generated typed context,
+so an incomplete context cannot call `into_model`. Async validation remains an
+explicit application step after cleaning. Database failures remain structured
+`ModelFormError::Persistence` values; they are not validation errors.
+
+Generated string-like fields preserve surrounding whitespace unless their
+model field has `#[form(trim)]`. This does not change the defaults of manually
+constructed `CharField`, `EmailField`, or `URLField` values.
 
 `build_instance()` is the equivalent of Django's `commit=False`: it validates
 and caches a model candidate without database access. Repeated calls and a

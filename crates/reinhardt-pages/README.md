@@ -436,6 +436,26 @@ Model-backed browser submits retain the server function's typed response;
 `submit_server_fn` exposes it through `UseFormAsyncSubmitOutcome` and routes
 structured field errors into the same runtime state.
 
+Pages validates an owned raw snapshot before generated submission, but the
+client is not a trust boundary. The server must repeat the generated pipeline,
+run any async application validator explicitly, and construct from the cleaned
+payload with server-owned context:
+
+```rust,ignore
+let cleaned = payload.clean_and_validate()?;
+ensure_cluster_name_available(&cleaned).await?;
+let cluster = cleaned.into_model(
+    ClusterModelFormServerContext::new().organization_id(organization_id),
+)?;
+```
+
+Cleaned payloads are not deserializable. For updates,
+`cleaned.apply_to(existing)` preserves primary keys and server-owned values.
+Use `#[form(validate = path)]` for synchronous cross-field validation and
+`#[form(trim)]` for opt-in generated text, email, or URL trimming;
+`#[field(...)]` remains database and model metadata. Database failures remain
+the persistence boundary rather than form validation errors.
+
 For model-derived controls, explicit field allowlists, display overrides,
 trusted server setters, and native async persistence, see
 [Model-backed Pages forms](docs/model_forms.md). Model mode submits one

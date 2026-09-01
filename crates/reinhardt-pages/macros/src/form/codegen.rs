@@ -3641,6 +3641,16 @@ fn generate_model_form(
 													#pages_crate::__private::serde_json::Value::String(value),
 												)
 											{
+												let cleared = form
+													.__model_state
+													.borrow_mut()
+													.clear_value(field_name)
+													.is_ok();
+												if cleared {
+													form.__state_version.update(|version| {
+														*version = version.wrapping_add(1)
+													});
+												}
 												#pages_crate::warn_log!(
 													"model form field `{}` rejected input: {}",
 													field_name,

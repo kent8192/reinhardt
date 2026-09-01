@@ -1987,6 +1987,7 @@ where
 			}
 			ResetOnDeps::ResetAll => {
 				let _guard = self.suppress_signal_sync();
+				self.form.runtime_reset_state();
 				self.form.runtime_apply_values(&new_defaults);
 				self.touched_fields.borrow_mut().clear();
 				self.touched_collections.borrow_mut().clear();
@@ -2668,8 +2669,8 @@ where
 mod tests {
 	use super::{
 		CollectionItem, CollectionItemKey, CollectionState, ControlBinding, ControlKind,
-		FieldError, FieldPathState, FormRuntimeSource, RuntimeControlBindingRequest, ServerFnError,
-		SubmitPendingGuard, use_form, use_form_action,
+		FieldError, FieldPathState, FormRuntimeSource, ResetOnDeps, RuntimeControlBindingRequest,
+		ServerFnError, SubmitPendingGuard, use_form, use_form_action,
 	};
 	use crate::reactive::Signal;
 	use reinhardt_core::reactive::ReactiveScope;
@@ -2788,6 +2789,27 @@ mod tests {
 			weak_scope.upgrade().is_none(),
 			"dropping the final form runtime must dispose its sync effect and release the scope"
 		);
+	}
+
+	#[test]
+	#[serial(reactive_runtime)]
+	fn reset_all_reconciliation_marks_values_source_preferred() {
+		let scope = Rc::new(ReactiveScope::new());
+		let reset_log = Rc::new(RefCell::new(Vec::new()));
+		let form = scope.enter(|| RetainedScopeForm {
+			scope: Rc::clone(&scope),
+			value: Signal::new("initial".to_owned()),
+			reset_log: Rc::clone(&reset_log),
+		});
+		let runtime = use_form(&form)
+			.deps(0_u8)
+			.reset_on_deps(ResetOnDeps::ResetAll)
+			.build();
+
+		runtime.reconcile_defaults("next".to_owned(), 1_u8);
+
+		assert_eq!(*reset_log.borrow(), vec!["reset", "apply"]);
+		assert_eq!(runtime.get_values(), "next");
 	}
 
 	#[test]

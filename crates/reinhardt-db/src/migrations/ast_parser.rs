@@ -20,7 +20,7 @@ pub fn extract_migration_metadata(ast: &File, app_label: &str, name: &str) -> Re
 	}
 
 	let dependencies = extract_dependencies(ast)?;
-	let atomic = extract_atomic(ast).unwrap_or(true);
+	let atomic = extract_atomic(ast)?.unwrap_or(true);
 	let replaces = extract_replaces(ast).unwrap_or_default();
 	let operations = extract_operations(ast).unwrap_or_default();
 	let initial = extract_initial(ast);
@@ -90,7 +90,7 @@ fn extract_migration_expression_strict(
 ) -> Result<Migration> {
 	if matches!(migration_expr, Expr::Call(_) | Expr::MethodCall(_)) {
 		let mut migration = parse_migration_builder_strict(migration_expr, app_label, name)?;
-		if let Some(standalone_atomic) = extract_atomic(ast) {
+		if let Some(standalone_atomic) = extract_atomic(ast)? {
 			if builder_declares_atomic(migration_expr) && migration.atomic != standalone_atomic {
 				return Err(MigrationError::InvalidMigration(
 					"Migration builder atomic flag conflicts with atomic() entrypoint".to_string(),
@@ -140,7 +140,7 @@ fn extract_migration_expression_strict(
 		.fields
 		.iter()
 		.any(|field| matches!(&field.member, syn::Member::Named(ident) if ident == "atomic"));
-	let atomic = match extract_atomic(ast) {
+	let atomic = match extract_atomic(ast)? {
 		Some(standalone_atomic) if has_atomic_field && standalone_atomic != atomic_in_struct => {
 			return Err(MigrationError::InvalidMigration(
 				"Migration atomic field conflicts with atomic() entrypoint".to_string(),
@@ -506,15 +506,18 @@ fn extract_dependencies(ast: &File) -> Result<Vec<(String, String)>> {
 }
 
 /// Extract atomic flag from `atomic()` function
-fn extract_atomic(ast: &File) -> Option<bool> {
-	for item in &ast.items {
-		if let Item::Fn(func) = item
-			&& func.sig.ident == "atomic"
-		{
-			return parse_bool_return(func);
-		}
+fn extract_atomic(ast: &File) -> Result<Option<bool>> {
+	let mut functions = ast.items.iter().filter_map(|item| match item {
+		Item::Fn(function) if function.sig.ident == "atomic" => Some(function),
+		_ => None,
+	});
+	let atomic = functions.next().and_then(parse_bool_return);
+	if functions.next().is_some() {
+		return Err(MigrationError::InvalidMigration(
+			"multiple atomic() entrypoints are ambiguous before cfg expansion".to_string(),
+		));
 	}
-	None
+	Ok(atomic)
 }
 
 /// Extract replaces from `migration()` function
@@ -5034,6 +5037,41 @@ mod parser_tests {
 	}
 
 	#[rstest]
+	fn strict_metadata_rejects_ambiguous_cfg_gated_atomic_entrypoints() {
+		let ast = syn::parse_file(
+			r#"
+			#[cfg(feature = "postgres")]
+			pub fn migration() -> Migration {
+				Migration::new("0001_backend", "blog")
+			}
+
+			#[cfg(feature = "sqlite")]
+			pub fn migration() -> Migration {
+				Migration::new("0001_backend", "blog")
+			}
+
+			#[cfg(feature = "postgres")]
+			pub fn atomic() -> bool {
+				true
+			}
+
+			#[cfg(feature = "sqlite")]
+			pub fn atomic() -> bool {
+				false
+			}
+			"#,
+		)
+		.unwrap();
+
+		let error = extract_migration_metadata_strict(&ast, "blog", "0001_backend").unwrap_err();
+
+		assert_eq!(
+			error.to_string(),
+			"Invalid migration: multiple atomic() entrypoints are ambiguous before cfg expansion"
+		);
+	}
+
+	#[rstest]
 	#[case(
 		"Operation::UnknownOperation { value: 1 }",
 		"Invalid migration: operations[0].UnknownOperation is unsupported or malformed"
@@ -7289,7 +7327,7 @@ mod tests {
 
 		let empty_ast: syn::File = syn::parse_str("fn unrelated() {}").unwrap();
 		assert_eq!(extract_dependencies(&empty_ast).unwrap(), []);
-		assert_eq!(extract_atomic(&empty_ast), None);
+		assert_eq!(extract_atomic(&empty_ast).unwrap(), None);
 		assert_eq!(extract_replaces(&empty_ast), None);
 		assert_eq!(extract_initial(&empty_ast), None);
 		assert_eq!(extract_operations(&empty_ast).unwrap(), []);

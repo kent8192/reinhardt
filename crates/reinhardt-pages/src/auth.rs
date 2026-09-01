@@ -34,6 +34,7 @@ use std::rc::Rc;
 
 thread_local! {
 	static AUTHENTICATION_INVALIDATION_SCHEDULED: Cell<Option<u64>> = const { Cell::new(None) };
+	static JWT_IDENTITY_GENERATION: Cell<u64> = const { Cell::new(0) };
 }
 
 struct AuthenticationInvalidationScheduleGuard {
@@ -56,6 +57,7 @@ impl Drop for AuthenticationInvalidationScheduleGuard {
 pub struct ServerFnAuthenticationContext {
 	established: bool,
 	generation: u64,
+	jwt_generation: u64,
 }
 
 /// Deserializes a user ID that may be either a JSON string or a JSON number.
@@ -157,6 +159,7 @@ pub fn server_fn_authentication_context() -> ServerFnAuthenticationContext {
 	ServerFnAuthenticationContext {
 		established: state.is_authenticated_untracked() || get_jwt_token().is_some(),
 		generation: state.authentication_generation(),
+		jwt_generation: JWT_IDENTITY_GENERATION.with(Cell::get),
 	}
 }
 
@@ -170,7 +173,11 @@ pub fn observe_server_fn_status_for_request(status: u16, context: ServerFnAuthen
 	let state = auth_state();
 	let current_context_is_established =
 		state.is_authenticated_untracked() || get_jwt_token().is_some();
-	if context.generation != state.authentication_generation() || !current_context_is_established {
+	let jwt_generation = JWT_IDENTITY_GENERATION.with(Cell::get);
+	if context.generation != state.authentication_generation()
+		|| context.jwt_generation != jwt_generation
+		|| !current_context_is_established
+	{
 		return;
 	}
 
@@ -768,7 +775,12 @@ pub fn set_jwt_token(token: &str) {
 	if let Some(window) = web_sys::window()
 		&& let Ok(Some(storage)) = window.session_storage()
 	{
-		let _ = storage.set_item(JWT_STORAGE_KEY, token);
+		let previous = storage.get_item(JWT_STORAGE_KEY).ok().flatten();
+		if storage.set_item(JWT_STORAGE_KEY, token).is_ok() && previous.as_deref() != Some(token) {
+			JWT_IDENTITY_GENERATION.with(|generation| {
+				generation.set(generation.get().wrapping_add(1));
+			});
+		}
 	}
 }
 
@@ -786,7 +798,12 @@ pub fn clear_jwt_token() {
 	if let Some(window) = web_sys::window()
 		&& let Ok(Some(storage)) = window.session_storage()
 	{
-		let _ = storage.remove_item(JWT_STORAGE_KEY);
+		let had_token = storage.get_item(JWT_STORAGE_KEY).ok().flatten().is_some();
+		if storage.remove_item(JWT_STORAGE_KEY).is_ok() && had_token {
+			JWT_IDENTITY_GENERATION.with(|generation| {
+				generation.set(generation.get().wrapping_add(1));
+			});
+		}
 	}
 }
 

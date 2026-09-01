@@ -244,7 +244,8 @@ Managed server-function clients invoke the same invalidation path after HTTP
 401 only when the request started with an established hydrated auth state or a
 JWT bearer token. An expected 401 from an anonymous endpoint such as login is
 returned to its form without clearing or remounting the active route. A stale
-401 from an older authentication generation cannot log out a newer session.
+401 from an older authentication generation or JWT identity cannot log out a
+newer session or clear its replacement token.
 HTTP 403 does not invalidate authentication: it normally means the user is
 authenticated but lacks permission. No session-expiry timer or polling loop is
 installed; silent expiry is observed on the next guarded navigation, explicit

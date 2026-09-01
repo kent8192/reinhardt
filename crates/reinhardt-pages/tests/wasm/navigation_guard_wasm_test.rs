@@ -6,7 +6,9 @@ use gloo_timers::future::TimeoutFuture;
 use js_sys::{Function, Reflect};
 use reinhardt_pages::app::ClientLauncher;
 use reinhardt_pages::auth::{
-	auth_state, clear_jwt_token, invalidate_authentication, observe_server_fn_status,
+	auth_state, clear_jwt_token, get_jwt_token, invalidate_authentication,
+	observe_server_fn_status, observe_server_fn_status_for_request,
+	server_fn_authentication_context, set_jwt_token,
 };
 use reinhardt_pages::component::{Component, IntoPage, Page, PageElement};
 use reinhardt_pages::reactive::hooks::RouterHandle;
@@ -321,6 +323,25 @@ async fn anonymous_server_fn_401_preserves_the_login_route() {
 	);
 	assert_eq!(current_location(), "/login/");
 	assert_eq!(root.inner_html(), "<div id=\"guard-login\">LOGIN</div>");
+}
+
+#[rstest]
+#[test_attr(wasm_bindgen_test)]
+fn stale_server_fn_401_preserves_a_rotated_jwt() {
+	// Arrange
+	auth_state().logout();
+	clear_jwt_token();
+	set_jwt_token("expired-token");
+	let context = server_fn_authentication_context();
+
+	// Act
+	set_jwt_token("replacement-token");
+	observe_server_fn_status_for_request(401, context);
+	let retained_token = get_jwt_token();
+	clear_jwt_token();
+
+	// Assert
+	assert_eq!(retained_token.as_deref(), Some("replacement-token"));
 }
 
 #[wasm_bindgen_test]

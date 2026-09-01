@@ -83,9 +83,39 @@ impl DestinationPermissionsGuard {
 		}
 	}
 
+	fn make_writable(path: &Path, permissions: fs::Permissions) -> std::io::Result<Self> {
+		Self::make_writable_with(path, permissions, |path, permissions| {
+			fs::set_permissions(path, permissions)
+		})
+	}
+
+	fn make_writable_with(
+		path: &Path,
+		permissions: fs::Permissions,
+		set_permissions: impl FnOnce(&Path, fs::Permissions) -> std::io::Result<()>,
+	) -> std::io::Result<Self> {
+		let guard = Self::new(path, permissions);
+		let writable_permissions = make_permissions_writable(&guard.permissions);
+		set_permissions(&guard.path, writable_permissions)?;
+		Ok(guard)
+	}
+
 	fn disarm(&mut self) {
 		self.armed = false;
 	}
+}
+
+fn make_permissions_writable(permissions: &fs::Permissions) -> fs::Permissions {
+	let mut writable_permissions = permissions.clone();
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::PermissionsExt;
+
+		writable_permissions.set_mode(writable_permissions.mode() | 0o200);
+	}
+	#[cfg(not(unix))]
+	writable_permissions.set_readonly(false);
+	writable_permissions
 }
 
 impl Drop for DestinationPermissionsGuard {
@@ -322,11 +352,10 @@ fn write_atomically(path: &Path, expected_source: &str, content: &str) -> Result
 		metadata = verify_current_source(path, expected_source)?;
 		if metadata.permissions().readonly() {
 			let original_permissions = metadata.permissions();
-			let mut writable_permissions = original_permissions.clone();
-			writable_permissions.set_readonly(false);
-			fs::set_permissions(path, writable_permissions)?;
-			destination_permissions_guard =
-				Some(DestinationPermissionsGuard::new(path, original_permissions));
+			destination_permissions_guard = Some(DestinationPermissionsGuard::make_writable(
+				path,
+				original_permissions,
+			)?);
 		}
 		fs::rename(&temporary.path, path)?;
 		// The rename transferred ownership of the temporary path to the destination.
@@ -431,6 +460,36 @@ mod tests {
 		});
 
 		assert!(result.is_err());
+		assert!(
+			fs::metadata(path)
+				.expect("read destination metadata")
+				.permissions()
+				.readonly()
+		);
+	}
+
+	#[test]
+	fn destination_permissions_guard_restores_when_writable_transition_errors() {
+		let directory = tempfile::tempdir().expect("temporary directory");
+		let path = directory.path().join("migration.rs");
+		fs::write(&path, "source").expect("write destination");
+		let mut original_permissions = fs::metadata(&path)
+			.expect("read destination metadata")
+			.permissions();
+		original_permissions.set_readonly(true);
+		fs::set_permissions(&path, original_permissions.clone())
+			.expect("make destination readonly");
+
+		let result = DestinationPermissionsGuard::make_writable_with(
+			&path,
+			original_permissions,
+			|path, writable_permissions| {
+				fs::set_permissions(path, writable_permissions)?;
+				Err(Error::other("injected transition failure"))
+			},
+		);
+
+		assert!(matches!(result, Err(error) if error.kind() == ErrorKind::Other));
 		assert!(
 			fs::metadata(path)
 				.expect("read destination metadata")

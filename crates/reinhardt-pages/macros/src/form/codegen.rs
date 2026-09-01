@@ -3309,7 +3309,9 @@ fn generate_model_form(
 						dyn Fn(::core::option::Option<#pages_crate::ServerFnError>)
 					>,
 				) {
-					self.__server_error_handlers.borrow_mut().push(handler);
+					let mut handlers = self.__server_error_handlers.borrow_mut();
+					handlers.retain(|handler| handler.upgrade().is_some());
+					handlers.push(handler);
 				}
 
 				fn runtime_apply_values(&self, values: &Self::Values) {

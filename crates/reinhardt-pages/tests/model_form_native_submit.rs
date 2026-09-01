@@ -69,6 +69,42 @@ fn native_generated_submit_routes_snapshot_errors_without_dispatch() {
 }
 
 #[rstest]
+fn late_use_form_subscriber_replays_generated_submit_errors_on_build() {
+	reinhardt_core::reactive::ReactiveScope::run(|| {
+		// Arrange
+		let form = form! {
+			name: QuestionLateSubscriberForm,
+			model: Question,
+			policy: QuestionPolicy,
+			fields: [title],
+			server_fn: save_question,
+		};
+		form.set_value("title", serde_json::json!("Rejected by validation"))
+			.expect("control state accepts a valid title");
+		let submit_error = tokio_test::block_on(form.submit())
+			.expect_err("native submit must preserve validation");
+
+		// Act
+		let runtime = use_form(&form).build();
+
+		// Assert
+		assert_eq!(submit_error.kind(), ServerFnErrorKind::Validation);
+		assert_eq!(
+			runtime
+				.get_field_state(form.title_field())
+				.error
+				.as_ref()
+				.map(FieldError::message),
+			Some("Title is rejected")
+		);
+		assert_eq!(
+			runtime.form_state().form_error.get(),
+			Some("Validation failed\n_all: Question is rejected".to_owned())
+		);
+	});
+}
+
+#[rstest]
 fn model_form_routes_structured_server_errors_to_selected_fields() {
 	reinhardt_core::reactive::ReactiveScope::run(|| {
 		// Arrange

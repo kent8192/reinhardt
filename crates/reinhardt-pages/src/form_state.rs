@@ -1299,6 +1299,9 @@ where
 			}
 		});
 		form.runtime_register_server_error_handler(Rc::downgrade(&server_error_handler));
+		if let Some(error) = form.runtime_server_error() {
+			server_error_handler(Some(error));
+		}
 		UseFormReturn {
 			form,
 			scope,

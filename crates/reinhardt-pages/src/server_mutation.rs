@@ -514,12 +514,14 @@ where
 	/// A disposed form runtime is treated as unavailable, so the live mutation
 	/// action remains observable without accessing stale form signals.
 	pub fn is_pending(&self) -> bool {
-		self.form
+		let mutation_pending = self.mutation.is_pending();
+		let form_pending = self
+			.form
 			.form_state()
 			.is_submitting
 			.try_get_untracked()
-			.unwrap_or(false)
-			|| self.mutation.is_pending()
+			.unwrap_or(false);
+		mutation_pending || form_pending
 	}
 
 	/// Returns `true` when the mutation completed successfully.
@@ -836,6 +838,49 @@ mod tests {
 
 		assert!(unwind.is_err());
 		assert!(!runtime.form_state().is_submitting.get());
+	}
+
+	#[cfg(all(native, feature = "testing"))]
+	#[rstest]
+	#[serial_test::serial(reactive_runtime)]
+	fn generated_form_pending_observer_tracks_action_completion() {
+		let queued = Rc::new(RefCell::new(None));
+		let queued_for_sink = Rc::clone(&queued);
+		let _task_sink = crate::platform::install_task_sink(move |task| {
+			*queued_for_sink.borrow_mut() = Some(task);
+		});
+		let scope = ReactiveScope::new();
+		let observed = Rc::new(RefCell::new(Vec::new()));
+		let (runtime, mutation, _effect) = scope.enter(|| {
+			let form = NameForm::new("Ada", Rc::new(Cell::new(0)));
+			let runtime = use_form(&form).build();
+			let mutation = use_server_mutation(|_: ()| async { Ok::<(), ServerFnError>(()) })
+				.with_generated_form(&runtime, |_| Ok(()))
+				.build();
+			let mutation_for_effect = mutation.clone();
+			let observed_for_effect = Rc::clone(&observed);
+			let effect = Effect::new(move || {
+				observed_for_effect
+					.borrow_mut()
+					.push(mutation_for_effect.is_pending());
+			});
+			(runtime, mutation, effect)
+		});
+
+		runtime.form_state().is_submitting.set(true);
+		mutation.mutation.action.dispatch(());
+		with_runtime(|runtime| runtime.flush_updates());
+		assert_eq!(observed.borrow().as_slice(), [false, true]);
+
+		let mut task = queued
+			.borrow_mut()
+			.take()
+			.expect("dispatch should queue a native task");
+		let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+		assert_eq!(task.as_mut().poll(&mut context), std::task::Poll::Ready(()));
+		with_runtime(|runtime| runtime.flush_updates());
+
+		assert_eq!(observed.borrow().as_slice(), [false, true, false]);
 	}
 
 	#[rstest]

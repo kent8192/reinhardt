@@ -1212,6 +1212,9 @@ pub(crate) fn write_control(
 	match (kind, value) {
 		(ControlKind::Text, ControlValue::Text(value)) => {
 			if let Some(input) = element.as_web_sys().dyn_ref::<web_sys::HtmlInputElement>() {
+				if input.type_().eq_ignore_ascii_case("password") {
+					let _ = element.remove_attribute("value");
+				}
 				if input.value() == *value {
 					Ok(false)
 				} else {

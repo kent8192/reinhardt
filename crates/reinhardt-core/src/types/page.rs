@@ -1197,7 +1197,7 @@ impl Page {
 				let mut input_type_is_password = el
 					.attrs()
 					.iter()
-					.rfind(|(name, _)| name.eq_ignore_ascii_case("type"))
+					.find(|(name, _)| name.eq_ignore_ascii_case("type"))
 					.is_some_and(|(_, value)| value.eq_ignore_ascii_case("password"));
 				if let Some((_, value)) = reactive_input_type.as_ref() {
 					input_type_is_password = value
@@ -2010,6 +2010,22 @@ mod tests {
 				.into_page();
 
 			assert_eq!(input.render_to_string(), "<input type=\"password\" />");
+		});
+	}
+
+	#[rstest]
+	fn render_to_string_uses_the_first_static_password_type() {
+		ReactiveScope::run(|| {
+			let input = PageElement::new("input")
+				.attr("type", "password")
+				.attr("type", "text")
+				.control_binding(ControlBinding::text(Signal::new("secret".to_owned())))
+				.into_page();
+
+			assert_eq!(
+				input.render_to_string(),
+				"<input type=\"password\" type=\"text\" />"
+			);
 		});
 	}
 

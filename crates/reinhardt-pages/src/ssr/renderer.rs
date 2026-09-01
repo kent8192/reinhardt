@@ -2194,7 +2194,7 @@ fn render_element_opening(
 	let mut input_type_is_password = element
 		.attrs()
 		.iter()
-		.rfind(|(name, _)| name.eq_ignore_ascii_case("type"))
+		.find(|(name, _)| name.eq_ignore_ascii_case("type"))
 		.is_some_and(|(_, value)| value.eq_ignore_ascii_case("password"));
 	if let Some((_, value)) = reactive_input_type.as_ref() {
 		input_type_is_password = value
@@ -2656,6 +2656,22 @@ mod tests {
 			assert_eq!(
 				render_element_opening(&element, &projection, None),
 				"<input type=\"password\" data-rh-password-omitted=\"true\""
+			);
+		});
+	}
+
+	#[rstest]
+	fn render_element_opening_uses_the_first_static_password_type() {
+		ReactiveScope::run(|| {
+			let element = PageElement::new("input")
+				.attr("type", "password")
+				.attr("type", "text")
+				.control_binding(ControlBinding::text(Signal::new("secret".to_owned())));
+			let projection = project(element.bound_control());
+
+			assert_eq!(
+				render_element_opening(&element, &projection, None),
+				"<input type=\"password\" type=\"text\" data-rh-password-omitted=\"true\""
 			);
 		});
 	}

@@ -1295,7 +1295,7 @@ fn normalize_native_control_value(
 		{
 			normalized = normalized
 				.split(',')
-				.map(str::trim)
+				.map(|value| value.trim_matches(|character: char| character.is_ascii_whitespace()))
 				.collect::<Vec<_>>()
 				.join(",");
 		} else if ["url", "email"]
@@ -1309,12 +1309,6 @@ fn normalize_native_control_value(
 		return ControlValue::Text(normalized);
 	}
 	if binding.kind() != ControlKind::Number || !input_type.eq_ignore_ascii_case("range") {
-		return ControlValue::Text(raw);
-	}
-	let Ok(number) = raw.parse::<f64>() else {
-		return ControlValue::Text(raw);
-	};
-	if !number.is_finite() {
 		return ControlValue::Text(raw);
 	}
 	let min_attribute = element
@@ -1335,6 +1329,11 @@ fn normalize_native_control_value(
 				.filter(|value| value.is_finite())
 		})
 		.unwrap_or(0.0);
+	let number = raw
+		.parse::<f64>()
+		.ok()
+		.filter(|number| number.is_finite())
+		.unwrap_or_else(|| if max < min { min } else { min.midpoint(max) });
 	let normalized = if max < min {
 		min
 	} else {
@@ -1438,6 +1437,7 @@ mod case_normalization_tests {
 	use crate::reactive::{ReactiveScope, Signal};
 	use reinhardt_core::page::IntoPage;
 	use reinhardt_core::types::page::PageElement;
+	use rstest::rstest;
 
 	fn element(tag: &str, input_type: Option<&str>) -> ElementNode {
 		ElementNode {
@@ -1534,7 +1534,7 @@ mod case_normalization_tests {
 		});
 	}
 
-	#[test]
+	#[rstest]
 	fn native_text_controls_apply_browser_value_sanitization() {
 		ReactiveScope::run(|| {
 			let binding = ControlBinding::text(Signal::new(String::new()));
@@ -1566,9 +1566,11 @@ mod case_normalization_tests {
 				normalize_native_control_value(
 					&multiple_email,
 					&binding,
-					ControlValue::Text(" first@example.test, second@example.test \n".to_owned()),
+					ControlValue::Text(
+						" first@example.test,\u{a0}second@example.test \n".to_owned()
+					),
 				),
-				ControlValue::Text("first@example.test,second@example.test".to_owned())
+				ControlValue::Text("first@example.test,\u{a0}second@example.test".to_owned())
 			);
 		});
 	}
@@ -1633,6 +1635,23 @@ mod case_normalization_tests {
 
 			assert_eq!(value.get(), 100);
 			assert_eq!(dom.value(node).as_deref(), Some("100"));
+		});
+	}
+
+	#[rstest]
+	fn native_range_uses_the_browser_default_for_non_finite_values() {
+		ReactiveScope::run(|| {
+			let value = Signal::new(f64::NAN);
+			let dom = TestDom::render(
+				PageElement::new("input")
+					.attr("type", "range")
+					.control_binding(ControlBinding::number(value))
+					.into_page(),
+			);
+			let node = dom.children(dom.root())[0];
+
+			assert_eq!(value.get(), 50.0);
+			assert_eq!(dom.value(node).as_deref(), Some("50"));
 		});
 	}
 

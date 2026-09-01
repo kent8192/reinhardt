@@ -2186,11 +2186,12 @@ fn render_element_opening(
 	html.push('<');
 	html.push_str(element.tag_name());
 	let omits_bound_password_value = element.tag_name().eq_ignore_ascii_case("input")
-		&& element.attrs().iter().any(|(name, value)| {
-			name.eq_ignore_ascii_case("type") && value.eq_ignore_ascii_case("password")
-		}) && element
-		.bound_control()
-		.is_some_and(|binding| binding.kind() == ControlKind::Text);
+		&& effective_attribute_value(element, "type")
+			.as_deref()
+			.is_some_and(|value| value.eq_ignore_ascii_case("password"))
+		&& element
+			.bound_control()
+			.is_some_and(|binding| binding.kind() == ControlKind::Text);
 
 	let projects_value = element.tag_name().eq_ignore_ascii_case("input")
 		&& projection.value.is_some()
@@ -2272,6 +2273,21 @@ fn render_element_opening(
 	}
 
 	html
+}
+
+fn effective_attribute_value(element: &PageElement, name: &str) -> Option<String> {
+	let mut value = element
+		.attrs()
+		.iter()
+		.filter(|(attribute, _)| attribute.eq_ignore_ascii_case(name))
+		.map(|(_, value)| value.to_string())
+		.next_back();
+	for attribute in element.reactive_attrs() {
+		if attribute.name().eq_ignore_ascii_case(name) {
+			value = attribute.value().map(|value| value.into_owned());
+		}
+	}
+	value
 }
 
 fn push_escaped_attribute(html: &mut String, name: &str, value: &str) {
@@ -2630,6 +2646,23 @@ mod tests {
 		ReactiveScope::run(|| {
 			let element = PageElement::new("input")
 				.attr("type", "password")
+				.attr("value", "stale")
+				.control_binding(ControlBinding::text(Signal::new("secret".to_owned())));
+			let projection = project(element.bound_control());
+
+			assert_eq!(
+				render_element_opening(&element, &projection, None),
+				"<input type=\"password\" data-rh-password-omitted=\"true\""
+			);
+		});
+	}
+
+	#[test]
+	fn render_element_opening_uses_the_effective_reactive_input_type() {
+		ReactiveScope::run(|| {
+			let element = PageElement::new("input")
+				.attr("type", "text")
+				.reactive_attr("type", || Some("password".into()))
 				.attr("value", "stale")
 				.control_binding(ControlBinding::text(Signal::new("secret".to_owned())));
 			let projection = project(element.bound_control());

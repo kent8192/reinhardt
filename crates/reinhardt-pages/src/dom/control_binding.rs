@@ -1322,6 +1322,12 @@ fn write_control_and_reconcile(
 			if preserves_unrepresentable_temporal_value(element, value, &live_value) {
 				return Ok(());
 			}
+			if has_conflicting_range_binding(element, binding) {
+				// Disjoint range controls cannot both normalize one shared signal.
+				// Keep their browser values local; writing back here would make their
+				// layout effects alternate forever.
+				return Ok(());
+			}
 			if let ControlWriteOutcome::Rejected(error) = binding.write(live_value)? {
 				return Err(ControlBindingError::RejectedValue {
 					control: binding.kind(),
@@ -1331,6 +1337,47 @@ fn write_control_and_reconcile(
 		}
 	}
 	Ok(())
+}
+
+fn range_constraints(element: &web_sys::Element) -> Option<(f64, f64)> {
+	let input = element.dyn_ref::<web_sys::HtmlInputElement>()?;
+	if !input.type_().eq_ignore_ascii_case("range") {
+		return None;
+	}
+	let min = element
+		.get_attribute("min")
+		.and_then(|value| value.parse::<f64>().ok())
+		.filter(|value| value.is_finite())
+		.unwrap_or(0.0);
+	let max = element
+		.get_attribute("max")
+		.and_then(|value| value.parse::<f64>().ok())
+		.filter(|value| value.is_finite())
+		.unwrap_or(100.0);
+	Some((min, max.max(min)))
+}
+
+fn has_conflicting_range_binding(element: &Element, binding: &ControlBinding) -> bool {
+	if binding.kind() != ControlKind::Number {
+		return false;
+	}
+	let Some((min, max)) = range_constraints(element.as_web_sys()) else {
+		return false;
+	};
+	let node: web_sys::Node = element.as_web_sys().clone().unchecked_into();
+	ACTIVE_NUMBER_BINDINGS.with(|registered| {
+		registered.borrow().iter().any(|candidate| {
+			candidate.target == binding.target()
+				&& !candidate
+					.element
+					.clone()
+					.unchecked_into::<web_sys::Node>()
+					.is_same_node(Some(&node))
+				&& range_constraints(&candidate.element).is_some_and(
+					|(candidate_min, candidate_max)| max < candidate_min || candidate_max < min,
+				)
+		})
+	})
 }
 
 fn preserves_unrepresentable_temporal_value(
@@ -2080,6 +2127,45 @@ mod tests {
 					error
 				} if error.raw() == "300" && error.kind() == NumberParseErrorKind::OutOfRange
 			));
+		});
+	}
+
+	#[wasm_bindgen_test]
+	fn conflicting_range_bindings_do_not_write_back_forever() {
+		let scope = ReactiveScope::new();
+		scope.enter(|| {
+			let value = Signal::new(150_i32);
+			let first = element("input");
+			let first_input: web_sys::HtmlInputElement =
+				first.as_web_sys().clone().unchecked_into();
+			first_input.set_type("range");
+			first_input.set_min("0");
+			first_input.set_max("100");
+			let first_controller =
+				ControlBindingController::mount(first, ControlBinding::number(value.clone()))
+					.expect("first range binding");
+
+			let second = element("input");
+			let second_input: web_sys::HtmlInputElement =
+				second.as_web_sys().clone().unchecked_into();
+			second_input.set_type("range");
+			second_input.set_min("200");
+			second_input.set_max("400");
+			let second_controller =
+				ControlBindingController::mount(second, ControlBinding::number(value.clone()))
+					.expect("second range binding");
+
+			assert_eq!(value.get(), 100);
+			assert_eq!(first_input.value(), "100");
+			assert_eq!(second_input.value(), "200");
+
+			value.set(150);
+
+			assert_eq!(value.get(), 150);
+			assert_eq!(first_input.value(), "100");
+			assert_eq!(second_input.value(), "200");
+			drop(second_controller);
+			drop(first_controller);
 		});
 	}
 

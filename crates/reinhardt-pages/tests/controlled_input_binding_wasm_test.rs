@@ -89,6 +89,41 @@ fn public_page_mount_installs_control_binding() {
 }
 
 #[wasm_bindgen_test]
+fn unrelated_reactive_attributes_preserve_an_active_control_edit() {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let root = Element::new(document.create_element("div").expect("root"));
+		let value = Signal::new("bound".to_owned());
+		let invalid = Signal::new(false);
+		let invalid_for_page = invalid.clone();
+		PageElement::new("input")
+			.attr("type", "text")
+			.reactive_attr("aria-invalid", move || {
+				Some(invalid_for_page.get().to_string().into())
+			})
+			.control_binding(ControlBinding::text(value.clone()))
+			.into_page()
+			.mount(&root)
+			.expect("mount");
+		let input: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("input")
+			.unchecked_into();
+
+		input.set_value("draft");
+		invalid.set(true);
+
+		assert_eq!(value.get(), "bound");
+		assert_eq!(input.value(), "draft");
+		reinhardt_pages::cleanup_reactive_nodes();
+	});
+}
+
+#[wasm_bindgen_test]
 fn public_page_mount_supports_all_additional_bound_input_types() {
 	ReactiveScope::run(|| {
 		let document = web_sys::window()

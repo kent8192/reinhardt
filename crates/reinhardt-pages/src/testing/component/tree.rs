@@ -596,11 +596,7 @@ impl TestDom {
 			};
 			let value = binding.read();
 			let normalized = normalize_native_control_value(element, &binding, value.clone());
-			if normalized != value
-				&& should_commit_native_normalization(element, &binding, &value, &normalized)
-			{
-				let _ = binding.write(normalized.clone());
-			}
+			let applied = apply_native_control_normalization(element, &binding, &value, normalized);
 			let signal_revision = reinhardt_core::reactive::with_runtime(|runtime| {
 				runtime.signal_revision(binding.target())
 			});
@@ -610,7 +606,7 @@ impl TestDom {
 				&& element.last_observed_signal_revision == Some(signal_revision);
 			if !retain_invalid_raw {
 				element.pending_raw = None;
-				element.apply_control_value(&binding, normalized);
+				element.apply_control_value(&binding, applied);
 			}
 			element.last_observed_control_value = Some(value);
 			element.last_observed_signal_revision = Some(signal_revision);
@@ -748,21 +744,18 @@ impl TestDom {
 					) {
 					let normalized =
 						normalize_native_control_value(&element_node, &binding, value.clone());
-					if normalized != binding.read()
-						&& should_commit_native_normalization(
-							&element_node,
-							&binding,
-							&value,
-							&normalized,
-						) {
-						let _ = binding.write(normalized.clone());
-					}
+					let applied = apply_native_control_normalization(
+						&element_node,
+						&binding,
+						&value,
+						normalized,
+					);
 					element_node.last_observed_control_value = Some(binding.read());
 					element_node.last_observed_signal_revision =
 						Some(reinhardt_core::reactive::with_runtime(|runtime| {
 							runtime.signal_revision(binding.target())
 						}));
-					element_node.apply_control_value(&binding, normalized);
+					element_node.apply_control_value(&binding, applied);
 				}
 				if let Some(raw) = rejected_number_raw {
 					element_node.value = Some(raw);
@@ -1291,6 +1284,9 @@ fn normalize_native_control_value(
 		return ControlValue::Text(raw);
 	}
 	let input_type = element.attr("type").unwrap_or("text");
+	if binding.kind() == ControlKind::Text && input_type.eq_ignore_ascii_case("color") {
+		return ControlValue::Text(normalize_native_color_value(&raw));
+	}
 	if binding.kind() == ControlKind::Text && crate::control_binding::is_text_input_type(input_type)
 	{
 		let mut normalized = raw.replace(['\r', '\n'], "");
@@ -1518,6 +1514,34 @@ fn weekday_of_january_first(year: u32) -> u32 {
 		weekday_sunday_zero as u32
 	}
 }
+fn normalize_native_color_value(raw: &str) -> String {
+	let bytes = raw.as_bytes();
+	if bytes.len() == 7
+		&& bytes[0] == b'#'
+		&& bytes[1..].iter().all(|byte| byte.is_ascii_hexdigit())
+	{
+		raw.to_ascii_lowercase()
+	} else {
+		"#000000".to_owned()
+	}
+}
+
+fn apply_native_control_normalization(
+	element: &ElementNode,
+	binding: &ControlBinding,
+	original: &ControlValue,
+	normalized: ControlValue,
+) -> ControlValue {
+	if &normalized == original
+		|| !should_commit_native_normalization(element, binding, original, &normalized)
+	{
+		return normalized;
+	}
+	match binding.write(normalized.clone()) {
+		Ok(ControlWriteOutcome::Committed | ControlWriteOutcome::Ignored) => normalized,
+		Ok(ControlWriteOutcome::Rejected(_)) | Err(_) => original.clone(),
+	}
+}
 
 fn should_commit_native_normalization(
 	element: &ElementNode,
@@ -1696,6 +1720,50 @@ mod case_normalization_tests {
 		assert!(!is_valid_html_date("2026-00-01"));
 		assert!(!is_valid_html_week("2026-W54"));
 		assert!(!is_valid_html_time("10:30:00.1234"));
+	}
+
+	#[test]
+	fn native_range_rejection_keeps_the_signal_and_control_aligned() {
+		ReactiveScope::run(|| {
+			let value = Signal::new(100_u8);
+			let dom = TestDom::render(
+				PageElement::new("input")
+					.attr("type", "range")
+					.attr("min", "300")
+					.attr("max", "400")
+					.control_binding(ControlBinding::number(value.clone()))
+					.into_page(),
+			);
+			let node = dom.children(dom.root())[0];
+
+			assert_eq!(value.get(), 100);
+			assert_eq!(dom.value(node).as_deref(), Some("100"));
+		});
+	}
+
+	#[test]
+	fn native_color_values_use_the_browser_invalid_value_default() {
+		ReactiveScope::run(|| {
+			let color = element("input", Some("color"));
+			let binding = ControlBinding::text(Signal::new(String::new()));
+
+			assert_eq!(
+				normalize_native_control_value(
+					&color,
+					&binding,
+					ControlValue::Text("red".to_owned()),
+				),
+				ControlValue::Text("#000000".to_owned())
+			);
+			assert_eq!(
+				normalize_native_control_value(
+					&color,
+					&binding,
+					ControlValue::Text("#ABCDEF".to_owned()),
+				),
+				ControlValue::Text("#abcdef".to_owned())
+			);
+		});
 	}
 
 	#[test]

@@ -158,7 +158,7 @@ Add this to your `Cargo.toml`:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt-db = "0.3.14"
+reinhardt-db = "0.3.15"
 ```
 
 ### Optional Features
@@ -168,7 +168,7 @@ Enable specific features based on your needs:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt-db = { version = "0.3.14", features = ["postgres", "orm", "migrations"] }
+reinhardt-db = { version = "0.3.15", features = ["postgres", "orm", "migrations"] }
 ```
 
 Available features:

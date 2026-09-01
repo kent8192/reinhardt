@@ -44,17 +44,17 @@ Add `reinhardt` to your `Cargo.toml`:
 <!-- reinhardt-version-sync:5 -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.3.14", features = ["server"] }
+reinhardt = { version = "0.3.15", features = ["server"] }
 
 # For WebSocket support:
-# reinhardt = { version = "0.3.14", features = ["server", "websocket"] }
+# reinhardt = { version = "0.3.15", features = ["server", "websocket"] }
 
 # For GraphQL support:
-# reinhardt = { version = "0.3.14", features = ["server", "graphql"] }
+# reinhardt = { version = "0.3.15", features = ["server", "graphql"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.3.14", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.3.14", features = ["full"] }      # All features
+# reinhardt = { version = "0.3.15", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.3.15", features = ["full"] }      # All features
 ```
 
 Then import server features:

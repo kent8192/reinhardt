@@ -570,14 +570,26 @@ impl FilesystemRepository {
 				"{context}: conflicting expression representations"
 			));
 		}
-		if generated.expr.is_none() && generated.expr_tokens.is_some() {
-			let Some(expression) = generated.typed_expr() else {
+		let token_expression = if let Some(tokens) = generated.expr_tokens.as_deref() {
+			let Some(expression) = ast_parser::parse_schema_expr_tokens(tokens) else {
 				return Self::unsupported_rendering(format!("{context}.expr_tokens"));
 			};
-			return Self::validate_schema_expr(&context, &expression);
-		}
+			Some(expression)
+		} else {
+			None
+		};
 		if let Some(expression) = generated.expr.as_deref() {
 			Self::validate_schema_expr(&context, expression)?;
+		}
+		if let Some(token_expression) = token_expression.as_ref() {
+			Self::validate_schema_expr(&context, token_expression)?;
+			if generated
+				.expr
+				.as_deref()
+				.is_some_and(|expression| expression != token_expression)
+			{
+				return Self::unsupported_rendering(format!("{context}.expr_tokens"));
+			}
 		}
 		Ok(())
 	}
@@ -1203,6 +1215,35 @@ mod tests {
 				.to_string()
 				.contains("conflicting expression representations")
 		);
+	}
+
+	#[rstest]
+	#[case("not valid Rust")]
+	#[case("SchemaExpr::col(\"other\")")]
+	fn render_rejects_inconsistent_generated_column_tokens(#[case] expr_tokens: &str) {
+		let repository = FilesystemRepository::new(TempDir::new().unwrap().path());
+		let migration = migration_with_generated_column(GeneratedColumnDefinition::typed(
+			SchemaExpr::col("source"),
+			expr_tokens,
+			GeneratedStorage::Stored,
+		));
+
+		let error = repository
+			.render(
+				&migration,
+				MigrationRenderOptions {
+					include_header: false,
+				},
+			)
+			.unwrap_err();
+
+		match error {
+			MigrationError::UnsupportedMigrationRendering { operation } => assert_eq!(
+				operation,
+				"operations[0].CreateTable.GeneratedColumnDefinition.expr_tokens"
+			),
+			other => panic!("expected unsupported rendering error, got {other}"),
+		}
 	}
 
 	#[test]

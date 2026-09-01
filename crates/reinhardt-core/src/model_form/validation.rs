@@ -8,6 +8,9 @@ use crate::validators::ValidationErrors;
 /// semantics on native and WASM targets.
 pub trait ModelFormCleanedPayload: Sized {
 	/// The corresponding raw payload type.
+	///
+	/// **Parity: P2.** Native and WASM targets expose the same generated raw
+	/// payload representation.
 	type Raw;
 
 	/// Convert this normalized payload back into its raw representation.
@@ -22,6 +25,9 @@ pub trait ModelFormCleanedPayload: Sized {
 /// synchronous application validation on native and WASM targets.
 pub trait ModelFormValidatingPayload: Sized {
 	/// The normalized payload produced after successful validation.
+	///
+	/// **Parity: P2.** Native and WASM targets expose the same generated cleaned
+	/// payload representation.
 	type Cleaned: ModelFormCleanedPayload<Raw = Self>;
 
 	/// Normalize and validate this raw payload for model creation.
@@ -37,6 +43,9 @@ pub trait ModelFormValidatingPayload: Sized {
 /// returned cleaned payload remains partial so applying it preserves omissions.
 pub trait ModelFormUpdatingPayload: ModelFormValidatingPayload {
 	/// The model type whose existing values complete an update candidate.
+	///
+	/// **Parity: P2.** Native and WASM targets use the same generated model shape
+	/// when merging values for update validation.
 	type Model;
 
 	/// Normalize a partial update and validate its post-merge model values.

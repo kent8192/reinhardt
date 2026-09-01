@@ -338,6 +338,16 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 						all_valid = false;
 					}
 				}
+				Err(ModelFormError::FieldValidation { errors })
+					if errors.len() == 1
+						&& errors.get(&self.fk_field).is_some_and(|messages| {
+							messages.len() == 1 && messages[0] == "This field is required."
+						}) =>
+				{
+					if !child_form.is_valid_with_deferred_required_field(&self.fk_field) {
+						all_valid = false;
+					}
+				}
 				Err(_) => {
 					child_form.is_valid();
 					all_valid = false;
@@ -751,6 +761,7 @@ mod tests {
 		DatabaseBackend, OrmExecutor, QueryResult, QueryValue, Row,
 	};
 	use reinhardt_macros::model;
+	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 	use serde_json::json;
 
@@ -1107,8 +1118,10 @@ mod tests {
 		assert!(formset.child_forms()[0].instance().is_none());
 	}
 
-	#[test]
+	#[rstest]
 	fn test_inline_formset_defers_model_validator_until_generated_parent_key_is_assigned() {
+		let validator_calls = Arc::new(AtomicUsize::new(0));
+		let validator_calls_for_candidate = Arc::clone(&validator_calls);
 		let parent = TestModel {
 			id: None,
 			name: "parent".to_owned(),
@@ -1122,14 +1135,23 @@ mod tests {
 		data.set_content("invalid child".to_owned())
 			.expect("child content should be accepted");
 		formset.add_child_form(
-			ModelForm::<RequiredChildModel>::from_payload(data).with_model_validator(|candidate| {
-				if candidate.parent_id > 0 {
-					Ok(())
-				} else {
-					Err(vec!["parent key must be assigned".to_owned()])
-				}
-			}),
+			ModelForm::<RequiredChildModel>::from_payload(data).with_model_validator(
+				move |candidate| {
+					validator_calls_for_candidate.fetch_add(1, Ordering::SeqCst);
+					if candidate.parent_id == 1 {
+						Ok(())
+					} else {
+						Err(vec!["parent key must be assigned".to_owned()])
+					}
+				},
+			),
 		);
+		let structurally_valid = formset.is_valid();
+		assert_eq!(
+			formset.child_forms()[0].form().errors(),
+			&std::collections::HashMap::new()
+		);
+		assert_eq!(structurally_valid, true);
 		let mut executor = FormsetExecutor::new([
 			Ok(test_model_row(1, "parent")),
 			Ok(child_model_row(2, 1, "invalid child")),
@@ -1139,6 +1161,7 @@ mod tests {
 			.expect("child validator should observe the generated parent key");
 
 		assert_eq!(formset.child_forms()[0].instance().unwrap().parent_id, 1);
+		assert_eq!(validator_calls.load(Ordering::SeqCst), 1);
 		assert_eq!(executor.fetch_one_calls, 2);
 	}
 

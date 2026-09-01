@@ -1,9 +1,10 @@
+use rstest::rstest;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 use std::process::Output;
 
-#[test]
+#[rstest]
 fn model_generated_payload_executes_on_wasm() {
 	let crate_dir = tempfile::tempdir().expect("create temporary fixture directory");
 	let target_dir = tempfile::tempdir().expect("create temporary target directory");

@@ -718,11 +718,9 @@ where
 		if !valid {
 			return false;
 		}
-		if let Err(error) = self.clean_payload() {
-			self.record_validation_error(&error);
-			return false;
-		}
-		valid
+		self.cleaned_data = None;
+		self.validated_candidate = None;
+		true
 	}
 }
 

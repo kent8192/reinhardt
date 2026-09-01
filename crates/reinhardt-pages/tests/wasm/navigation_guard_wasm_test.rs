@@ -88,12 +88,15 @@ async fn browser_navigation_guard(
 			.borrow_mut()
 			.push(context.destination().to_owned());
 	});
-	if mode == 3 {
+	if mode == 3 || mode == 8 {
 		let descriptor = QueryFamily::<(), String, NavigationGuardError>::new(
 			"browser-navigation-guard-session",
 		)
-		.query((), || async {
+		.query((), move || async move {
 			SESSION_FETCHES.with(|fetches| fetches.set(fetches.get() + 1));
+			if mode == 8 {
+				TimeoutFuture::new(50).await;
+			}
 			Ok("session".to_owned())
 		});
 		context.query(descriptor, QueryOptions::new()).await?;
@@ -692,6 +695,48 @@ async fn persistent_401_during_auth_revalidation_settles_once() {
 		GUARD_EVALUATIONS.with(Cell::get),
 		evaluations_before + 2,
 		"persistent 401 responses stay inside one two-pass revalidation"
+	);
+}
+
+#[rstest]
+#[test_attr(wasm_bindgen_test)]
+async fn rotated_jwt_supersedes_pending_auth_revalidation() {
+	// Arrange
+	let root = install_app_root_at("/protected/");
+	auth_state().logout();
+	clear_jwt_token();
+	set_jwt_token("account-a");
+	GUARD_MODE.with(|mode| mode.set(3));
+	SESSION_FETCHES.with(|fetches| fetches.set(0));
+	ClientLauncher::new("#app")
+		.router_client(build_router)
+		.launch()
+		.expect("protected launch");
+	settle_navigation().await;
+	assert_eq!(SESSION_FETCHES.with(Cell::get), 1);
+
+	GUARD_MODE.with(|mode| mode.set(8));
+	invalidate_authentication();
+	yield_to_tasks().await;
+	yield_to_tasks().await;
+	assert_eq!(SESSION_FETCHES.with(Cell::get), 2);
+
+	// Act
+	set_jwt_token("account-b");
+	invalidate_authentication();
+	settle_navigation().await;
+	let fetches = SESSION_FETCHES.with(Cell::get);
+	clear_jwt_token();
+
+	// Assert
+	assert_eq!(current_location(), "/protected/");
+	assert_eq!(
+		root.inner_html(),
+		"<div id=\"guard-protected\">PROTECTED</div>"
+	);
+	assert_eq!(
+		fetches, 3,
+		"a new JWT identity must clear and replace the pending revalidation"
 	);
 }
 

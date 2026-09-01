@@ -33,12 +33,12 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 thread_local! {
-	static AUTHENTICATION_INVALIDATION_SCHEDULED: Cell<Option<u64>> = const { Cell::new(None) };
+	static AUTHENTICATION_INVALIDATION_SCHEDULED: Cell<Option<(u64, u64)>> = const { Cell::new(None) };
 	static JWT_IDENTITY_GENERATION: Cell<u64> = const { Cell::new(0) };
 }
 
 struct AuthenticationInvalidationScheduleGuard {
-	generation: u64,
+	generation: (u64, u64),
 }
 
 impl Drop for AuthenticationInvalidationScheduleGuard {
@@ -92,14 +92,18 @@ pub const SESSION_COOKIE_NAME: &str = "sessionid";
 /// Clears authentication-dependent client state and revalidates the active route.
 ///
 /// Duplicate notifications are coalesced only while they refer to the current
-/// [`AuthState`] generation. A login, update, or state-changing logout advances
-/// that generation and supersedes any older replacement navigation.
+/// [`AuthState`] and JWT identity generations. A login, update, state-changing
+/// logout, or JWT identity change advances the corresponding generation and
+/// supersedes any older replacement navigation.
 pub fn invalidate_authentication() {
-	let generation = auth_state().authentication_generation();
+	let generation = (
+		auth_state().authentication_generation(),
+		JWT_IDENTITY_GENERATION.with(Cell::get),
+	);
 	invalidate_authentication_generation(generation);
 }
 
-fn invalidate_authentication_generation(generation: u64) {
+fn invalidate_authentication_generation(generation: (u64, u64)) {
 	let coordinator = crate::app::try_with_navigation_coordinator(Rc::clone);
 	if let Some(coordinator) = coordinator {
 		let already_scheduled = AUTHENTICATION_INVALIDATION_SCHEDULED.with(|scheduled| {

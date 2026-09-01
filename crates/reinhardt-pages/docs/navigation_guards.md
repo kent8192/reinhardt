@@ -232,11 +232,13 @@ installed launcher coordinator to replace-revalidate the active branch. The
 launcher unmounts the active route before revalidation so a rejected guard or
 loader failure cannot leave content from the previous authentication state in
 the DOM.
-Repeated invalidations for the same authentication generation are coalesced.
+Repeated invalidations for the same authentication identity are coalesced.
 `AuthState::login`, `AuthState::login_full`, `AuthState::update`, and a
 state-changing `AuthState::logout` advance that generation, so a newer account
 or session boundary always clears caches again and supersedes an in-flight
-replacement from the previous generation. The revalidation is deferred until
+replacement from the previous generation. Replacing or removing a JWT advances
+the JWT identity generation and provides the same guarantee for token-only
+sessions. The revalidation is deferred until
 the triggering guard or request settles, so a guard-originated 401 cannot
 recursively start nested navigation. Coalescing remains active until the
 replacement route attempt settles, so another managed 401 from that same

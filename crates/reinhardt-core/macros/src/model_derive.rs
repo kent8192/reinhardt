@@ -4187,6 +4187,12 @@ fn named_model_form_variant(field: &Ident) -> Result<Ident> {
 			"named model form field name must contain an alphanumeric character",
 		));
 	}
+	if variant == "Self" {
+		return Err(syn::Error::new_spanned(
+			field,
+			"named model form field name must not generate the reserved `Self` variant",
+		));
+	}
 	Ok(Ident::new(&variant, field.span()))
 }
 
@@ -13495,6 +13501,37 @@ mod tests {
 			error.to_string(),
 			"named model form field name must contain an alphanumeric character"
 		);
+	}
+
+	#[test]
+	fn test_named_model_form_rejects_reserved_self_variant() {
+		for field_name in ["self_", "_self"] {
+			let field = Ident::new(field_name, Span::call_site());
+			let args = quote! {
+				app_label = "fixture_tests",
+				table_name = "fixture_models",
+				form(name = FixtureCreateForm, fields(#field))
+			};
+			let input = quote! {
+				struct FixtureModel {
+					#[field(primary_key = true)]
+					id: i64,
+					#[field(max_length = 64)]
+					#field: String,
+				}
+			};
+
+			let error = crate::model_attribute::model_attribute_impl(
+				args,
+				syn::parse2(input).expect("fixture model should parse"),
+			)
+			.expect_err("field names must not generate the reserved `Self` variant");
+
+			assert_eq!(
+				error.to_string(),
+				"named model form field name must not generate the reserved `Self` variant"
+			);
+		}
 	}
 
 	#[test]

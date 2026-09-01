@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- *(macros)* reject named form fields that generate reserved `Self` variants
+
 ## [0.4.0-alpha.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.4.0-alpha.10...reinhardt-core@v0.4.0-alpha.11) - 2026-08-27
 
 ### Documentation

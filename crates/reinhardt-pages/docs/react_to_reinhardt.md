@@ -283,7 +283,8 @@ After hydration, the signal wins: application writes update the corresponding
 DOM property. User input updates the signal before an explicit handler for the
 same event runs, so the handler observes the new signal value. Password values
 are written only to the live DOM property, never to SSR or the `value` content
-attribute.
+attribute. Reactive attributes that cannot affect a control value also leave
+an in-progress browser edit untouched.
 
 Text writes are deferred while an IME composition is active. The completed
 value is committed at `compositionend`, and a duplicate final `input` event is

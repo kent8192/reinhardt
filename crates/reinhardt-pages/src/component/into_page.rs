@@ -171,9 +171,20 @@ pub(crate) fn controlled_attribute_is_overridden(
 }
 
 #[cfg(wasm)]
-pub(crate) fn controlled_attribute_affects_value(binding: &ControlBinding, name: &str) -> bool {
+pub(crate) fn controlled_attribute_affects_value(
+	element: &Element,
+	binding: &ControlBinding,
+	name: &str,
+) -> bool {
 	match binding.kind() {
-		ControlKind::Text => name.eq_ignore_ascii_case("type"),
+		ControlKind::Text => {
+			name.eq_ignore_ascii_case("type")
+				|| (name.eq_ignore_ascii_case("multiple")
+					&& element
+						.as_web_sys()
+						.dyn_ref::<web_sys::HtmlInputElement>()
+						.is_some_and(|input| input.type_().eq_ignore_ascii_case("email")))
+		}
 		ControlKind::Number => ["type", "min", "max", "step"]
 			.iter()
 			.any(|attribute| name.eq_ignore_ascii_case(attribute)),
@@ -324,10 +335,6 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 						let attribute = attribute.clone();
 						let element = element.clone();
 						let binding = control_binding.clone();
-						let reconcile_on_attribute_change =
-							binding.as_ref().is_some_and(|binding| {
-								controlled_attribute_affects_value(binding, attribute.name())
-							});
 						let initializing = std::rc::Rc::clone(&initializing_reactive_attributes);
 						crate::reactive::Effect::new(move || {
 							match attribute.value() {
@@ -350,12 +357,15 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 								}
 							}
 							if !initializing.get()
-								&& reconcile_on_attribute_change
 								&& let Some(binding) = binding.as_ref()
-								&& let Err(error) =
-									crate::dom::control_binding::reconcile_control_binding(
-										&element, binding,
-									) {
+								&& controlled_attribute_affects_value(
+									&element,
+									binding,
+									attribute.name(),
+								) && let Err(error) =
+								crate::dom::control_binding::reconcile_control_binding(
+									&element, binding,
+								) {
 								web_sys::console::error_1(
 									&format!("controlled input attribute update failed: {error}")
 										.into(),
@@ -364,15 +374,14 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 						})
 					})
 					.collect::<Vec<_>>();
+				if let Some(binding) = control_binding.as_ref() {
+					initialize_control_default(&element, binding);
+				}
 				if !reactive_attribute_effects.is_empty() {
 					initializing_reactive_attributes.set(false);
 					if let Some(binding) = control_binding.as_ref() {
 						crate::dom::control_binding::reconcile_control_binding(&element, binding)?;
 					}
-				}
-
-				if let Some(binding) = control_binding.as_ref() {
-					initialize_control_default(&element, binding);
 				}
 				let binding_controller = control_binding
 					.clone()

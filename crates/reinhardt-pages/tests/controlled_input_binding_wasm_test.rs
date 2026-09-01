@@ -10,6 +10,7 @@ use reinhardt_pages::component::{
 use reinhardt_pages::dom::Element;
 use reinhardt_pages::reactive::{ReactiveScope, Signal, with_runtime};
 use reinhardt_pages::{PageElement, page};
+use rstest::rstest;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_test::*;
@@ -117,6 +118,165 @@ fn unrelated_reactive_attributes_preserve_an_active_control_edit() {
 		input.set_value("draft");
 		invalid.set(true);
 
+		assert_eq!(value.get(), "bound");
+		assert_eq!(input.value(), "draft");
+		reinhardt_pages::cleanup_reactive_nodes();
+	});
+}
+
+#[rstest]
+#[case(false)]
+#[case(true)]
+#[wasm_bindgen_test]
+fn initial_range_reconciliation_uses_the_bound_value_as_the_step_base(
+	#[case] nested_in_reactive_if: bool,
+) {
+	ReactiveScope::run(|| {
+		// Arrange
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let root = Element::new(document.create_element("div").expect("root"));
+		let value = Signal::new(3_i32);
+		let range_value = value.clone();
+		let range = move || {
+			PageElement::new("input")
+				.attr("type", "range")
+				.attr("step", "2")
+				.reactive_attr("class", || Some("stepped".into()))
+				.control_binding(ControlBinding::number(range_value.clone()))
+				.into_page()
+		};
+		let page = if nested_in_reactive_if {
+			Page::reactive_if(|| true, range, || Page::Empty)
+		} else {
+			range()
+		};
+
+		// Act
+		page.mount(&root).expect("mount");
+		let input: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("range")
+			.unchecked_into();
+
+		// Assert
+		assert_eq!(value.get(), 3);
+		assert_eq!(input.value(), "3");
+		assert_eq!(input.get_attribute("value").as_deref(), Some("3"));
+		reinhardt_pages::cleanup_reactive_nodes();
+	});
+}
+
+#[rstest]
+#[case(false)]
+#[case(true)]
+#[wasm_bindgen_test]
+fn reactive_multiple_reconciles_email_value_sanitization(#[case] nested_in_reactive_if: bool) {
+	ReactiveScope::run(|| {
+		// Arrange
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let root = Element::new(document.create_element("div").expect("root"));
+		let value = Signal::new("a@example.test,  b@example.test ".to_owned());
+		let multiple = Signal::new(false);
+		let reactive_multiple = multiple.clone();
+		let email_value = value.clone();
+		let email = move || {
+			let reactive_multiple = reactive_multiple.clone();
+			PageElement::new("input")
+				.attr("type", "email")
+				.reactive_attr("multiple", move || {
+					Some(reactive_multiple.get().to_string().into())
+				})
+				.control_binding(ControlBinding::text(email_value.clone()))
+				.into_page()
+		};
+		let page = if nested_in_reactive_if {
+			Page::reactive_if(|| true, email, || Page::Empty)
+		} else {
+			email()
+		};
+		page.mount(&root).expect("mount");
+		let input: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("email")
+			.unchecked_into();
+
+		// Act
+		multiple.set(true);
+
+		// Assert
+		assert_eq!(value.get(), "a@example.test,b@example.test");
+		assert_eq!(input.value(), "a@example.test,b@example.test");
+		reinhardt_pages::cleanup_reactive_nodes();
+	});
+}
+
+struct HydratedReactiveAttributeInput {
+	invalid: Signal<bool>,
+	value: Signal<String>,
+}
+
+impl Component for HydratedReactiveAttributeInput {
+	fn name() -> &'static str {
+		"HydratedReactiveAttributeInput"
+	}
+
+	fn render(&self) -> Page {
+		let invalid = self.invalid.clone();
+		PageElement::new("input")
+			.attr("type", "text")
+			.reactive_attr("aria-invalid", move || {
+				Some(invalid.get().to_string().into())
+			})
+			.control_binding(ControlBinding::text(self.value.clone()))
+			.into_page()
+	}
+}
+
+#[rstest]
+#[wasm_bindgen_test]
+fn hydrated_unrelated_reactive_attributes_preserve_an_active_control_edit() {
+	ReactiveScope::run(|| {
+		// Arrange
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_root = document.create_element("div").expect("root");
+		let raw_input = document.create_element("input").expect("input");
+		raw_input.set_attribute("type", "text").expect("input type");
+		raw_input
+			.set_attribute("aria-invalid", "false")
+			.expect("initial reactive attribute");
+		let input: web_sys::HtmlInputElement = raw_input.clone().unchecked_into();
+		input.set_value("bound");
+		raw_root.append_child(&raw_input).expect("SSR input");
+		let root = Element::new(raw_root);
+		let invalid = Signal::new(false);
+		let value = Signal::new("bound".to_owned());
+		let _state = SsrStateElement::install(&document);
+		reinhardt_pages::hydration::hydrate(
+			&HydratedReactiveAttributeInput {
+				invalid: invalid.clone(),
+				value: value.clone(),
+			},
+			&root,
+		)
+		.expect("hydrate");
+		input.set_value("draft");
+
+		// Act
+		invalid.set(true);
+		with_runtime(|runtime| runtime.flush_updates());
+
+		// Assert
 		assert_eq!(value.get(), "bound");
 		assert_eq!(input.value(), "draft");
 		reinhardt_pages::cleanup_reactive_nodes();

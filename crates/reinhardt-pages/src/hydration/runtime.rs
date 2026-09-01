@@ -1349,8 +1349,12 @@ fn attach_hydrated_element_events(
 					}
 				}
 				if let Some(binding) = binding.as_ref()
-					&& let Err(error) =
-						crate::dom::control_binding::reconcile_control_binding(&element, binding)
+					&& crate::component::into_page::controlled_attribute_affects_value(
+						&element,
+						binding,
+						attribute.name(),
+					) && let Err(error) =
+					crate::dom::control_binding::reconcile_control_binding(&element, binding)
 				{
 					web_sys::console::error_1(
 						&format!("controlled input attribute update failed: {error}").into(),

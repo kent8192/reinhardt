@@ -4,8 +4,10 @@
 //! mirroring its internals with `AutoMigrationGenerator` and `MigrationService`.
 
 use reinhardt_commands::{BaseCommand, CommandContext, MakeMigrationsCommand};
-use reinhardt_db::migrations::FieldType;
 use reinhardt_db::migrations::model_registry::{FieldMetadata, ModelMetadata, global_registry};
+use reinhardt_db::migrations::{
+	ColumnDefinition, FieldType, FilesystemRepository, Migration, MigrationRepository, Operation,
+};
 use rstest::rstest;
 use serial_test::serial;
 use std::path::{Path, PathBuf};
@@ -216,6 +218,44 @@ async fn execute_check_succeeds_for_empty_model_registry() {
 		!migrations_dir.exists(),
 		"check must not create the migrations directory"
 	);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(command_current_dir)]
+async fn execute_check_detects_deleted_last_registered_model() {
+	let _registry = ModelRegistryGuard::clear();
+	let project_dir = create_project_root();
+	let _cwd = ProjectDirGuard::enter(project_dir.path());
+	let migrations_dir = project_dir.path().join("migrations");
+	let mut repository = FilesystemRepository::new(&migrations_dir);
+	let migration =
+		Migration::new("0001_initial", "testapp").add_operation(Operation::CreateTable {
+			name: "testapp_testmodel".to_string(),
+			columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+			constraints: vec![],
+			without_rowid: None,
+			partition: None,
+			interleave_in_parent: None,
+		});
+	repository
+		.save(&migration)
+		.await
+		.expect("existing migration should be written");
+
+	let mut ctx = makemigrations_context(None, &migrations_dir);
+	ctx.set_option("check".to_string(), "true".to_string());
+
+	let error = MakeMigrationsCommand
+		.execute(&ctx)
+		.await
+		.expect_err("deleting the last registered model should require a migration");
+
+	assert_eq!(
+		error.to_string(),
+		"Execution error: 1 migration(s) would be created"
+	);
+	assert_eq!(migration_file_names(&migrations_dir, "testapp").len(), 1);
 }
 
 #[rstest]

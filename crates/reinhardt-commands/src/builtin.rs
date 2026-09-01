@@ -2362,33 +2362,6 @@ impl BaseCommand for MakeMigrationsCommand {
 			// 1. Get target project state from global model registry
 			let target_project_state = ProjectState::from_global_registry();
 
-			// Determine which apps to process
-			let app_names: Vec<String> = if let Some(label) = app_label {
-				// Explicit app label specified
-				vec![label]
-			} else {
-				// Extract all app labels from ProjectState
-				let changed_apps: Vec<String> = target_project_state
-					.models
-					.keys()
-					.map(|(app_label, _)| app_label.clone())
-					.collect::<std::collections::HashSet<_>>()
-					.into_iter()
-					.collect();
-
-				if changed_apps.is_empty() {
-					if is_check {
-						ctx.info("No changes detected");
-						return Ok(());
-					}
-					return Err(CommandError::ExecutionError(
-						"No models found. Cannot determine app_label automatically.".to_string(),
-					));
-				}
-
-				changed_apps
-			};
-
 			let is_verbose = ctx.has_option("verbose");
 
 			// Get database URL from context option or environment, falling back
@@ -2406,7 +2379,7 @@ impl BaseCommand for MakeMigrationsCommand {
 				})
 				.unwrap_or_default();
 
-			// 2. Build from_state from database history or TestContainers
+			// 2. Build from_state from migration files, database history, or TestContainers
 			// This ensures all models are treated as new, generating complete migrations
 			struct MigrationResult {
 				app_name: String,
@@ -2421,7 +2394,9 @@ impl BaseCommand for MakeMigrationsCommand {
 			// postgres_container() panics when Docker is unavailable, so the flag must
 			// be respected before attempting container startup, not as a fallback.
 			let from_db_flag = ctx.has_option("from-db");
-			let from_state = if ctx.has_option("force-empty-state") {
+			let from_state = if is_check && !from_db_flag && !ctx.has_option("force-empty-state") {
+				build_from_state_from_files(&migrations_dir).await?
+			} else if ctx.has_option("force-empty-state") {
 				ctx.warning("⚠️  Using empty state as requested (--force-empty-state)");
 				ctx.warning("This may create duplicate migrations!");
 				ProjectState::new()
@@ -2529,6 +2504,33 @@ impl BaseCommand for MakeMigrationsCommand {
 						}
 					}
 				}
+			};
+
+			// Include historical apps so removing an app's last model still emits
+			// its table-deletion migration.
+			let app_names: Vec<String> = if let Some(label) = app_label {
+				vec![label]
+			} else {
+				let changed_apps: Vec<String> = target_project_state
+					.models
+					.keys()
+					.chain(from_state.models.keys())
+					.map(|(app_label, _)| app_label.clone())
+					.collect::<std::collections::HashSet<_>>()
+					.into_iter()
+					.collect();
+
+				if changed_apps.is_empty() {
+					if is_check {
+						ctx.info("No changes detected");
+						return Ok(());
+					}
+					return Err(CommandError::ExecutionError(
+						"No models found. Cannot determine app_label automatically.".to_string(),
+					));
+				}
+
+				changed_apps
 			};
 
 			// Check for migration conflicts before proceeding

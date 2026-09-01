@@ -422,8 +422,9 @@ separately from an omitted field.
 `model_form(data)` and `ModelForm::set_trusted_field_value` are native-only
 bridges. Use them only after server-side authentication or authorization has
 selected a tenant, relationship identifier, or other server-owned value. The
-trusted bridge does not add a field to the public payload. `form = true` and
-the legacy generic `ModelForm` API remain supported.
+trusted bridge does not add a field to the public payload, and it cannot change
+a primary key when updating an existing instance. `form = true` and the legacy
+generic `ModelForm` API remain supported.
 
 ### Custom Validation
 

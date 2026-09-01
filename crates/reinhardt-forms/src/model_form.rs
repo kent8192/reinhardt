@@ -521,6 +521,16 @@ where
 		value: Value,
 	) -> Result<(), ModelFormError> {
 		self.finalize_transaction_save()?;
+		if self.persistence_mode == ModelFormPersistenceMode::Update
+			&& T::primary_key_fields().contains(&field_name)
+		{
+			return Err(ModelFormError::FieldValidation {
+				errors: HashMap::from([(
+					field_name.to_owned(),
+					vec!["model form primary keys cannot be updated".to_owned()],
+				)]),
+			});
+		}
 		let descriptor = T::Schema::fields()
 			.iter()
 			.find(|descriptor| descriptor.name == field_name);
@@ -996,6 +1006,59 @@ mod tests {
 		assert_eq!(built.title, "Updated");
 		assert_eq!(built.owner_id, 41);
 		assert!(!built.published);
+	}
+
+	#[test]
+	fn generated_model_form_rejects_trusted_primary_key_on_update() {
+		let mut data = QuestionModelFormData::<QuestionPolicy>::empty();
+		data.set_title("Updated".to_owned())
+			.expect("title is permitted by the test policy");
+		let instance = Question {
+			id: Some(19),
+			title: "Original".to_owned(),
+			owner_id: 41,
+			published: false,
+		};
+		let mut form =
+			ModelForm::<Question, QuestionPolicy>::from_payload_and_instance(data, instance);
+		let error = form
+			.set_trusted_field_value("id", json!(23))
+			.expect_err("trusted values must not retarget an update");
+
+		assert!(matches!(
+			error,
+			ModelFormError::FieldValidation { errors }
+				if errors.get("id")
+					== Some(&vec!["model form primary keys cannot be updated".to_owned()])
+		));
+		assert_eq!(
+			form.build_instance()
+				.expect("a rejected primary-key change must preserve the instance")
+				.id,
+			Some(19)
+		);
+	}
+
+	#[test]
+	fn generated_model_form_reuses_trusted_create_primary_key_after_save() {
+		let data = question_payload("Created", 41);
+		let mut form = ModelForm::<Question, QuestionPolicy>::from_payload(data);
+		form.set_trusted_field_value("id", json!(23))
+			.expect("create intent should accept a trusted assigned primary key");
+		let mut executor = RetryExecutor::new([Ok(question_row(23, "Created", 41, true))]);
+
+		let saved = tokio_test::block_on(form.save(&mut executor))
+			.expect("the trusted primary key should persist on create");
+		assert_eq!(saved.id, Some(23));
+
+		form.set_field_value("title", json!("Updated"))
+			.expect("the saved form should remain editable");
+		let built = form
+			.build_instance()
+			.expect("the original trusted identity should remain valid after create");
+
+		assert_eq!(built.id, Some(23));
+		assert_eq!(built.title, "Updated");
 	}
 
 	#[test]

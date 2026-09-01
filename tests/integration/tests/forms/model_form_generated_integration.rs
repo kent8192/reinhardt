@@ -310,15 +310,28 @@ fn generated_unannotated_text_preserves_whitespace() {
 }
 
 #[rstest]
-#[case(json!({"name": "cluster", "api_url": "https://example.com", "unknown": true}))]
-#[case(json!({"name": "cluster", "api_url": "https://example.com", "organization_id": 99}))]
-#[case(json!({"id": 12, "name": "cluster", "api_url": "https://example.com"}))]
-fn generated_cluster_strict_decode_rejects_untrusted_fields(#[case] value: serde_json::Value) {
-	// Arrange & Act
-	let result = serde_json::from_value::<ClusterModelFormData<ClusterPolicy>>(value);
+#[case("unknown")]
+#[case("organization_id")]
+#[case("id")]
+fn generated_cluster_strict_decode_rejects_untrusted_fields(#[case] rejected_field: &str) {
+	// Arrange
+	let mut value = json!({"name": "cluster", "api_url": "https://example.com"});
+	value
+		.as_object_mut()
+		.expect("cluster payload should be an object")
+		.insert(rejected_field.to_owned(), json!(true));
+
+	// Act
+	let error = match serde_json::from_value::<ClusterModelFormData<ClusterPolicy>>(value) {
+		Ok(_) => panic!("untrusted field should be rejected"),
+		Err(error) => error,
+	};
 
 	// Assert
-	assert!(result.is_err());
+	assert_eq!(
+		error.to_string(),
+		format!("unknown field `{rejected_field}`, expected one of `name`, `api_url`, `notes`")
+	);
 }
 
 #[rstest]

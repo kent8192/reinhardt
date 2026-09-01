@@ -740,12 +740,24 @@ mod tests {
 			)]
 		);
 
-		for value in [
-			serde_json::json!({"name": "cluster", "api_url": "https://example.com", "unknown": true}),
-			serde_json::json!({"name": "cluster", "api_url": "https://example.com", "organization_id": 99}),
-			serde_json::json!({"id": 12, "name": "cluster", "api_url": "https://example.com"}),
-		] {
-			assert!(serde_json::from_value::<ClusterModelFormData<ClusterPolicy>>(value).is_err());
+		for rejected_field in ["unknown", "organization_id", "id"] {
+			let mut value =
+				serde_json::json!({"name": "cluster", "api_url": "https://example.com"});
+			value
+				.as_object_mut()
+				.expect("cluster payload should be an object")
+				.insert(rejected_field.to_owned(), serde_json::json!(true));
+
+			let error = match serde_json::from_value::<ClusterModelFormData<ClusterPolicy>>(value) {
+				Ok(_) => panic!("untrusted field should be rejected"),
+				Err(error) => error,
+			};
+			assert_eq!(
+				error.to_string(),
+				format!(
+					"unknown field `{rejected_field}`, expected one of `name`, `api_url`, `notes`"
+				)
+			);
 		}
 	}
 }

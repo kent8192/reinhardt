@@ -168,9 +168,9 @@ async fn execute_generates_initial_migration_file_from_registered_model() {
 		file_names[0].trim_end_matches(".rs"),
 	);
 	assert!(content.contains("pub(super) fn migration() -> Migration"));
-	assert!(content.contains("app_label: \"testapp\".to_string()"));
+	assert!(content.contains("Migration::new(\"0001_initial\", \"testapp\")"));
 	assert!(content.contains("Operation::CreateTable"));
-	assert!(content.contains("initial: Some(true)"));
+	assert!(content.contains(".with_initial(Some(true))"));
 }
 
 #[rstest]
@@ -243,8 +243,8 @@ async fn execute_empty_writes_empty_migration_with_previous_dependency() {
 
 	assert!(result.is_ok(), "empty migration failed: {:?}", result.err());
 	let content = read_migration_file(&migrations_dir, "testapp", "0002_manual");
-	assert!(content.contains("operations: vec![]"));
-	assert!(content.contains("(\"testapp\".to_string(), \"0001_initial\".to_string())"));
+	assert!(content.contains("Migration::new(\"0002_manual\", \"testapp\")"));
+	assert!(content.contains(".add_dependency(\"testapp\", \"0001_initial\")"));
 }
 
 #[rstest]
@@ -316,9 +316,9 @@ async fn execute_merge_writes_merge_migration() {
 
 	assert!(result.is_ok(), "merge failed: {:?}", result.err());
 	let content = read_migration_file(&migrations_dir, "testapp", "0003_merge");
-	assert!(content.contains("operations: vec![]"));
-	assert!(content.contains("(\"testapp\".to_string(), \"0002_left\".to_string())"));
-	assert!(content.contains("(\"testapp\".to_string(), \"0002_right\".to_string())"));
+	assert!(content.contains("Migration::new(\"0003_merge\", \"testapp\")"));
+	assert!(content.contains(".add_dependency(\"testapp\", \"0002_left\")"));
+	assert!(content.contains(".add_dependency(\"testapp\", \"0002_right\")"));
 }
 
 #[rstest]

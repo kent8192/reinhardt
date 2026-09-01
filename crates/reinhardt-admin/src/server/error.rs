@@ -265,6 +265,36 @@ mod tests {
 		}
 	}
 
+	/// Grants all permissions and explicitly allows every object.
+	struct AllowAllScopedAdmin;
+
+	#[async_trait]
+	impl crate::core::ModelAdmin for AllowAllScopedAdmin {
+		fn model_name(&self) -> &str {
+			"AllowScopedModel"
+		}
+
+		async fn has_view_permission(&self, _: &dyn crate::core::AdminUser) -> bool {
+			true
+		}
+		async fn has_add_permission(&self, _: &dyn crate::core::AdminUser) -> bool {
+			true
+		}
+		async fn has_change_permission(&self, _: &dyn crate::core::AdminUser) -> bool {
+			true
+		}
+		async fn has_delete_permission(&self, _: &dyn crate::core::AdminUser) -> bool {
+			true
+		}
+
+		fn object_filters(
+			&self,
+			_: &dyn crate::core::AdminUser,
+		) -> Option<Vec<reinhardt_db::orm::Filter>> {
+			Some(Vec::new())
+		}
+	}
+
 	/// Grants only a specific permission type
 	struct SelectiveAdmin {
 		allowed: ModelPermission,
@@ -432,6 +462,40 @@ mod tests {
 			result.is_ok(),
 			expected_ok,
 			"granted={granted:?}, requested={requested:?}: expected is_ok()={expected_ok}"
+		);
+	}
+
+	#[test]
+	fn object_filters_deny_custom_admin_without_scope() {
+		let result = require_object_filters(&AllowAllAdmin, &TestUser);
+
+		assert!(matches!(
+			result,
+			Err(ServerFnError::Server { status: 403, .. })
+		));
+	}
+
+	#[test]
+	fn object_filters_allow_custom_admin_with_empty_scope() {
+		let filters = require_object_filters(&AllowAllScopedAdmin, &TestUser)
+			.expect("custom admin with Some(vec![]) should allow objects");
+
+		assert_eq!(filters.len(), 0);
+	}
+
+	#[test]
+	fn configured_admin_explicitly_allows_unscoped_objects() {
+		let admin = crate::core::ModelAdminConfig::builder()
+			.model_name("Record")
+			.allow_all(true)
+			.build()
+			.expect("test admin should build");
+
+		assert_eq!(
+			require_object_filters(&admin, &TestUser)
+				.expect("configured admin should allow objects")
+				.len(),
+			0
 		);
 	}
 

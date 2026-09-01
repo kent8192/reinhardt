@@ -13,11 +13,11 @@ Add `reinhardt` to your `Cargo.toml`:
 <!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.3.14", features = ["i18n"] }
+reinhardt = { version = "0.3.15", features = ["i18n"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.3.14", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.3.14", features = ["full"] }      # All features
+# reinhardt = { version = "0.3.15", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.3.15", features = ["full"] }      # All features
 ```
 
 Then import i18n features:

@@ -479,7 +479,7 @@ async fn test_get_fields_field_type_inference(
 
 // ==================== Edge case tests ====================
 
-/// Verify get_fields with non-existent ID returns fields but no values
+/// Verify get_fields rejects a non-existent edit target.
 #[rstest]
 #[tokio::test]
 async fn test_get_fields_edit_nonexistent_id(
@@ -502,15 +502,8 @@ async fn test_get_fields_edit_nonexistent_id(
 	.await;
 
 	// Assert
-	let response = result.expect("get_fields should succeed even with non-existent ID");
-	assert!(
-		!response.fields.is_empty(),
-		"Should still return field definitions"
-	);
-	assert!(
-		response.values.is_none(),
-		"Should return None values for non-existent record"
-	);
+	let error = result.expect_err("get_fields should reject a non-existent edit target");
+	assert_eq!(error.status(), Some(404));
 }
 
 // ==================== Error path tests ====================

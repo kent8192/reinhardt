@@ -448,7 +448,7 @@ where
 	pub fn dispatch(&self, input: Input) -> MutationDispatchOutcome {
 		#[cfg(wasm)]
 		{
-			if self.action.is_pending() {
+			if self.action.is_pending_untracked() {
 				return MutationDispatchOutcome::AlreadyPending;
 			}
 			self.action.dispatch(input);

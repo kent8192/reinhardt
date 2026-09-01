@@ -1587,6 +1587,9 @@ where
 			});
 			return UseFormSubmitOutcome::ValidationFailed;
 		}
+		if enter_scope(self.scope, || ()).is_err() {
+			return UseFormSubmitOutcome::AlreadyPending;
+		}
 
 		UseFormSubmitOutcome::Submitted
 	}
@@ -1621,10 +1624,10 @@ where
 	}
 
 	pub(crate) fn complete_mutation_server_error(&self, error: &ServerFnError) {
-		self.apply_server_error(error);
-		self.state.is_submitting.set(false);
-		self.state.is_submit_successful.set(false);
 		let _ = self.in_owner_scope(|| {
+			self.apply_server_error(error);
+			self.state.is_submitting.set(false);
+			self.state.is_submit_successful.set(false);
 			if let Some(callback) = &self.on_submit_error {
 				callback(self);
 			}
@@ -2578,6 +2581,50 @@ mod tests {
 		assert_eq!(
 			runtime.begin_submit_lifecycle(),
 			UseFormSubmitOutcome::AlreadyPending
+		);
+	}
+
+	#[test]
+	#[serial(reactive_runtime)]
+	fn validated_event_disposal_stops_before_submit_completion() {
+		let scope = Rc::new(ReactiveScope::new());
+		let form = scope.enter(|| RetainedScopeForm {
+			scope: Rc::clone(&scope),
+			value: Signal::new("initial".to_string()),
+		});
+		let runtime = use_form(&form).build();
+		let callback_scope = Rc::clone(&scope);
+		let _subscription = runtime.subscribe(move |event| {
+			if matches!(event, super::FormEvent::Validated) {
+				callback_scope.dispose();
+			}
+		});
+
+		assert_eq!(
+			runtime.begin_submit_lifecycle(),
+			UseFormSubmitOutcome::AlreadyPending
+		);
+	}
+
+	#[test]
+	#[serial(reactive_runtime)]
+	fn late_server_error_is_ignored_after_form_scope_disposal() {
+		let scope = Rc::new(ReactiveScope::new());
+		let form = scope.enter(|| RetainedScopeForm {
+			scope: Rc::clone(&scope),
+			value: Signal::new("initial".to_string()),
+		});
+		let runtime = use_form(&form).build();
+		scope.dispose();
+
+		let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			runtime.complete_mutation_server_error(&crate::server_fn::ServerFnError::application(
+				"late error",
+			));
+		}));
+		assert!(
+			result.is_ok(),
+			"disposed forms must ignore late server errors"
 		);
 	}
 

@@ -202,6 +202,11 @@ impl<T: Clone + 'static, E: Clone + 'static> Action<T, E> {
 		self.phase().is_pending()
 	}
 
+	#[cfg(any(wasm, test))]
+	pub(crate) fn is_pending_untracked(&self) -> bool {
+		self.state().get_untracked().is_pending()
+	}
+
 	/// Returns `true` if the action completed successfully.
 	pub fn is_success(&self) -> bool {
 		self.phase().is_success()
@@ -834,6 +839,27 @@ mod tests {
 		scope.dispose();
 
 		action.dispatch(());
+	}
+
+	#[rstest]
+	#[serial_test::serial(reactive_runtime)]
+	fn untracked_pending_check_does_not_subscribe() {
+		let scope = reinhardt_core::reactive::ReactiveScope::new();
+		let action = scope.enter(|| use_action(|_: ()| async { Ok::<(), String>(()) }));
+		let runs = Rc::new(std::cell::Cell::new(0));
+		let _effect = scope.enter(|| {
+			let action = action;
+			let runs = Rc::clone(&runs);
+			reinhardt_core::reactive::Effect::new(move || {
+				runs.set(runs.get() + 1);
+				let _ = action.is_pending_untracked();
+			})
+		});
+
+		assert_eq!(runs.get(), 1);
+		action.force_success_for_test(());
+		reinhardt_core::reactive::with_runtime(|runtime| runtime.flush_updates());
+		assert_eq!(runs.get(), 1);
 	}
 
 	#[cfg(all(native, feature = "testing"))]

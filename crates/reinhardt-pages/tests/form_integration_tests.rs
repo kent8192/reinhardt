@@ -437,7 +437,7 @@ fn model_form_binding_setters_keep_raw_text_and_reject_invalid_numeric_edits() {
 fn model_form_binding_validation_rechecks_raw_text_values() {
 	let mut state = ModelFormState::<ModelFormBindingSchema, ModelFormBindingPolicy>::new();
 	state
-		.set_binding_text("email", "partial@".to_owned())
+		.set_binding_text("email", " partial@".to_owned())
 		.expect("controlled text should retain the editor value");
 	state
 		.set_value("count", serde_json::json!(7))
@@ -455,8 +455,19 @@ fn model_form_binding_validation_rechecks_raw_text_values() {
 	);
 
 	state
-		.set_binding_text("email", "user@example.com".to_owned())
+		.set_binding_text("email", " user@example.com ".to_owned())
 		.expect("a valid email should replace the raw editor value");
+	assert_eq!(
+		state.value("email"),
+		Some(&serde_json::json!(" user@example.com "))
+	);
+	let submission = state
+		.validated_for_submission()
+		.expect("valid controlled text should produce a submission snapshot");
+	assert_eq!(
+		submission.value("email"),
+		Some(&serde_json::json!("user@example.com"))
+	);
 	state
 		.validate_values()
 		.expect("validated controlled values should pass submission validation");

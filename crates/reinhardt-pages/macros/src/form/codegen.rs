@@ -3200,6 +3200,17 @@ fn generate_model_form(
 					>,
 					submission_generation: u64,
 				) -> ::core::result::Result<#model_form_response_type, #pages_crate::ServerFnError> {
+					let state = match state.validated_for_submission() {
+						::core::result::Result::Ok(state) => state,
+						::core::result::Result::Err(error) => {
+							let error = #pages_crate::ServerFnError::validation_with_message(
+								error.to_string(),
+								::core::iter::empty::<(&str, &str)>(),
+							);
+							self.error.set(::core::option::Option::Some(error.to_string()));
+							return ::core::result::Result::Err(error);
+						}
+					};
 					self.loading.set(true);
 					self.error.set(::core::option::Option::None);
 					self.success.set(false);

@@ -539,6 +539,13 @@ where
 	/// descriptor conversion again instead of trusting the stored JSON shape.
 	#[doc(hidden)]
 	pub fn validate_values(&self) -> Result<(), ModelFormPayloadError> {
+		self.validated_for_submission().map(|_| ())
+	}
+
+	/// Returns a submission snapshot with controlled values converted to payload values.
+	#[doc(hidden)]
+	pub fn validated_for_submission(&self) -> Result<Self, ModelFormPayloadError> {
+		let mut validated = self.clone();
 		for descriptor in self.selected_descriptors() {
 			if is_file_kind(descriptor.kind) {
 				continue;
@@ -546,7 +553,8 @@ where
 			match self.values.get(descriptor.name) {
 				Some(serde_json::Value::Null) if descriptor.nullable => {}
 				Some(value) => {
-					convert_control_value(descriptor, value.clone())?;
+					let converted = convert_control_value(descriptor, value.clone())?;
+					validated.values.insert(descriptor.name, converted);
 				}
 				None if descriptor.required => {
 					return Err(invalid_value(descriptor.name, "is required"));
@@ -554,7 +562,7 @@ where
 				None => {}
 			}
 		}
-		Ok(())
+		Ok(validated)
 	}
 
 	/// Clears every value that belongs to the active form policy.
@@ -588,7 +596,11 @@ where
 				continue;
 			}
 			if let Some(value) = self.values.get(descriptor.name) {
-				payload.set_json(descriptor.name, value.clone())?;
+				let value = match value {
+					serde_json::Value::Null if descriptor.nullable => value.clone(),
+					value => convert_control_value(descriptor, value.clone())?,
+				};
+				payload.set_json(descriptor.name, value)?;
 			}
 		}
 		Ok(payload)

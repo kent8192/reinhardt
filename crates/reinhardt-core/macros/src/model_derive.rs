@@ -4214,18 +4214,19 @@ pub(crate) fn generate_named_model_form_contract(
 	let model_name = &input.ident;
 	let visibility = &input.vis;
 	let contract_name = &config.name;
-	let data_name = Ident::new(&format!("{contract_name}Data"), contract_name.span());
-	let schema_name = Ident::new(&format!("{contract_name}Schema"), contract_name.span());
-	let field_name = Ident::new(&format!("{contract_name}Field"), contract_name.span());
-	let policy_name = Ident::new(&format!("{contract_name}Policy"), contract_name.span());
+	let contract_stem = ident_to_wire_name(contract_name);
+	let data_name = Ident::new(&format!("{contract_stem}Data"), contract_name.span());
+	let schema_name = Ident::new(&format!("{contract_stem}Schema"), contract_name.span());
+	let field_name = Ident::new(&format!("{contract_stem}Field"), contract_name.span());
+	let policy_name = Ident::new(&format!("{contract_stem}Policy"), contract_name.span());
 	let visitor_name = Ident::new(
-		&format!("__Reinhardt{contract_name}DataVisitor"),
+		&format!("__Reinhardt{contract_stem}DataVisitor"),
 		contract_name.span(),
 	);
 	let legacy_schema_name = Ident::new(&format!("{model_name}FormSchema"), model_name.span());
 	let legacy_data_name = Ident::new(&format!("{model_name}ModelFormData"), model_name.span());
 	let generated_names = [
-		contract_name.to_string(),
+		contract_stem.clone(),
 		data_name.to_string(),
 		schema_name.to_string(),
 		field_name.to_string(),
@@ -4356,6 +4357,9 @@ pub(crate) fn generate_named_model_form_contract(
 			"model_form",
 			"clone",
 			"clone_from",
+			"contract_default_boolean_is_true",
+			"contract_fields",
+			"contract_relation_target_matches",
 			"default",
 			"deserialize",
 			"eq",
@@ -4442,7 +4446,7 @@ pub(crate) fn generate_named_model_form_contract(
 		}
 	});
 	let descriptor_const = Ident::new(
-		&format!("__{}_FIELDS", contract_name.to_string().to_uppercase()),
+		&format!("__{}_FIELDS", contract_stem.to_uppercase()),
 		contract_name.span(),
 	);
 	let descriptor_accessors = field_idents.iter().enumerate().map(|(index, name)| {
@@ -13417,10 +13421,13 @@ mod tests {
 	}
 
 	#[rstest]
-	fn test_named_model_form_rejects_trait_accessor_collisions() {
+	fn test_named_model_form_rejects_generated_api_accessor_collisions() {
 		for field_name in [
 			"clone",
 			"clone_from",
+			"contract_default_boolean_is_true",
+			"contract_fields",
+			"contract_relation_target_matches",
 			"deserialize",
 			"eq",
 			"fmt",
@@ -13450,6 +13457,93 @@ mod tests {
 				error.to_string(),
 				"named model form field name collides with generated contract API",
 				"field `{field_name}` must be reserved",
+			);
+		}
+	}
+
+	#[test]
+	fn test_model_attribute_forwards_config_to_existing_model_derive() {
+		let args = quote! {
+			app_label = "fixture_tests",
+			form(name = FixtureCreateForm, fields(name))
+		};
+		let input = quote! {
+			#[derive(Model, Serialize, Deserialize)]
+			struct FixtureModel {
+				#[field(primary_key = true)]
+				id: i64,
+				#[field(max_length = 64)]
+				name: String,
+			}
+		};
+
+		let output = crate::model_attribute::model_attribute_impl(
+			args,
+			syn::parse2(input).expect("fixture model should parse"),
+		)
+		.expect("an existing Model derive should retain model configuration");
+		let file: syn::File =
+			syn::parse2(output).expect("generated model output should remain valid Rust");
+		let model = file
+			.items
+			.iter()
+			.find_map(|item| match item {
+				syn::Item::Struct(item) if item.ident == "FixtureModel" => Some(item),
+				_ => None,
+			})
+			.expect("the configured model should remain in the generated output");
+		let config = ModelConfig::from_attrs(&model.attrs, &model.ident)
+			.expect("the Model derive should receive the forwarded configuration");
+
+		assert!(config.form);
+		assert_eq!(
+			config
+				.named_form
+				.as_ref()
+				.expect("the named form should be retained")
+				.name,
+			"FixtureCreateForm"
+		);
+		assert!(config.serde_serialize);
+		assert!(config.serde_deserialize);
+	}
+
+	#[test]
+	fn test_named_model_form_normalizes_raw_contract_name_suffixes() {
+		let args = quote! {
+			app_label = "fixture_tests",
+			form(name = r#type, fields(name))
+		};
+		let input = quote! {
+			struct FixtureModel {
+				#[field(primary_key = true)]
+				id: i64,
+				#[field(max_length = 64)]
+				name: String,
+			}
+		};
+
+		let output = crate::model_attribute::model_attribute_impl(
+			args,
+			syn::parse2(input).expect("fixture model should parse"),
+		)
+		.expect("raw contract names should generate valid suffixed identifiers");
+		let file: syn::File =
+			syn::parse2(output).expect("generated raw contract output should parse");
+		let generated_names = file
+			.items
+			.iter()
+			.filter_map(|item| match item {
+				syn::Item::Struct(item) => Some(item.ident.to_string()),
+				syn::Item::Enum(item) => Some(item.ident.to_string()),
+				_ => None,
+			})
+			.collect::<Vec<_>>();
+
+		for expected in ["typeData", "typeSchema", "typeField", "typePolicy"] {
+			assert!(
+				generated_names.iter().any(|name| name == expected),
+				"raw contract name should generate `{expected}`: {generated_names:?}"
 			);
 		}
 	}

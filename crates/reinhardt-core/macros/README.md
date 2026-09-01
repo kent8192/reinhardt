@@ -238,6 +238,10 @@ Provides compile-time code generation for common patterns.
   - Models without either form opt-in generate no model-form symbols
 
 - **`#[derive(Model)]`** - Derive macro for automatic Model implementation
+  - `#[model(...)]` forwards its configuration when paired with an explicit
+    `#[derive(Model)]`, including when the attribute appears first
+  - When the attribute appears first, use its fully qualified path to
+    disambiguate it from the derive helper attribute
   - Implements `Model` trait
   - Registers model with global ModelRegistry for migrations
   - Model attributes: `app_label`, `table_name`, `constraints`, `form`

@@ -1,11 +1,10 @@
-use reinhardt_macros::model;
-
 include!("../support.rs");
 
-#[model(
+#[reinhardt_macros::model(
 	app_label = "documents",
 	form(name = DocumentCreateForm, fields(title, published))
 )]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, reinhardt_macros::Model)]
 pub struct Document {
 	#[field(primary_key = true)]
 	id: i64,

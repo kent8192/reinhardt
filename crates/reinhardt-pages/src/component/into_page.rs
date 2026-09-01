@@ -171,6 +171,20 @@ pub(crate) fn controlled_attribute_is_overridden(
 }
 
 #[cfg(wasm)]
+pub(crate) fn static_attribute_is_effective<N: AsRef<str>, V>(
+	attrs: &[(N, V)],
+	index: usize,
+) -> bool {
+	let name = attrs[index].0.as_ref();
+	if is_boolean_attr(name) {
+		return true;
+	}
+	!attrs[..index]
+		.iter()
+		.any(|(earlier, _)| earlier.as_ref().eq_ignore_ascii_case(name))
+}
+
+#[cfg(wasm)]
 pub(crate) fn controlled_attribute_affects_value(
 	element: &Element,
 	binding: &ControlBinding,
@@ -271,8 +285,11 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 				.create_element(&tag)
 				.map_err(|_| MountError::CreateElementFailed)?;
 
-			for (name, value) in attrs {
-				if !is_safe_html_attribute(&name, &value) {
+			for (index, (name, value)) in attrs.iter().enumerate() {
+				if !static_attribute_is_effective(&attrs, index) {
+					continue;
+				}
+				if !is_safe_html_attribute(name, value) {
 					continue;
 				}
 				// Skip boolean attributes with falsy values (empty, "false", "0")
@@ -290,7 +307,7 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 				}
 
 				element
-					.set_attribute(&name, &value)
+					.set_attribute(name, value)
 					.map_err(|err_str: String| {
 						// Log detailed error to browser console
 						let msg: wasm_bindgen::JsValue = format!(

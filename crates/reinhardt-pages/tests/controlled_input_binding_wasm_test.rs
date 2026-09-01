@@ -270,6 +270,48 @@ fn reactive_password_type_removes_the_serialized_bound_value(#[case] nested_in_r
 	});
 }
 
+#[rstest]
+#[case(false)]
+#[case(true)]
+#[wasm_bindgen_test]
+fn duplicate_static_password_type_uses_the_browser_first_value(
+	#[case] nested_in_reactive_if: bool,
+) {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let root = Element::new(document.create_element("div").expect("root"));
+		let value = Signal::new("secret".to_owned());
+		let bound_value = value;
+		let input = move || {
+			PageElement::new("input")
+				.attr("type", "password")
+				.attr("type", "text")
+				.control_binding(ControlBinding::text(bound_value))
+				.into_page()
+		};
+		let page = if nested_in_reactive_if {
+			Page::reactive_if(|| true, input, || Page::Empty)
+		} else {
+			input()
+		};
+		page.mount(&root).expect("mount");
+		let input: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("input")
+			.unchecked_into();
+
+		assert_eq!(input.type_(), "password");
+		assert_eq!(input.value(), "secret");
+		assert_eq!(input.get_attribute("value"), None);
+		assert_eq!(value.get(), "secret");
+		reinhardt_pages::cleanup_reactive_nodes();
+	});
+}
+
 struct HydratedReactiveAttributeInput {
 	invalid: Signal<bool>,
 	value: Signal<String>,
@@ -277,6 +319,10 @@ struct HydratedReactiveAttributeInput {
 
 struct HydratedReactivePasswordInput {
 	password_type: Signal<bool>,
+	value: Signal<String>,
+}
+
+struct HydratedDuplicateStaticPasswordInput {
 	value: Signal<String>,
 }
 
@@ -296,6 +342,20 @@ impl Component for HydratedReactivePasswordInput {
 					"text".into()
 				})
 			})
+			.control_binding(ControlBinding::text(self.value))
+			.into_page()
+	}
+}
+
+impl Component for HydratedDuplicateStaticPasswordInput {
+	fn name() -> &'static str {
+		"HydratedDuplicateStaticPasswordInput"
+	}
+
+	fn render(&self) -> Page {
+		PageElement::new("input")
+			.attr("type", "password")
+			.attr("type", "text")
 			.control_binding(ControlBinding::text(self.value))
 			.into_page()
 	}
@@ -388,6 +448,36 @@ fn hydrated_password_type_removes_the_serialized_bound_value() {
 
 		password_type.set(true);
 		with_runtime(|runtime| runtime.flush_updates());
+
+		assert_eq!(input.type_(), "password");
+		assert_eq!(input.value(), "secret");
+		assert_eq!(input.get_attribute("value"), None);
+		assert_eq!(value.get(), "secret");
+		reinhardt_pages::cleanup_reactive_nodes();
+	});
+}
+
+#[rstest]
+#[wasm_bindgen_test]
+fn hydration_accepts_the_browser_first_static_password_type() {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_input = document.create_element("input").expect("input");
+		raw_input
+			.set_attribute("type", "password")
+			.expect("input type");
+		raw_input
+			.set_attribute("data-rh-password-omitted", "true")
+			.expect("password omission marker");
+		let input: web_sys::HtmlInputElement = raw_input.clone().unchecked_into();
+		let root = Element::new(raw_input);
+		let value = Signal::new("secret".to_owned());
+		let _state = SsrStateElement::install(&document);
+		reinhardt_pages::hydration::hydrate(&HydratedDuplicateStaticPasswordInput { value }, &root)
+			.expect("hydrate");
 
 		assert_eq!(input.type_(), "password");
 		assert_eq!(input.value(), "secret");

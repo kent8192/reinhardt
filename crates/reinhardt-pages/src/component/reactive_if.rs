@@ -872,24 +872,34 @@ fn single_control_attrs_match(
 					.iter()
 					.any(|attribute| attribute.name().eq_ignore_ascii_case(name))
 			};
-			let expected_attrs_match = element.attrs().iter().all(|(name, value)| {
-				let name = name.as_ref();
-				if has_reactive_override(name) {
-					return true;
-				}
-				if crate::component::into_page::controlled_attribute_is_overridden(
-					element.bound_control(),
-					name,
-				) {
-					return true;
-				}
-				let expected = if is_boolean_attr(name) && !is_boolean_attr_truthy(value) {
-					None
-				} else {
-					Some(value.as_ref())
-				};
-				existing_element.get_attribute(name).as_deref() == expected
-			}) && element
+			let expected_attrs_match = element
+				.attrs()
+				.iter()
+				.enumerate()
+				.filter(|(index, _)| {
+					crate::component::into_page::static_attribute_is_effective(
+						element.attrs(),
+						*index,
+					)
+				})
+				.all(|(_, (name, value))| {
+					let name = name.as_ref();
+					if has_reactive_override(name) {
+						return true;
+					}
+					if crate::component::into_page::controlled_attribute_is_overridden(
+						element.bound_control(),
+						name,
+					) {
+						return true;
+					}
+					let expected = if is_boolean_attr(name) && !is_boolean_attr_truthy(value) {
+						None
+					} else {
+						Some(value.as_ref())
+					};
+					existing_element.get_attribute(name).as_deref() == expected
+				}) && element
 				.reactive_attrs()
 				.iter()
 				.enumerate()
@@ -1147,13 +1157,16 @@ fn mount_before_marker(marker: &web_sys::Comment, view: Page) -> Vec<web_sys::No
 					.expect("should create element");
 
 				// Set attributes
-				for (name, value) in attrs {
-					if !is_safe_html_attribute(&name, &value) {
+				for (index, (name, value)) in attrs.iter().enumerate() {
+					if !crate::component::into_page::static_attribute_is_effective(&attrs, index) {
+						continue;
+					}
+					if !is_safe_html_attribute(name, value) {
 						continue;
 					}
 					// Skip falsy boolean attributes
 					let name_str: &str = name.as_ref();
-					if is_boolean_attr(name_str) && !is_boolean_attr_truthy(&value) {
+					if is_boolean_attr(name_str) && !is_boolean_attr_truthy(value) {
 						continue;
 					}
 					if crate::component::into_page::controlled_attribute_is_overridden(
@@ -1162,7 +1175,7 @@ fn mount_before_marker(marker: &web_sys::Comment, view: Page) -> Vec<web_sys::No
 					) {
 						continue;
 					}
-					let _ = element.set_attribute(&name, &value);
+					let _ = element.set_attribute(name, value);
 				}
 
 				let element_wrapper = crate::dom::Element::new(element.clone());

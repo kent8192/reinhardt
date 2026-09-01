@@ -59,7 +59,8 @@ pub trait FormModel: Model + ModelFormPrimaryKeyFields + Clone + Send + Sync {
 	///
 	/// The compatibility default delegates a single field to
 	/// [`Self::build_from_payload_with_deferred_required_field`]. Implementations
-	/// that support multiple deferred fields must override this method.
+	/// that support multiple deferred fields must override this method. Omitted
+	/// required fields that are not listed must still fail model construction.
 	fn build_from_payload_with_deferred_required_fields<P: ModelFormPolicy>(
 		data: &Self::Data<P>,
 		deferred_fields: &[&str],
@@ -777,6 +778,9 @@ mod tests {
 		#[field(editable = false)]
 		#[rel(foreign_key)]
 		owner: reinhardt_db::associations::ForeignKeyField<HiddenRelationOwner>,
+		#[field(editable = false)]
+		#[rel(foreign_key)]
+		reviewer: reinhardt_db::associations::ForeignKeyField<HiddenRelationOwner>,
 	}
 
 	#[model(
@@ -1261,11 +1265,24 @@ mod tests {
 		let mut form = HiddenRelationCreateForm::model_form(data);
 		form.set_trusted_field_value("owner_id", json!(42))
 			.expect("a trusted hidden foreign key should be accepted");
+		let error = form
+			.build_instance()
+			.expect_err("an unrelated hidden foreign key must remain required");
+		assert!(matches!(
+			error,
+			ModelFormError::MissingModelField {
+				field: "reviewer_id"
+			}
+		));
+
+		form.set_trusted_field_value("reviewer_id", json!(43))
+			.expect("each trusted hidden foreign key should be accepted explicitly");
 
 		let built = form
 			.build_instance()
 			.expect("the trusted deferred path should build a candidate");
 		assert_eq!(built.owner_id, 42);
+		assert_eq!(built.reviewer_id, 43);
 	}
 
 	#[test]

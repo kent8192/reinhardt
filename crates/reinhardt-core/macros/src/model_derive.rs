@@ -3663,7 +3663,7 @@ fn generate_model_form_support(
 				let required = !is_optional && field.config.blank != Some(true);
 				let default = if let Some(default) = model_form_declared_default(field) {
 					default
-				} else if is_auto_generated_field(field) {
+				} else if is_auto_generated_field(field) && !field.is_fk_id_field {
 					get_auto_field_default_value(field)
 				} else if is_relationship_field_type(&field.ty) {
 					quote!(::std::default::Default::default())
@@ -4178,12 +4178,16 @@ fn named_model_form_type_is_boolean(ty: &Type) -> bool {
 	canonical_primitive_name(&type_path.path) == Some("bool")
 }
 
-fn named_model_form_variant(field: &Ident) -> Ident {
+fn named_model_form_variant(field: &Ident) -> Result<Ident> {
 	let name = named_model_form_wire_name(field);
-	Ident::new(
-		&crate::pascal_case::to_pascal_case_with_suffix(&name, ""),
-		field.span(),
-	)
+	let variant = crate::pascal_case::to_pascal_case_with_suffix(&name, "");
+	if variant.is_empty() {
+		return Err(syn::Error::new_spanned(
+			field,
+			"named model form field name must contain an alphanumeric character",
+		));
+	}
+	Ok(Ident::new(&variant, field.span()))
 }
 
 /// Return the source field's identifier without Rust's raw-identifier marker.
@@ -4381,7 +4385,7 @@ pub(crate) fn generate_named_model_form_contract(
 				"named model form field name collides with generated contract API",
 			));
 		}
-		let variant = named_model_form_variant(&field.name).to_string();
+		let variant = named_model_form_variant(&field.name)?.to_string();
 		if let Some(existing) = generated_variants.insert(variant.clone(), selected_string.clone())
 		{
 			return Err(syn::Error::new_spanned(
@@ -4413,15 +4417,19 @@ pub(crate) fn generate_named_model_form_contract(
 	let variants: Vec<_> = selected
 		.iter()
 		.map(|field| named_model_form_variant(&field.name))
+		.collect::<Result<_>>()?;
+	let variant_docs: Vec<_> = selected
+		.iter()
+		.zip(&variants)
+		.map(|(field, variant)| {
+			let field_name =
+				LitStr::new(&named_model_form_wire_name(&field.name), field.name.span());
+			quote! {
+				#[doc = concat!("Field token for `", #field_name, "`. Parity: P2.")]
+				#variant,
+			}
+		})
 		.collect();
-	let variant_docs = selected.iter().map(|field| {
-		let field_name = LitStr::new(&named_model_form_wire_name(&field.name), field.name.span());
-		let variant = named_model_form_variant(&field.name);
-		quote! {
-			#[doc = concat!("Field token for `", #field_name, "`. Parity: P2.")]
-			#variant,
-		}
-	});
 	let kinds = selected
 		.iter()
 		.map(|field| model_form_kind(field))
@@ -13459,6 +13467,34 @@ mod tests {
 				"field `{field_name}` must be reserved",
 			);
 		}
+	}
+
+	#[test]
+	fn test_named_model_form_rejects_field_without_variant_name() {
+		let args = quote! {
+			app_label = "fixture_tests",
+			table_name = "fixture_models",
+			form(name = FixtureCreateForm, fields(__))
+		};
+		let input = quote! {
+			struct FixtureModel {
+				#[field(primary_key = true)]
+				id: i64,
+				#[field(max_length = 64)]
+				__: String,
+			}
+		};
+
+		let error = crate::model_attribute::model_attribute_impl(
+			args,
+			syn::parse2(input).expect("fixture model should parse"),
+		)
+		.expect_err("underscore-only fields cannot generate a field-token variant");
+
+		assert_eq!(
+			error.to_string(),
+			"named model form field name must contain an alphanumeric character"
+		);
 	}
 
 	#[test]

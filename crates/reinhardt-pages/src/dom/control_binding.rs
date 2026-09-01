@@ -2271,6 +2271,45 @@ mod tests {
 	}
 
 	#[wasm_bindgen_test]
+	fn continuous_and_stepped_ranges_without_a_shared_value_keep_browser_values_local() {
+		let scope = ReactiveScope::new();
+		scope.enter(|| {
+			// Arrange
+			let value = Signal::new(0.5_f64);
+			let first = element("input");
+			let first_input: web_sys::HtmlInputElement =
+				first.as_web_sys().clone().unchecked_into();
+			first_input.set_type("range");
+			first_input.set_min("0.5");
+			first_input.set_max("0.6");
+			first_input.set_step("any");
+			let second = element("input");
+			let second_input: web_sys::HtmlInputElement =
+				second.as_web_sys().clone().unchecked_into();
+			second_input.set_type("range");
+			second_input.set_min("0");
+			second_input.set_max("0.6");
+			second_input.set_step("1");
+
+			// Act
+			let first_controller =
+				ControlBindingController::mount(first, ControlBinding::number(value))
+					.expect("continuous range binding");
+			let second_controller =
+				ControlBindingController::mount(second, ControlBinding::number(value))
+					.expect("stepped range binding");
+
+			// Assert
+			assert_eq!(
+				(value.get(), first_input.value(), second_input.value()),
+				(0.5, "0.5".to_owned(), "0".to_owned())
+			);
+			drop(second_controller);
+			drop(first_controller);
+		});
+	}
+
+	#[wasm_bindgen_test]
 	fn text_binding_rejects_unsupported_input_types() {
 		let scope = ReactiveScope::new();
 		scope.enter(|| {

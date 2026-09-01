@@ -150,8 +150,15 @@ fn range_step_grids_have_common_value(
 	second_step: Option<f64>,
 	second_base: f64,
 ) -> bool {
-	let (Some(first_step), Some(second_step)) = (first_step, second_step) else {
-		return true;
+	let (first_step, second_step) = match (first_step, second_step) {
+		(None, None) => return true,
+		(Some(step), None) => {
+			return range_step_grid_has_value(overlap_min, overlap_max, step, first_base);
+		}
+		(None, Some(step)) => {
+			return range_step_grid_has_value(overlap_min, overlap_max, step, second_base);
+		}
+		(Some(first_step), Some(second_step)) => (first_step, second_step),
 	};
 	let tolerance = first_step.max(second_step) * 1e-12;
 	let mut previous_remainder = first_step;
@@ -180,8 +187,16 @@ fn range_step_grids_have_common_value(
 	if !origin.is_finite() || !period.is_finite() || period <= 0.0 {
 		return false;
 	}
-	let period_index = ((overlap_min - origin) / period).ceil();
-	let candidate = origin + period_index * period;
+	range_step_grid_has_value(overlap_min, overlap_max, period, origin)
+}
+
+#[cfg(any(wasm, test, feature = "testing"))]
+fn range_step_grid_has_value(overlap_min: f64, overlap_max: f64, step: f64, base: f64) -> bool {
+	if !step.is_finite() || step <= 0.0 || !base.is_finite() {
+		return false;
+	}
+	let step_index = ((overlap_min - base) / step).ceil();
+	let candidate = base + step_index * step;
 	let bound_tolerance = overlap_min.abs().max(overlap_max.abs()).max(1.0) * 1e-9;
 	candidate.is_finite()
 		&& candidate >= overlap_min - bound_tolerance
@@ -228,5 +243,23 @@ mod tests {
 
 		// Assert
 		assert_eq!((outside_only_conflicts, inside_conflicts), (true, false));
+	}
+
+	#[test]
+	fn continuous_range_requires_the_stepped_peer_to_enter_the_overlap() {
+		// Arrange
+		let outside_only = ((0.5, 0.6, None, 0.5), (0.0, 0.6, Some(1.0), 0.0));
+		let inside = ((0.5, 1.1, None, 0.5), (0.0, 1.1, Some(1.0), 0.0));
+
+		// Act
+		let conflicts = [
+			range_constraints_conflict(outside_only.0, outside_only.1),
+			range_constraints_conflict(outside_only.1, outside_only.0),
+			range_constraints_conflict(inside.0, inside.1),
+			range_constraints_conflict(inside.1, inside.0),
+		];
+
+		// Assert
+		assert_eq!(conflicts, [true, true, false, false]);
 	}
 }

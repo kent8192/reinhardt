@@ -1830,6 +1830,44 @@ mod case_normalization_tests {
 	}
 
 	#[rstest]
+	fn native_continuous_and_stepped_ranges_without_a_shared_value_keep_values_local() {
+		ReactiveScope::run(|| {
+			// Arrange
+			let value = Signal::new(0.5_f64);
+
+			// Act
+			let dom = TestDom::render(
+				PageElement::new("div")
+					.child(
+						PageElement::new("input")
+							.attr("type", "range")
+							.attr("min", "0.5")
+							.attr("max", "0.6")
+							.attr("step", "any")
+							.control_binding(ControlBinding::number(value)),
+					)
+					.child(
+						PageElement::new("input")
+							.attr("type", "range")
+							.attr("min", "0")
+							.attr("max", "0.6")
+							.attr("step", "1")
+							.control_binding(ControlBinding::number(value)),
+					)
+					.into_page(),
+			);
+			let container = dom.children(dom.root())[0];
+			let ranges = dom.children(container);
+
+			// Assert
+			assert_eq!(
+				(value.get(), dom.value(ranges[0]), dom.value(ranges[1])),
+				(0.5, Some("0.5".to_owned()), Some("0".to_owned()))
+			);
+		});
+	}
+
+	#[rstest]
 	fn native_range_normalization_precedes_later_reactive_attributes() {
 		ReactiveScope::run(|| {
 			let value = Signal::new(150_i32);

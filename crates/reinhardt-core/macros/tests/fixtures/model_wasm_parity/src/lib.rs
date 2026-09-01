@@ -121,6 +121,57 @@ fn validate_form_project<P: reinhardt_core::model_form::ModelFormPolicy>(
 	}
 }
 
+fn validate_cluster<P: reinhardt_core::model_form::ModelFormPolicy>(
+	payload: &CleanedClusterModelFormData<P>,
+) -> Result<(), ValidationErrors> {
+	let mut errors = ValidationErrors::new();
+	if payload.name() == payload.api_url() {
+		errors.add(
+			"_all",
+			ValidationError::Custom("Name and API URL must differ".to_owned()),
+		);
+	}
+	if errors.is_empty() {
+		Ok(())
+	} else {
+		Err(errors)
+	}
+}
+
+#[model(app_label = "clusters", table_name = "clusters", form = true, info = false)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[form(validate = validate_cluster)]
+struct Cluster {
+	#[field(primary_key = true)]
+	id: Option<i64>,
+	#[field(editable = false)]
+	organization_id: i64,
+	#[field(min_length = 1, max_length = 63)]
+	#[form(trim)]
+	name: String,
+	#[field(url = true, max_length = 2048)]
+	#[form(trim)]
+	api_url: String,
+	#[field(blank = true, max_length = 120)]
+	notes: String,
+}
+
+struct ClusterPolicy;
+
+impl reinhardt_core::model_form::ModelFormPolicy for ClusterPolicy {
+	fn allows(field: &str) -> bool {
+		matches!(field, "name" | "api_url" | "notes")
+	}
+}
+
+struct ClusterNameOnlyPolicy;
+
+impl reinhardt_core::model_form::ModelFormPolicy for ClusterNameOnlyPolicy {
+	fn allows(field: &str) -> bool {
+		matches!(field, "name" | "notes")
+	}
+}
+
 pub fn retry_preserves_project(job: &Job, retry: &Job) -> bool {
 	job.project_id() == retry.project_id()
 }
@@ -236,6 +287,29 @@ mod tests {
 					})
 			})
 			.collect()
+	}
+
+	fn cluster_payload(name: &str, api_url: &str) -> ClusterModelFormData<ClusterPolicy> {
+		let mut payload = ClusterModelFormData::<ClusterPolicy>::empty();
+		payload
+			.set_name(name.to_owned())
+			.expect("cluster name should be editable");
+		payload
+			.set_api_url(api_url.to_owned())
+			.expect("cluster API URL should be editable");
+		payload
+			.set_notes("  preserve whitespace  ".to_owned())
+			.expect("cluster notes should be editable");
+		payload
+	}
+
+	fn cluster_validation_errors<P: reinhardt_core::model_form::ModelFormPolicy>(
+		payload: ClusterModelFormData<P>,
+	) -> ValidationErrors {
+		match payload.clean_and_validate() {
+			Ok(_) => panic!("cluster payload should fail validation"),
+			Err(errors) => errors,
+		}
 	}
 
 	#[wasm_bindgen_test]
@@ -601,5 +675,77 @@ mod tests {
 			error_tuples(&errors),
 			expected_errors(PARITY_FORBIDDEN_ERRORS)
 		);
+	}
+
+	#[wasm_bindgen_test]
+	fn generated_cluster_validation_matches_the_server_boundary_in_wasm_runtime() {
+		let cleaned = cluster_payload(
+			&format!(" {} ", "n".repeat(63)),
+			"  https://example.com/api  ",
+		)
+		.clean_and_validate()
+		.expect("normalized cluster boundary values should validate");
+		assert_eq!(cleaned.name(), Some(&"n".repeat(63)));
+		assert_eq!(cleaned.api_url(), Some(&"https://example.com/api".to_owned()));
+		assert_eq!(cleaned.notes(), Some(&"  preserve whitespace  ".to_owned()));
+
+		for (name, api_url, expected) in [
+			(
+				"   ",
+				"https://example.com",
+				vec![("name".to_owned(), "This field is required.".to_owned())],
+			),
+			(
+				"nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn",
+				"not a URL",
+				vec![
+					(
+						"name".to_owned(),
+						"Ensure this value has at most 63 characters (it has 64)".to_owned(),
+					),
+					("api_url".to_owned(), "Enter a valid URL".to_owned()),
+				],
+			),
+		] {
+			let errors = cluster_validation_errors(cluster_payload(name, api_url));
+			assert_eq!(error_tuples(&errors), expected);
+			assert!(!errors.field_errors().contains_key("_all"));
+		}
+
+		let errors = cluster_validation_errors(cluster_payload(
+			"  https://example.com  ",
+			"https://example.com  ",
+		));
+		assert_eq!(
+			error_tuples(&errors),
+			vec![(
+				"_all".to_owned(),
+				"Name and API URL must differ".to_owned(),
+			)]
+		);
+
+		let forbidden: ClusterModelFormData<ClusterNameOnlyPolicy> = serde_json::from_value(
+			serde_json::json!({
+				"name": "https://example.com",
+				"api_url": "https://example.com",
+			}),
+		)
+		.expect("known forbidden field should retain rejection evidence");
+		let errors = cluster_validation_errors(forbidden);
+		assert_eq!(
+			error_tuples(&errors),
+			vec![(
+				"api_url".to_owned(),
+				"This field is not allowed.".to_owned(),
+			)]
+		);
+
+		for value in [
+			serde_json::json!({"name": "cluster", "api_url": "https://example.com", "unknown": true}),
+			serde_json::json!({"name": "cluster", "api_url": "https://example.com", "organization_id": 99}),
+			serde_json::json!({"id": 12, "name": "cluster", "api_url": "https://example.com"}),
+		] {
+			assert!(serde_json::from_value::<ClusterModelFormData<ClusterPolicy>>(value).is_err());
+		}
 	}
 }

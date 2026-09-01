@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Version generated migration sources with `// reinhardt-migration-source: 1`
   and emit constructors/builders for framework-owned migration values.
+- Validate marked source syntax, reject cfg-gated entrypoints with differing
+  semantics, and preserve UTF-8 BOM prefixes during source upgrades.
 - Mark `Migration`, `PartitionDef`, `InterleaveSpec`, `ColumnDefinition`,
   `GeneratedColumnDefinition`, and `BulkLoadOptions` as non-exhaustive. Replace
   direct struct literals with their constructors/builders.

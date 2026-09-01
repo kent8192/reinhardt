@@ -127,7 +127,7 @@ fn convert_legacy_source(source: &str) -> Result<(String, bool)> {
 }
 
 fn parse_marker(source: &str) -> Result<Option<u32>> {
-	let content_start = shebang_end(source).unwrap_or(0);
+	let content_start = source_start(source);
 	let first_non_empty = source[content_start..]
 		.lines()
 		.find(|line| !line.trim().is_empty());
@@ -170,7 +170,8 @@ pub fn has_source_format_marker(source: &str) -> Result<bool> {
 }
 
 pub(crate) fn validate_source_version(source: &str) -> Result<()> {
-	if let Some(version) = parse_marker(source)?
+	let marker = parse_marker(source)?;
+	if let Some(version) = marker
 		&& version > CURRENT_SOURCE_FORMAT_VERSION
 	{
 		return Err(MigrationError::InvalidMigration(format!(
@@ -178,11 +179,14 @@ pub(crate) fn validate_source_version(source: &str) -> Result<()> {
 			CURRENT_SOURCE_FORMAT_VERSION
 		)));
 	}
+	if marker == Some(CURRENT_SOURCE_FORMAT_VERSION) {
+		upgrade_source(source)?;
+	}
 	Ok(())
 }
 
 fn first_syntax_offset(source: &str) -> Result<usize> {
-	let source_start = shebang_end(source).unwrap_or(0);
+	let source_start = source_start(source);
 	let syntax = &source[source_start..];
 	let tokens = syntax
 		.parse::<TokenStream>()
@@ -195,17 +199,32 @@ fn first_syntax_offset(source: &str) -> Result<usize> {
 		.ok_or_else(|| invalid_shape("cannot locate first Rust syntax token in source"))
 }
 
+fn bom_end(source: &str) -> usize {
+	if source.starts_with('\u{feff}') {
+		'\u{feff}'.len_utf8()
+	} else {
+		0
+	}
+}
+
 fn shebang_end(source: &str) -> Option<usize> {
-	let line_end = source.find('\n').unwrap_or(source.len());
-	let line = &source[..line_end];
+	let bom_end = bom_end(source);
+	let line_end = source[bom_end..]
+		.find('\n')
+		.map_or(source.len(), |offset| bom_end + offset);
+	let line = &source[bom_end..line_end];
 	(line.starts_with("#!") && !line.starts_with("#!["))
 		.then_some(line_end + usize::from(line_end < source.len()))
+}
+
+fn source_start(source: &str) -> usize {
+	shebang_end(source).unwrap_or_else(|| bom_end(source))
 }
 
 fn leading_marker_lines(source: &str, syntax_offset: usize) -> Vec<&str> {
 	let end = syntax_offset.min(source.len());
 	let bytes = source.as_bytes();
-	let mut index = shebang_end(source).unwrap_or(0).min(end);
+	let mut index = source_start(source).min(end);
 	let mut markers = Vec::new();
 	while index < end {
 		if bytes[index].is_ascii_whitespace() {
@@ -823,7 +842,8 @@ fn span_offset(source: &str, location: LineColumn) -> Option<usize> {
 	let mut offset = 0usize;
 	for (line_index, line) in source.split_inclusive('\n').enumerate() {
 		if line_index + 1 == location.line {
-			return (location.column <= line.len()).then_some(offset + location.column);
+			let column = location.column + usize::from(location.line == 1) * bom_end(source);
+			return (column <= line.len()).then_some(offset + column);
 		}
 		offset += line.len();
 	}
@@ -850,10 +870,10 @@ fn apply_edits(source: &str, mut edits: Vec<(usize, usize, String)>) -> Result<S
 
 fn add_marker(source: &str, replace_existing: bool) -> String {
 	let marker = format!("{MARKER_PREFIX} {CURRENT_SOURCE_FORMAT_VERSION}\n");
-	let shebang_end = shebang_end(source).unwrap_or(0);
+	let source_start = source_start(source);
 	if replace_existing {
-		let mut offset = shebang_end;
-		for line in source[shebang_end..].split_inclusive('\n') {
+		let mut offset = source_start;
+		for line in source[source_start..].split_inclusive('\n') {
 			if !line.trim().is_empty() {
 				let trimmed = line.trim_start();
 				if trimmed.starts_with(MARKER_PREFIX) {
@@ -870,8 +890,8 @@ fn add_marker(source: &str, replace_existing: bool) -> String {
 	}
 	format!(
 		"{}{marker}{}",
-		&source[..shebang_end],
-		&source[shebang_end..]
+		&source[..source_start],
+		&source[source_start..]
 	)
 }
 
@@ -989,16 +1009,7 @@ fn validate_semantics(before: &str, after: &str) -> Result<()> {
 		super::ast_parser::extract_migration_metadata_strict(&before_file, "<app>", "<name>")?;
 	let after =
 		super::ast_parser::extract_migration_metadata_strict(&after_file, "<app>", "<name>")?;
-	if before.operations != after.operations
-		|| before.dependencies != after.dependencies
-		|| before.replaces != after.replaces
-		|| before.atomic != after.atomic
-		|| before.initial != after.initial
-		|| before.state_only != after.state_only
-		|| before.database_only != after.database_only
-		|| before.swappable_dependencies != after.swappable_dependencies
-		|| before.optional_dependencies != after.optional_dependencies
-	{
+	if !super::ast_parser::same_migration_semantics(&before, &after) {
 		return Err(invalid_shape(
 			"migration source upgrade changed migration semantics",
 		));
@@ -1100,6 +1111,24 @@ fn migration() -> Migration {
 				.source
 				.starts_with("#!/usr/bin/env rust-script\n// reinhardt-migration-source: 1\n")
 		);
+		assert_eq!(
+			upgrade_source(&result.source).unwrap().source,
+			result.source
+		);
+	}
+
+	#[test]
+	fn preserves_utf8_bom_shebang_and_legacy_source_offsets() {
+		let source = "\u{feff}#!/usr/bin/env rust-script\nfn migration() -> Migration {\n    Migration {\n        name: \"0001_initial\".to_string(),\n        app_label: \"app\".to_string(),\n        operations: vec![],\n        dependencies: vec![],\n        replaces: vec![],\n        atomic: true,\n        initial: None,\n        state_only: false,\n        database_only: false,\n        swappable_dependencies: vec![],\n        optional_dependencies: vec![],\n    }\n}\n";
+
+		let result = upgrade_source(source).unwrap();
+
+		assert!(
+			result.source.starts_with(
+				"\u{feff}#!/usr/bin/env rust-script\n// reinhardt-migration-source: 1\n"
+			)
+		);
+		assert!(result.source.contains("Migration :: new"));
 		assert_eq!(
 			upgrade_source(&result.source).unwrap().source,
 			result.source

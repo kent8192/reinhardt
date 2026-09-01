@@ -44,8 +44,8 @@ pub fn extract_migration_metadata(ast: &File, app_label: &str, name: &str) -> Re
 ///
 /// `app_label` and `name` are authoritative. Filesystem callers derive them from
 /// the migration path rather than trusting duplicate identity fields in source.
-/// Every cfg-gated `migration()` entrypoint is validated; the first supplies the
-/// returned metadata.
+/// Every cfg-gated `migration()` entrypoint is validated and must have identical
+/// semantics, so the returned metadata is independent of cfg expansion.
 ///
 /// Swappable and optional dependencies are parsed from their constructor forms.
 /// Operation payloads that this parser cannot reconstruct exactly are rejected
@@ -61,9 +61,26 @@ pub fn extract_migration_metadata_strict(
 	})?;
 	let migration = extract_migration_expression_strict(ast, migration_expr, app_label, name)?;
 	for expression in expressions {
-		extract_migration_expression_strict(ast, expression?, app_label, name)?;
+		let variant = extract_migration_expression_strict(ast, expression?, app_label, name)?;
+		if !same_migration_semantics(&migration, &variant) {
+			return Err(MigrationError::InvalidMigration(
+				"migration() entrypoints have different semantics before cfg expansion".to_string(),
+			));
+		}
 	}
 	Ok(migration)
+}
+
+pub(super) fn same_migration_semantics(left: &Migration, right: &Migration) -> bool {
+	left.operations == right.operations
+		&& left.dependencies == right.dependencies
+		&& left.replaces == right.replaces
+		&& left.atomic == right.atomic
+		&& left.initial == right.initial
+		&& left.state_only == right.state_only
+		&& left.database_only == right.database_only
+		&& left.swappable_dependencies == right.swappable_dependencies
+		&& left.optional_dependencies == right.optional_dependencies
 }
 
 fn migration_functions(ast: &File) -> impl Iterator<Item = &ItemFn> {
@@ -5033,6 +5050,37 @@ mod parser_tests {
 		assert_eq!(
 			error.to_string(),
 			"Invalid migration: migration() entrypoint must end with a Migration expression"
+		);
+	}
+
+	#[test]
+	fn strict_metadata_rejects_cfg_gated_entrypoints_with_different_semantics() {
+		let ast = syn::parse_file(
+			r#"
+			#[cfg(feature = "postgres")]
+			pub fn migration() -> Migration {
+				Migration::new("0001_backend", "blog").add_operation(Operation::RunSQL {
+					sql: "SELECT 1".to_string(),
+					reverse_sql: None,
+				})
+			}
+
+			#[cfg(feature = "sqlite")]
+			pub fn migration() -> Migration {
+				Migration::new("0001_backend", "blog").add_operation(Operation::RunSQL {
+					sql: "SELECT 2".to_string(),
+					reverse_sql: None,
+				})
+			}
+			"#,
+		)
+		.unwrap();
+
+		let error = extract_migration_metadata_strict(&ast, "blog", "0001_backend").unwrap_err();
+
+		assert_eq!(
+			error.to_string(),
+			"Invalid migration: migration() entrypoints have different semantics before cfg expansion"
 		);
 	}
 

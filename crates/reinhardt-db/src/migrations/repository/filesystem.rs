@@ -1575,6 +1575,49 @@ mod tests {
 	#[rstest]
 	#[tokio::test]
 	#[serial(filesystem_repository)]
+	async fn test_filesystem_repository_get_rejects_current_marker_with_legacy_syntax() {
+		let temp_dir = TempDir::new().unwrap();
+		let app_dir = temp_dir.path().join("polls");
+		std::fs::create_dir_all(&app_dir).unwrap();
+		std::fs::write(
+			app_dir.join("0001_initial.rs"),
+			r#"// reinhardt-migration-source: 1
+fn migration() -> Migration {
+    Migration {
+        name: "0001_initial".to_string(),
+        app_label: "polls".to_string(),
+        operations: vec![],
+        dependencies: vec![],
+        replaces: vec![],
+        atomic: true,
+        initial: None,
+        state_only: false,
+        database_only: false,
+        swappable_dependencies: vec![],
+        optional_dependencies: vec![],
+    }
+}
+"#,
+		)
+		.unwrap();
+		let repo = FilesystemRepository::new(temp_dir.path());
+
+		let error = repo
+			.get("polls", "0001_initial")
+			.await
+			.expect_err("current source format must use current syntax");
+
+		assert!(
+			error
+				.to_string()
+				.contains("legacy struct-literal syntax remains"),
+			"unexpected error: {error}"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(filesystem_repository)]
 	async fn test_filesystem_repository_list() {
 		// Arrange
 		let temp_dir = TempDir::new().unwrap();

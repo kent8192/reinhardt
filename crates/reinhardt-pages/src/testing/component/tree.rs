@@ -597,7 +597,6 @@ impl TestDom {
 			let Some(binding) = binding else {
 				continue;
 			};
-			// ponytail: TestDom trees are small; index bindings if large-tree tests make this scan costly.
 			let conflicting_range = {
 				let TestNode::Element(element) = &self.nodes[node_id] else {
 					continue;
@@ -761,6 +760,7 @@ impl TestDom {
 						element_node.control_binding.clone(),
 						last_observed_control_value,
 					) {
+					element_node.project_controlled_attributes(&binding, &value);
 					let normalized =
 						normalize_native_control_value(&element_node, &binding, value.clone());
 					let normalization_write_back_allowed = !has_conflicting_native_range_binding(
@@ -1383,27 +1383,22 @@ fn native_range_constraints(element: &ElementNode) -> Option<(f64, f64, Option<f
 	}
 	let min_attribute = element
 		.attr("min")
-		.and_then(|value| value.parse::<f64>().ok())
-		.filter(|value| value.is_finite());
+		.and_then(crate::control_binding::parse_html_number);
 	let min = min_attribute.unwrap_or(0.0);
 	let max = element
 		.attr("max")
-		.and_then(|value| value.parse::<f64>().ok())
-		.filter(|value| value.is_finite())
+		.and_then(crate::control_binding::parse_html_number)
 		.unwrap_or(100.0);
 	let step_base = min_attribute
 		.or_else(|| {
 			element
 				.attr("value")
-				.and_then(|value| value.parse::<f64>().ok())
-				.filter(|value| value.is_finite())
+				.and_then(crate::control_binding::parse_html_number)
 		})
 		.unwrap_or(0.0);
 	let step = match element.attr("step") {
 		Some(value) if value.eq_ignore_ascii_case("any") => None,
-		Some(value) => value
-			.parse::<f64>()
-			.ok()
+		Some(value) => crate::control_binding::parse_html_number(value)
 			.filter(|value| value.is_finite() && *value > 0.0)
 			.or(Some(1.0)),
 		None => Some(1.0),
@@ -1792,6 +1787,44 @@ mod case_normalization_tests {
 			assert_eq!(
 				(value.get(), dom.value(ranges[0]), dom.value(ranges[1])),
 				(150, Some("100".to_owned()), Some("200".to_owned()))
+			);
+		});
+	}
+
+	#[rstest]
+	fn native_overlapping_ranges_without_a_common_step_keep_browser_values_local() {
+		ReactiveScope::run(|| {
+			// Arrange
+			let value = Signal::new(3_i32);
+
+			// Act
+			let dom = TestDom::render(
+				PageElement::new("div")
+					.child(
+						PageElement::new("input")
+							.attr("type", "range")
+							.attr("min", "0")
+							.attr("max", "5")
+							.attr("step", "4")
+							.control_binding(ControlBinding::number(value)),
+					)
+					.child(
+						PageElement::new("input")
+							.attr("type", "range")
+							.attr("min", "2")
+							.attr("max", "5")
+							.attr("step", "6")
+							.control_binding(ControlBinding::number(value)),
+					)
+					.into_page(),
+			);
+			let container = dom.children(dom.root())[0];
+			let ranges = dom.children(container);
+
+			// Assert
+			assert_eq!(
+				(value.get(), dom.value(ranges[0]), dom.value(ranges[1])),
+				(4, Some("4".to_owned()), Some("2".to_owned()))
 			);
 		});
 	}

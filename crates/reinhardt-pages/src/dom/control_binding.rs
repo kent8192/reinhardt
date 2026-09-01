@@ -1349,19 +1349,15 @@ fn range_constraints(element: &web_sys::Element) -> Option<(f64, f64, Option<f64
 	}
 	let min_attribute = element
 		.get_attribute("min")
-		.and_then(|value| value.parse::<f64>().ok())
-		.filter(|value| value.is_finite());
+		.and_then(|value| crate::control_binding::parse_html_number(&value));
 	let min = min_attribute.unwrap_or(0.0);
 	let max = element
 		.get_attribute("max")
-		.and_then(|value| value.parse::<f64>().ok())
-		.filter(|value| value.is_finite())
+		.and_then(|value| crate::control_binding::parse_html_number(&value))
 		.unwrap_or(100.0);
 	let step = match element.get_attribute("step").as_deref() {
 		Some(value) if value.eq_ignore_ascii_case("any") => None,
-		Some(value) => value
-			.parse::<f64>()
-			.ok()
+		Some(value) => crate::control_binding::parse_html_number(value)
 			.filter(|value| value.is_finite() && *value > 0.0)
 			.or(Some(1.0)),
 		None => Some(1.0),
@@ -1370,8 +1366,7 @@ fn range_constraints(element: &web_sys::Element) -> Option<(f64, f64, Option<f64
 		.or_else(|| {
 			element
 				.get_attribute("value")
-				.and_then(|value| value.parse::<f64>().ok())
-				.filter(|value| value.is_finite())
+				.and_then(|value| crate::control_binding::parse_html_number(&value))
 		})
 		.unwrap_or(0.0);
 	Some((min, max.max(min), step, step_base))
@@ -2232,6 +2227,44 @@ mod tests {
 
 			assert_eq!(value.get(), 4);
 			assert_eq!(first_input.value(), "4");
+			drop(second_controller);
+			drop(first_controller);
+		});
+	}
+
+	#[wasm_bindgen_test]
+	fn overlapping_range_step_grids_without_a_common_value_do_not_write_back_forever() {
+		let scope = ReactiveScope::new();
+		scope.enter(|| {
+			// Arrange
+			let value = Signal::new(3_i32);
+			let first = element("input");
+			let first_input: web_sys::HtmlInputElement =
+				first.as_web_sys().clone().unchecked_into();
+			first_input.set_type("range");
+			first_input.set_min("0");
+			first_input.set_max("5");
+			first_input.set_step("4");
+			let second = element("input");
+			let second_input: web_sys::HtmlInputElement =
+				second.as_web_sys().clone().unchecked_into();
+			second_input.set_type("range");
+			second_input.set_min("2");
+			second_input.set_max("5");
+			second_input.set_step("6");
+
+			// Act
+			let first_controller =
+				ControlBindingController::mount(first, ControlBinding::number(value.clone()))
+					.expect("first range binding");
+			let second_controller =
+				ControlBindingController::mount(second, ControlBinding::number(value.clone()))
+					.expect("second range binding");
+
+			// Assert
+			assert_eq!(value.get(), 4);
+			assert_eq!(first_input.value(), "4");
+			assert_eq!(second_input.value(), "2");
 			drop(second_controller);
 			drop(first_controller);
 		});

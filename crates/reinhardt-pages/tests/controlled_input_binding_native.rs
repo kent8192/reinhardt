@@ -1174,6 +1174,67 @@ fn native_range_binding_applies_declared_step(reactive_scope: ReactiveScope) {
 }
 
 #[rstest]
+fn native_initial_range_reconciliation_uses_the_bound_value_as_the_step_base(
+	reactive_scope: ReactiveScope,
+) {
+	// Arrange
+	let value = signal_in_scope(&reactive_scope, 3_i32);
+
+	// Act
+	let screen = render(
+		PageElement::new("input")
+			.attr("aria-label", "Implicit step base")
+			.attr("type", "range")
+			.attr("step", "2")
+			.control_binding(ControlBinding::number(value)),
+	);
+
+	// Assert
+	assert_eq!(value.get(), 3);
+	assert_eq!(
+		screen.get_by_label("Implicit step base").value().as_deref(),
+		Some("3")
+	);
+}
+
+#[rstest]
+#[case::leading_plus_min("min", "+10")]
+#[case::leading_plus_step("step", "+2")]
+fn native_range_ignores_constraints_outside_the_html_number_grammar(
+	reactive_scope: ReactiveScope,
+	#[case] attribute: &str,
+	#[case] invalid_value: &str,
+) {
+	// Arrange
+	let value = signal_in_scope(&reactive_scope, 3_i32);
+	let range = PageElement::new("input")
+		.attr("aria-label", "Invalid range constraint")
+		.attr("type", "range")
+		.attr("max", "10");
+	let range = match attribute {
+		"min" => range.attr("min", invalid_value.to_owned()),
+		"step" => range
+			.attr("min", "0")
+			.attr("step", invalid_value.to_owned()),
+		_ => unreachable!("the test cases cover range constraints"),
+	}
+	.control_binding(ControlBinding::number(value));
+
+	// Act
+	let screen = render(range);
+
+	// Assert
+	assert_eq!(value.get(), 3);
+	assert_eq!(
+		screen
+			.get_by_label("Invalid range constraint")
+			.value()
+			.as_deref(),
+		Some("3")
+	);
+}
+
+#[rstest]
 #[tokio::test]
 async fn range_binding_reconciles_native_control_bounds(reactive_scope: ReactiveScope) {
 	// Arrange

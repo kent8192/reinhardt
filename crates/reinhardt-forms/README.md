@@ -390,7 +390,7 @@ let updated = cleaned.apply_to(existing)?;
 Required server-owned create values enter through the generated typed context,
 so an incomplete context cannot call `into_model`. Async validation remains an
 explicit application step after cleaning. Database failures remain structured
-`ModelFormError::Persistence` values; they are not validation errors.
+persistence errors; they are not validation errors.
 
 Generated string-like fields preserve surrounding whitespace unless their
 model field has `#[form(trim)]`. This does not change the defaults of manually
@@ -405,9 +405,11 @@ caller's validation responsibility.
 An excluded required value must have a declared model default, an automatic
 model construction path, or a value supplied by a trusted typed setter before
 construction. Otherwise `build_instance()` returns
-`ModelFormError::MissingModelField`. Persistence failures remain
-`ModelFormError::Persistence`, and `database_error()` returns the structured
-`DatabaseError`.
+`ModelFormError::MissingModelField`. `ModelFormError::Persistence` means the
+write failed, while `ModelFormError::PersistenceAfterCreate` means the insert
+succeeded but hydration failed. Do not retry the latter as another create;
+reload the persisted record before updating it. `database_error()` returns the
+structured `DatabaseError` from either variant.
 
 ### Custom Validation
 

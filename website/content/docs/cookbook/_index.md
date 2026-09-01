@@ -38,6 +38,6 @@ The Cookbook provides practical guides for solving common tasks.
 ## See Also
 
 <!-- reinhardt-version-sync -->
-- [API Reference](https://docs.rs/reinhardt-web/0.3.14/reinhardt/)
+- [API Reference](https://docs.rs/reinhardt-web/0.3.15/reinhardt/)
 - [Migration Guides](/quickstart/migration-guides/)
 - [Troubleshooting](../troubleshooting/)

@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.14...reinhardt-web@v0.3.15) - 2026-09-01
+
+### Fixed
+
+- *(dentdelion)* confine plugin loading to its root
+- *(dentdelion)* close plugin path race
+- *(dentdelion)* retain plugin root capability
+- *(dentdelion)* preserve anchored loader behavior
+- *(admin)* merge current main into advisory fix
+- *(utils)* gate async filesystem import
+- *(utils)* avoid unused filesystem import in native tests
+
+### Maintenance
+
+- merge main into PR branch
+
+### Security
+
+- *(middleware)* prevent private cache replay
+
+### Testing
+
+- *(admin)* grant empty object filters on permission-granting ModelAdmins
+
 ## [0.3.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.13...reinhardt-web@v0.3.14) - 2026-08-29
 
 ### Added

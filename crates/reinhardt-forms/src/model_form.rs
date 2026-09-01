@@ -42,6 +42,9 @@ pub trait FormModel: Model + ModelFormPrimaryKeyFields + Clone + Send + Sync {
 		+ ModelFormValidatingPayload<Cleaned = Self::CleanedData<P>>
 		+ Clone;
 	/// Generated cleaned payload under the active field policy.
+	///
+	/// **Parity: P0.** This associated type belongs to the native ORM bridge;
+	/// generated cleaned payload types remain available on all targets.
 	type CleanedData<P: ModelFormPolicy>: ModelFormCleanedPayload<Raw = Self::Data<P>>;
 
 	/// Cleans a payload before applying it to an existing model.
@@ -49,6 +52,9 @@ pub trait FormModel: Model + ModelFormPrimaryKeyFields + Clone + Send + Sync {
 	/// Generated implementations override this compatibility hook to merge
 	/// omitted values for synchronous validation. Hand-written implementations
 	/// retain strict validation unless they opt in to the update extension.
+	///
+	/// **Parity: P0.** This update bridge is available only with native ORM
+	/// integration.
 	#[doc(hidden)]
 	fn clean_for_update<P: ModelFormPolicy>(
 		data: Self::Data<P>,
@@ -58,6 +64,9 @@ pub trait FormModel: Model + ModelFormPrimaryKeyFields + Clone + Send + Sync {
 	}
 
 	/// Builds a create candidate from cleaned data and explicit server values.
+	///
+	/// **Parity: P0.** Model construction is available only with native ORM
+	/// integration.
 	#[doc(hidden)]
 	fn build_from_cleaned_compat<P: ModelFormPolicy>(
 		data: &Self::CleanedData<P>,
@@ -65,6 +74,9 @@ pub trait FormModel: Model + ModelFormPrimaryKeyFields + Clone + Send + Sync {
 	) -> Result<Self, ModelFormError>;
 
 	/// Applies cleaned payload values to an existing candidate.
+	///
+	/// **Parity: P0.** Model mutation is available only with native ORM
+	/// integration.
 	fn apply_cleaned<P: ModelFormPolicy>(
 		&mut self,
 		data: &Self::CleanedData<P>,
@@ -154,6 +166,9 @@ type ModelValidator<T> = dyn Fn(&T) -> Result<(), Vec<String>> + Send + Sync;
 /// This is the native counterpart of generated payload validation. It preserves
 /// omitted and explicit-null values, normalizes only submitted editable fields,
 /// and reports policy and field errors in schema order.
+///
+/// **Parity: P0.** This helper depends on the native forms implementation;
+/// generated payload cleaning exposes a separate P2 implementation on WASM.
 pub fn clean_generated_payload<S, P, D>(data: &mut D) -> Result<(), ValidationErrors>
 where
 	S: ModelFormSchema,
@@ -163,6 +178,10 @@ where
 	clean_generated_payload_with_trusted_values::<S, P, D>(data, None, true)
 }
 
+/// Cleans only supplied fields for native generated update validation.
+///
+/// **Parity: P0.** This helper depends on the native forms implementation;
+/// generated payload cleaning exposes a separate P2 implementation on WASM.
 #[doc(hidden)]
 pub fn clean_generated_partial_payload<S, P, D>(data: &mut D) -> Result<(), ValidationErrors>
 where
@@ -189,7 +208,7 @@ where
 	for descriptor in S::fields() {
 		if descriptor.editable
 			&& P::allows(descriptor.name)
-			&& (supplied.contains(&descriptor.name) || (require_all && descriptor.required))
+			&& supplied.contains(&descriptor.name)
 			&& !data
 				.get_json(descriptor.name)
 				.is_some_and(|value| descriptor.nullable && value.is_null())
@@ -218,31 +237,28 @@ where
 	if !errors.is_empty() {
 		return Err(errors);
 	}
-	if require_all {
-		for descriptor in S::fields() {
-			if descriptor.editable
-				&& P::allows(descriptor.name)
-				&& descriptor.required
-				&& !supplied.contains(&descriptor.name)
-			{
-				errors.add(
-					descriptor.name,
-					ValidationError::Custom("This field is required.".to_owned()),
-				);
-			}
+	let form_is_valid = form.is_valid();
+	for descriptor in S::fields() {
+		if require_all
+			&& descriptor.editable
+			&& P::allows(descriptor.name)
+			&& descriptor.required
+			&& !supplied.contains(&descriptor.name)
+		{
+			errors.add(
+				descriptor.name,
+				ValidationError::Custom("This field is required.".to_owned()),
+			);
 		}
-		if !errors.is_empty() {
-			return Err(errors);
-		}
-	}
-	if !form.is_valid() {
-		for descriptor in S::fields() {
+		if !form_is_valid {
 			if let Some(messages) = form.errors().get(descriptor.name) {
 				for message in messages {
 					errors.add(descriptor.name, ValidationError::Custom(message.clone()));
 				}
 			}
 		}
+	}
+	if !errors.is_empty() {
 		return Err(errors);
 	}
 	for field in supplied {

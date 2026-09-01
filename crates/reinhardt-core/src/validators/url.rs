@@ -138,7 +138,7 @@ mod tests {
 		}
 	}
 
-	#[test]
+	#[rstest]
 	fn test_url_validator_with_ports() {
 		let validator = UrlValidator::new();
 		assert!(validator.validate("http://example.com:8080/").is_ok());

@@ -42,6 +42,9 @@ impl ValidationErrors {
 	}
 
 	/// Get field errors in first-insertion order, with non-field errors last.
+	///
+	/// **Parity: P2.** Native and WASM targets preserve the same insertion and
+	/// non-field ordering semantics.
 	pub fn ordered_field_errors(&self) -> impl Iterator<Item = (&str, &[ValidationError])> {
 		self.order
 			.iter()

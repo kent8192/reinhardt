@@ -524,6 +524,36 @@ async fn direct_create_reports_canonical_required_scalar_errors_before_the_callb
 }
 
 #[rstest]
+#[tokio::test]
+async fn direct_create_aggregates_omitted_required_and_supplied_invalid_fields() {
+	// Arrange
+	let mut payload = ClusterModelFormData::<ClusterPolicy>::empty();
+	payload
+		.set_api_url("not a URL".to_owned())
+		.expect("cluster API URL should be editable");
+
+	// Act
+	let error = create_cluster(payload)
+		.await
+		.expect_err("all create field errors should be reported before the callback");
+
+	// Assert
+	assert_eq!(error.kind(), ServerFnErrorKind::Validation);
+	assert_eq!(error.status(), Some(422));
+	assert_eq!(
+		error
+			.field_errors()
+			.iter()
+			.map(|error| (error.field().to_owned(), error.message().to_owned()))
+			.collect::<Vec<_>>(),
+		vec![
+			("name".to_owned(), "This field is required.".to_owned()),
+			("api_url".to_owned(), "Enter a valid URL".to_owned()),
+		]
+	);
+}
+
+#[rstest]
 #[case(
 	serde_json::json!({"enabled": null, "replicas": 1}),
 	"invalid type: null, expected a boolean"

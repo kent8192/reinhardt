@@ -529,6 +529,9 @@ where
 	}
 
 	/// Converts one payload assembly failure into the structured validation contract.
+	///
+	/// **Parity: P2.** Native and WASM targets map payload assembly failures to
+	/// the same field and message.
 	#[doc(hidden)]
 	pub fn payload_error_to_validation(&self, error: ModelFormPayloadError) -> ValidationErrors {
 		let (field, message) = match &error {
@@ -1466,14 +1469,21 @@ mod tests {
 				.value("ratio")
 				.expect("raw ratio should be stored")
 				.clone(),
-		);
+		)
+		.expect_err("out-of-range f32 input should fail snapshot conversion");
 
 		// Assert
-		assert!(error.is_err());
-		assert!(matches!(
+		assert_eq!(
+			error,
+			ModelFormPayloadError::InvalidValue {
+				field: "ratio".to_owned(),
+				message: format!("must be less than or equal to {}", f32::MAX as f64),
+			}
+		);
+		assert_eq!(
 			state.value("ratio"),
-			Some(serde_json::Value::String(value)) if value == "1e100"
-		));
+			Some(&serde_json::Value::String("1e100".to_owned()))
+		);
 	}
 
 	struct OptionalContactSchema;

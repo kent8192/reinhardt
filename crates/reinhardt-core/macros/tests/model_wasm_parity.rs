@@ -91,6 +91,9 @@ wasm-bindgen-test = "={}"
 		String::from_utf8_lossy(&output.stdout),
 		String::from_utf8_lossy(&output.stderr)
 	);
+	// wasm-bindgen-test-runner interleaves platform-dependent harness and log
+	// output, so the complete process output cannot be compared exactly. These
+	// guards instead require each exact generated test name after a successful exit.
 	assert!(
 		runtime_output.contains("generated_datetime_payload_round_trips_in_wasm_runtime"),
 		"WASM model macro parity fixture must execute the generated datetime payload test\n{runtime_output}",
@@ -109,6 +112,11 @@ wasm-bindgen-test = "={}"
 			"generated_create_and_update_semantics_match_the_server_boundary_in_wasm_runtime"
 		),
 		"WASM model macro parity fixture must execute create/update parity\n{runtime_output}",
+	);
+	assert!(
+		runtime_output
+			.contains("generated_required_scalars_use_canonical_create_errors_in_wasm_runtime"),
+		"WASM model macro parity fixture must execute required scalar parity\n{runtime_output}",
 	);
 }
 

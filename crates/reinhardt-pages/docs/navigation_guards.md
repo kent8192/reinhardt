@@ -148,7 +148,9 @@ attempt is rejected or cancelled.
 `QueryClient`. It follows normal freshness, garbage-collection, and in-flight
 deduplication rules. Navigation and prefetch consumers do not automatically
 retry failed fetches, even when a retry policy is configured; a failed guard
-query is returned as a `NavigationGuardError`. The pre-loader and pre-commit
+query is returned as a `NavigationGuardError`. Because a guard must reach a
+decision, `QueryOptions::enabled(false)` also returns an immediate safe error
+instead of waiting for a fetch that cannot start. The pre-loader and pre-commit
 checks therefore reuse one fresh session query, and sibling navigation can
 reuse the same settled entry. There is no separate navigation-guard result
 cache, timestamp, or dependency tracker.

@@ -222,6 +222,11 @@ impl NavigationContext {
 		E: Clone + Serialize + DeserializeOwned + Into<NavigationGuardError> + 'static,
 		R: QueryRetryConfig<E>,
 	{
+		if !options.is_enabled() {
+			return Err(NavigationGuardError::new(
+				"navigation guard query is disabled",
+			));
+		}
 		#[cfg(wasm)]
 		if let Ok(mut hydration) = crate::hydration::HydrationContext::from_window() {
 			hydration
@@ -273,6 +278,7 @@ mod tests {
 	use crate::reactive::query::TestQueryRuntime;
 	use crate::reactive::{QueryDefaults, QueryFamily};
 	use reinhardt_core::reactive::ReactiveScope;
+	use rstest::rstest;
 	use std::cell::Cell;
 	use std::collections::HashMap;
 	use std::future::Future;
@@ -381,8 +387,8 @@ mod tests {
 		});
 	}
 
-	#[test]
-	fn context_query_honors_disabled_options() {
+	#[rstest]
+	fn context_query_rejects_disabled_options_without_waiting() {
 		ReactiveScope::run(|| {
 			let runtime = TestQueryRuntime::new();
 			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
@@ -399,8 +405,13 @@ mod tests {
 				});
 			let mut future =
 				Box::pin(context.query(descriptor, QueryOptions::new().enabled(false)));
-			poll_pending(&mut future);
+			let mut task = Context::from_waker(Waker::noop());
+			let Poll::Ready(result) = future.as_mut().poll(&mut task) else {
+				panic!("a disabled navigation-guard query must return immediately");
+			};
 			runtime.run_until_stalled();
+			let error = result.unwrap_err();
+			assert_eq!(error.public_message(), "navigation guard query is disabled");
 			assert_eq!(fetches.get(), 0);
 		});
 	}

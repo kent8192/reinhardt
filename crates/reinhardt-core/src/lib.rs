@@ -61,7 +61,7 @@
 //! | `pagination` | disabled | Pagination strategies |
 //! | `negotiation` | disabled | HTTP content negotiation |
 //! | `messages` | disabled | Flash message storage |
-//! | `page` | disabled | Server-side page rendering types |
+//! | `page` | disabled | Page rendering types and URL-attribute safety checks; enables `security` |
 //! | `reactive` | disabled | Reactive state management |
 //! | `serde` | disabled | Serde serialization support |
 //! | `json` | disabled | JSON serialization support |

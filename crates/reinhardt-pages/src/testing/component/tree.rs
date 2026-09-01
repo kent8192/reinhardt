@@ -1290,7 +1290,15 @@ fn normalize_native_control_value(
 	if binding.kind() == ControlKind::Text && crate::control_binding::is_text_input_type(input_type)
 	{
 		let mut normalized = raw.replace(['\r', '\n'], "");
-		if ["url", "email"]
+		if input_type.eq_ignore_ascii_case("email")
+			&& element.attr("multiple").is_some_and(is_boolean_attr_truthy)
+		{
+			normalized = normalized
+				.split(',')
+				.map(str::trim)
+				.collect::<Vec<_>>()
+				.join(",");
+		} else if ["url", "email"]
 			.iter()
 			.any(|known| input_type.eq_ignore_ascii_case(known))
 		{
@@ -1309,16 +1317,24 @@ fn normalize_native_control_value(
 	if !number.is_finite() {
 		return ControlValue::Text(raw);
 	}
-	let min = element
+	let min_attribute = element
 		.attr("min")
 		.and_then(|value| value.parse::<f64>().ok())
-		.filter(|value| value.is_finite())
-		.unwrap_or(0.0);
+		.filter(|value| value.is_finite());
+	let min = min_attribute.unwrap_or(0.0);
 	let max = element
 		.attr("max")
 		.and_then(|value| value.parse::<f64>().ok())
 		.filter(|value| value.is_finite())
 		.unwrap_or(100.0);
+	let step_base = min_attribute
+		.or_else(|| {
+			element
+				.attr("value")
+				.and_then(|value| value.parse::<f64>().ok())
+				.filter(|value| value.is_finite())
+		})
+		.unwrap_or(0.0);
 	let normalized = if max < min {
 		min
 	} else {
@@ -1335,9 +1351,9 @@ fn normalize_native_control_value(
 		match step {
 			None => clamped,
 			Some(step) => {
-				let quotient = (clamped - min) / step;
-				let lower = min + quotient.floor() * step;
-				let upper = min + quotient.ceil() * step;
+				let quotient = (clamped - step_base) / step;
+				let lower = step_base + quotient.floor() * step;
+				let upper = step_base + quotient.ceil() * step;
 				let epsilon = step * 1e-12 + f64::EPSILON;
 				let lower = (lower >= min - epsilon && lower <= max + epsilon).then_some(lower);
 				let upper = (upper >= min - epsilon && upper <= max + epsilon).then_some(upper);
@@ -1541,6 +1557,19 @@ mod case_normalization_tests {
 				),
 				ControlValue::Text("line\nbreak".to_owned())
 			);
+
+			let mut multiple_email = element("input", Some("email"));
+			multiple_email
+				.attrs
+				.push(("multiple".to_owned(), "multiple".to_owned()));
+			assert_eq!(
+				normalize_native_control_value(
+					&multiple_email,
+					&binding,
+					ControlValue::Text(" first@example.test, second@example.test \n".to_owned()),
+				),
+				ControlValue::Text("first@example.test,second@example.test".to_owned())
+			);
 		});
 	}
 
@@ -1562,6 +1591,28 @@ mod case_normalization_tests {
 					ControlValue::Text("3".to_owned()),
 				),
 				ControlValue::Text("4".to_owned())
+			);
+		});
+	}
+
+	#[test]
+	fn native_range_values_use_the_value_attribute_as_step_base() {
+		ReactiveScope::run(|| {
+			let mut range = element("input", Some("range"));
+			range.attrs.extend([
+				("max".to_owned(), "10".to_owned()),
+				("step".to_owned(), "2".to_owned()),
+				("value".to_owned(), "1".to_owned()),
+			]);
+			let binding = ControlBinding::number(Signal::new(3_i32));
+
+			assert_eq!(
+				normalize_native_control_value(
+					&range,
+					&binding,
+					ControlValue::Text("3".to_owned()),
+				),
+				ControlValue::Text("3".to_owned())
 			);
 		});
 	}

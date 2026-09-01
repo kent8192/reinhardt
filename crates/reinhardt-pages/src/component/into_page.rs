@@ -188,7 +188,11 @@ pub(crate) fn initialize_control_default(element: &Element, binding: &ControlBin
 	match (binding.kind(), value) {
 		(ControlKind::Text | ControlKind::Number, ControlValue::Text(value)) => {
 			if let Some(input) = element.as_web_sys().dyn_ref::<web_sys::HtmlInputElement>() {
-				input.set_default_value(&value);
+				if input.type_().eq_ignore_ascii_case("password") {
+					input.set_value(&value);
+				} else {
+					input.set_default_value(&value);
+				}
 			} else if let Some(textarea) = element
 				.as_web_sys()
 				.dyn_ref::<web_sys::HtmlTextAreaElement>()

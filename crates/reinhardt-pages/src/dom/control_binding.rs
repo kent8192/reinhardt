@@ -1339,29 +1339,68 @@ fn write_control_and_reconcile(
 	Ok(())
 }
 
-fn range_constraints(element: &web_sys::Element) -> Option<(f64, f64)> {
+fn range_constraints(element: &web_sys::Element) -> Option<(f64, f64, Option<f64>, f64)> {
 	let input = element.dyn_ref::<web_sys::HtmlInputElement>()?;
 	if !input.type_().eq_ignore_ascii_case("range") {
 		return None;
 	}
-	let min = element
+	let min_attribute = element
 		.get_attribute("min")
 		.and_then(|value| value.parse::<f64>().ok())
-		.filter(|value| value.is_finite())
-		.unwrap_or(0.0);
+		.filter(|value| value.is_finite());
+	let min = min_attribute.unwrap_or(0.0);
 	let max = element
 		.get_attribute("max")
 		.and_then(|value| value.parse::<f64>().ok())
 		.filter(|value| value.is_finite())
 		.unwrap_or(100.0);
-	Some((min, max.max(min)))
+	let step = match element.get_attribute("step").as_deref() {
+		Some(value) if value.eq_ignore_ascii_case("any") => None,
+		Some(value) => value
+			.parse::<f64>()
+			.ok()
+			.filter(|value| value.is_finite() && *value > 0.0)
+			.or(Some(1.0)),
+		None => Some(1.0),
+	};
+	let step_base = min_attribute
+		.or_else(|| {
+			element
+				.get_attribute("value")
+				.and_then(|value| value.parse::<f64>().ok())
+				.filter(|value| value.is_finite())
+		})
+		.unwrap_or(0.0);
+	Some((min, max.max(min), step, step_base))
+}
+
+fn incompatible_range_step_grids(
+	first_step: Option<f64>,
+	first_base: f64,
+	second_step: Option<f64>,
+	second_base: f64,
+) -> bool {
+	let (Some(first_step), Some(second_step)) = (first_step, second_step) else {
+		return false;
+	};
+	let mut larger = first_step.max(second_step);
+	let mut smaller = first_step.min(second_step);
+	let tolerance = larger.max(1.0) * 1e-12;
+	while smaller > tolerance {
+		let remainder = larger % smaller;
+		larger = smaller;
+		smaller = remainder.abs();
+	}
+	let phase = (first_base - second_base) / larger;
+	let phase_tolerance = phase.abs().max(1.0) * 1e-9;
+	!phase.is_finite() || (phase - phase.round()).abs() > phase_tolerance
 }
 
 fn has_conflicting_range_binding(element: &Element, binding: &ControlBinding) -> bool {
 	if binding.kind() != ControlKind::Number {
 		return false;
 	}
-	let Some((min, max)) = range_constraints(element.as_web_sys()) else {
+	let Some((min, max, step, step_base)) = range_constraints(element.as_web_sys()) else {
 		return false;
 	};
 	let node: web_sys::Node = element.as_web_sys().clone().unchecked_into();
@@ -1374,7 +1413,16 @@ fn has_conflicting_range_binding(element: &Element, binding: &ControlBinding) ->
 					.unchecked_into::<web_sys::Node>()
 					.is_same_node(Some(&node))
 				&& range_constraints(&candidate.element).is_some_and(
-					|(candidate_min, candidate_max)| max < candidate_min || candidate_max < min,
+					|(candidate_min, candidate_max, candidate_step, candidate_step_base)| {
+						max < candidate_min
+							|| candidate_max < min
+							|| incompatible_range_step_grids(
+								step,
+								step_base,
+								candidate_step,
+								candidate_step_base,
+							)
+					},
 				)
 		})
 	})
@@ -2097,6 +2145,23 @@ mod tests {
 	}
 
 	#[wasm_bindgen_test]
+	fn bound_password_initialization_only_sets_the_live_value() {
+		let scope = ReactiveScope::new();
+		scope.enter(|| {
+			let element = element("input");
+			let input: web_sys::HtmlInputElement = element.as_web_sys().clone().unchecked_into();
+			input.set_type("password");
+			let binding = ControlBinding::text(Signal::new("secret".to_owned()));
+
+			crate::component::into_page::initialize_control_default(&element, &binding);
+
+			assert_eq!(input.value(), "secret");
+			assert_eq!(input.default_value(), "");
+			assert_eq!(input.get_attribute("value"), None);
+		});
+	}
+
+	#[wasm_bindgen_test]
 	fn mount_rejects_unrepresentable_browser_normalized_range_value() {
 		let scope = ReactiveScope::new();
 		scope.enter(|| {
@@ -2156,6 +2221,40 @@ mod tests {
 			assert_eq!(value.get(), 150);
 			assert_eq!(first_input.value(), "100");
 			assert_eq!(second_input.value(), "200");
+			drop(second_controller);
+			drop(first_controller);
+		});
+	}
+
+	#[wasm_bindgen_test]
+	fn incompatible_range_step_grids_do_not_write_back_forever() {
+		let scope = ReactiveScope::new();
+		scope.enter(|| {
+			let value = Signal::new(3_i32);
+			let first = element("input");
+			let first_input: web_sys::HtmlInputElement =
+				first.as_web_sys().clone().unchecked_into();
+			first_input.set_type("range");
+			first_input.set_min("0");
+			first_input.set_max("10");
+			first_input.set_step("2");
+			let first_controller =
+				ControlBindingController::mount(first, ControlBinding::number(value.clone()))
+					.expect("first range binding");
+
+			let second = element("input");
+			let second_input: web_sys::HtmlInputElement =
+				second.as_web_sys().clone().unchecked_into();
+			second_input.set_type("range");
+			second_input.set_min("1");
+			second_input.set_max("10");
+			second_input.set_step("2");
+			let second_controller =
+				ControlBindingController::mount(second, ControlBinding::number(value.clone()))
+					.expect("second range binding");
+
+			assert_eq!(value.get(), 4);
+			assert_eq!(first_input.value(), "4");
 			drop(second_controller);
 			drop(first_controller);
 		});

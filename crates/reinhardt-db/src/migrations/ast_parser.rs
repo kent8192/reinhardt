@@ -12,20 +12,8 @@ use syn::{Expr, File, Item, ItemFn, Stmt};
 pub fn extract_migration_metadata(ast: &File, app_label: &str, name: &str) -> Result<Migration> {
 	// Current generated sources use a builder chain. Reuse the strict parser so
 	// filesystem loading does not silently drop operations or metadata from it.
-	if let Some(expression) = ast.items.iter().find_map(|item| {
-		let Item::Fn(function) = item else {
-			return None;
-		};
-		(function.sig.ident == "migration")
-			.then(|| function.block.stmts.last())
-			.flatten()
-			.and_then(|statement| {
-				let Stmt::Expr(expression, _) = statement else {
-					return None;
-				};
-				Some(expression)
-			})
-	}) && matches!(expression, Expr::Call(_) | Expr::MethodCall(_))
+	if let Some(expression) = ast.items.iter().find_map(migration_expression)
+		&& matches!(expression, Expr::Call(_) | Expr::MethodCall(_))
 	{
 		return extract_migration_metadata_strict(ast, app_label, name);
 	}
@@ -55,6 +43,8 @@ pub fn extract_migration_metadata(ast: &File, app_label: &str, name: &str) -> Re
 ///
 /// `app_label` and `name` are authoritative. Filesystem callers derive them from
 /// the migration path rather than trusting duplicate identity fields in source.
+/// Every cfg-gated `migration()` entrypoint is validated; the first supplies the
+/// returned metadata.
 ///
 /// Swappable and optional dependencies are parsed from their constructor forms.
 /// Operation payloads that this parser cannot reconstruct exactly are rejected
@@ -64,27 +54,38 @@ pub fn extract_migration_metadata_strict(
 	app_label: &str,
 	name: &str,
 ) -> Result<Migration> {
-	let migration_expr = ast
-		.items
-		.iter()
-		.find_map(|item| {
-			let Item::Fn(function) = item else {
+	let mut expressions = ast.items.iter().filter_map(migration_expression);
+	let migration_expr = expressions.next().ok_or_else(|| {
+		MigrationError::InvalidMigration("Missing migration() entrypoint".to_string())
+	})?;
+	let migration = extract_migration_expression_strict(ast, migration_expr, app_label, name)?;
+	for expression in expressions {
+		extract_migration_expression_strict(ast, expression, app_label, name)?;
+	}
+	Ok(migration)
+}
+
+fn migration_expression(item: &Item) -> Option<&Expr> {
+	let Item::Fn(function) = item else {
+		return None;
+	};
+	(function.sig.ident == "migration")
+		.then(|| function.block.stmts.last())
+		.flatten()
+		.and_then(|statement| {
+			let Stmt::Expr(expression, _) = statement else {
 				return None;
 			};
-			(function.sig.ident == "migration")
-				.then(|| function.block.stmts.last())
-				.flatten()
-				.and_then(|statement| {
-					let Stmt::Expr(expression, _) = statement else {
-						return None;
-					};
-					Some(expression)
-				})
+			Some(expression)
 		})
-		.ok_or_else(|| {
-			MigrationError::InvalidMigration("Missing migration() entrypoint".to_string())
-		})?;
+}
 
+fn extract_migration_expression_strict(
+	ast: &File,
+	migration_expr: &Expr,
+	app_label: &str,
+	name: &str,
+) -> Result<Migration> {
 	if matches!(migration_expr, Expr::Call(_) | Expr::MethodCall(_)) {
 		let mut migration = parse_migration_builder_strict(migration_expr, app_label, name)?;
 		if let Some(standalone_atomic) = extract_atomic(ast) {

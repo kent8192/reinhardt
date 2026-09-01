@@ -331,20 +331,38 @@ fn is_target_struct(expression: &ExprStruct) -> bool {
 	) {
 		return false;
 	}
-	let segments = expression.path.segments.iter().collect::<Vec<_>>();
-	if segments.len() == 1 {
-		return true;
-	}
-	let prefix = segments[..segments.len() - 1]
-		.iter()
-		.map(|segment| segment.ident.to_string())
-		.collect::<Vec<_>>();
-	prefix.starts_with(&[
-		"reinhardt".to_owned(),
-		"db".to_owned(),
-		"migrations".to_owned(),
-	]) || prefix.starts_with(&["reinhardt_db".to_owned(), "migrations".to_owned()])
-		|| prefix.starts_with(&["crate".to_owned(), "migrations".to_owned()])
+	let module = if name == "Migration" {
+		"migration"
+	} else {
+		"operations"
+	};
+	path_matches(&expression.path, &[name.as_str()])
+		|| path_matches(
+			&expression.path,
+			&["reinhardt", "db", "migrations", name.as_str()],
+		) || path_matches(
+		&expression.path,
+		&["reinhardt", "db", "migrations", module, name.as_str()],
+	) || path_matches(
+		&expression.path,
+		&["reinhardt_db", "migrations", name.as_str()],
+	) || path_matches(
+		&expression.path,
+		&["reinhardt_db", "migrations", module, name.as_str()],
+	) || path_matches(&expression.path, &["crate", "migrations", name.as_str()])
+		|| path_matches(
+			&expression.path,
+			&["crate", "migrations", module, name.as_str()],
+		)
+}
+
+fn path_matches(path: &syn::Path, expected: &[&str]) -> bool {
+	path.segments.len() == expected.len()
+		&& path
+			.segments
+			.iter()
+			.zip(expected)
+			.all(|(segment, expected)| segment.ident == *expected)
 }
 
 fn convert_struct(expression: &ExprStruct) -> Result<TokenStream> {
@@ -1251,6 +1269,31 @@ fn migration() -> Migration {
 	}
 
 	#[test]
+	fn rejects_invalid_later_cfg_gated_migration_entrypoint() {
+		let source = r#"// reinhardt-migration-source: 1
+#[cfg(feature = "postgres")]
+fn migration() -> Migration {
+    Migration::new("0001_backend", "app")
+}
+
+#[cfg(feature = "sqlite")]
+fn migration() -> Migration {
+    Migration::new("0001_backend", "app").customize()
+}
+"#;
+
+		let error = upgrade_source(source).unwrap_err();
+
+		match error {
+			MigrationError::InvalidMigration(message) => assert_eq!(
+				message,
+				"Migration builder method 'customize' is unsupported or malformed"
+			),
+			other => panic!("expected invalid migration error, got {other}"),
+		}
+	}
+
+	#[test]
 	fn preserves_comments_inside_converted_literals() {
 		let source = r#"fn migration() -> Migration {
     Migration {
@@ -1282,10 +1325,18 @@ fn migration() -> Migration {
 	#[test]
 	fn ignores_application_types_with_framework_like_names() {
 		let application: ExprStruct = syn::parse_str("app::Migration { value: 1 }").unwrap();
+		let nested_application: ExprStruct =
+			syn::parse_str("crate::migrations::helpers::Migration { value: 1 }").unwrap();
 		let framework: ExprStruct =
 			syn::parse_str("reinhardt::db::migrations::Migration { value: 1 }").unwrap();
+		let framework_module: ExprStruct = syn::parse_str(
+			"crate::migrations::operations::InterleaveSpec { parent_table: String::new(), parent_columns: vec![] }",
+		)
+		.unwrap();
 
 		assert!(!is_target_struct(&application));
+		assert!(!is_target_struct(&nested_application));
 		assert!(is_target_struct(&framework));
+		assert!(is_target_struct(&framework_module));
 	}
 }

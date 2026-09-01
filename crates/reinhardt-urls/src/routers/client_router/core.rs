@@ -102,10 +102,12 @@ fn create_navigation_signals_in_scope(initial_path: String) -> NavigationSignals
 	let current_match_is_unmatched = Signal::new(false);
 	let current_navigation_guard_approval = Signal::new(None);
 	let path_for_invalidation = current_path;
+	let unmatched_for_invalidation = current_match_is_unmatched;
 	let approval_for_invalidation = current_navigation_guard_approval;
 	Effect::new_with_timing(
 		move || {
 			let _ = path_for_invalidation.get();
+			unmatched_for_invalidation.set(false);
 			approval_for_invalidation.set(None);
 		},
 		EffectTiming::Layout,
@@ -2420,6 +2422,23 @@ mod tests {
 				.expect("unmatched navigation commits");
 
 			assert_eq!(router.render_current().render_to_string(), "NotFound");
+		});
+	}
+
+	#[test]
+	fn public_path_change_recovers_from_forced_unmatched_rendering() {
+		ReactiveScope::run(|| {
+			let router = ClientRouter::new()
+				.route("valid", "/valid/", || page_with_text("valid"))
+				.not_found(not_found_page);
+			router
+				.commit_unmatched("/denied/", NavigationType::Initial, 0)
+				.expect("forced unmatched navigation commits");
+			assert_eq!(router.render_current().render_to_string(), "NotFound");
+
+			router.current_path().set("/valid/".to_owned());
+
+			assert_eq!(router.render_current().render_to_string(), "valid");
 		});
 	}
 

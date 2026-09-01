@@ -40,6 +40,38 @@ pub fn upgrade_source(source: &str) -> Result<UpgradeResult> {
 		)));
 	}
 
+	let (mut current, converted) = convert_legacy_source(source)?;
+
+	if marker == Some(CURRENT_SOURCE_FORMAT_VERSION) && converted {
+		return Err(invalid_shape(
+			"source format marker is current but legacy struct-literal syntax remains",
+		));
+	}
+	if !converted {
+		let file = syn::parse_file(&current).map_err(|error| {
+			MigrationError::InvalidMigration(format!("failed to parse migration source: {error}"))
+		})?;
+		super::ast_parser::extract_migration_metadata_strict(&file, "<app>", "<name>")?;
+	}
+
+	let needs_marker = marker != Some(CURRENT_SOURCE_FORMAT_VERSION);
+	if needs_marker {
+		current = add_marker(&current, marker.is_some());
+	}
+
+	if converted {
+		validate_semantics(source, &current)?;
+	}
+
+	Ok(UpgradeResult {
+		changed: current != source,
+		source: current,
+		from_version: marker,
+		to_version: CURRENT_SOURCE_FORMAT_VERSION,
+	})
+}
+
+fn convert_legacy_source(source: &str) -> Result<(String, bool)> {
 	let mut current = source.to_string();
 	let mut converted = false;
 	loop {
@@ -91,38 +123,14 @@ pub fn upgrade_source(source: &str) -> Result<UpgradeResult> {
 		current = apply_edits(&current, edits)?;
 		converted = true;
 	}
-
-	if marker == Some(CURRENT_SOURCE_FORMAT_VERSION) && converted {
-		return Err(invalid_shape(
-			"source format marker is current but legacy struct-literal syntax remains",
-		));
-	}
-	if !converted {
-		let file = syn::parse_file(&current).map_err(|error| {
-			MigrationError::InvalidMigration(format!("failed to parse migration source: {error}"))
-		})?;
-		super::ast_parser::extract_migration_metadata_strict(&file, "<app>", "<name>")?;
-	}
-
-	let needs_marker = marker != Some(CURRENT_SOURCE_FORMAT_VERSION);
-	if needs_marker {
-		current = add_marker(&current, marker.is_some());
-	}
-
-	if converted {
-		validate_semantics(source, &current)?;
-	}
-
-	Ok(UpgradeResult {
-		changed: current != source,
-		source: current,
-		from_version: marker,
-		to_version: CURRENT_SOURCE_FORMAT_VERSION,
-	})
+	Ok((current, converted))
 }
 
 fn parse_marker(source: &str) -> Result<Option<u32>> {
-	let first_non_empty = source.lines().find(|line| !line.trim().is_empty());
+	let content_start = shebang_end(source).unwrap_or(0);
+	let first_non_empty = source[content_start..]
+		.lines()
+		.find(|line| !line.trim().is_empty());
 	let Some(first_non_empty) = first_non_empty else {
 		return Err(invalid_shape("migration source is empty"));
 	};
@@ -165,20 +173,30 @@ pub(crate) fn validate_source_version(source: &str) -> Result<()> {
 }
 
 fn first_syntax_offset(source: &str) -> Result<usize> {
-	let tokens = source
+	let source_start = shebang_end(source).unwrap_or(0);
+	let syntax = &source[source_start..];
+	let tokens = syntax
 		.parse::<TokenStream>()
 		.map_err(|error| invalid_shape(&format!("failed to lex migration source: {error}")))?;
 	let Some(token) = tokens.into_iter().next() else {
 		return Ok(source.len());
 	};
-	span_offset(source, token.span().start())
+	span_offset(syntax, token.span().start())
+		.map(|offset| source_start + offset)
 		.ok_or_else(|| invalid_shape("cannot locate first Rust syntax token in source"))
+}
+
+fn shebang_end(source: &str) -> Option<usize> {
+	let line_end = source.find('\n').unwrap_or(source.len());
+	let line = &source[..line_end];
+	(line.starts_with("#!") && !line.starts_with("#!["))
+		.then_some(line_end + usize::from(line_end < source.len()))
 }
 
 fn leading_marker_lines(source: &str, syntax_offset: usize) -> Vec<&str> {
 	let end = syntax_offset.min(source.len());
 	let bytes = source.as_bytes();
-	let mut index = 0;
+	let mut index = shebang_end(source).unwrap_or(0).min(end);
 	let mut markers = Vec::new();
 	while index < end {
 		if bytes[index].is_ascii_whitespace() {
@@ -725,9 +743,10 @@ fn apply_edits(source: &str, mut edits: Vec<(usize, usize, String)>) -> Result<S
 
 fn add_marker(source: &str, replace_existing: bool) -> String {
 	let marker = format!("{MARKER_PREFIX} {CURRENT_SOURCE_FORMAT_VERSION}\n");
+	let shebang_end = shebang_end(source).unwrap_or(0);
 	if replace_existing {
-		let mut offset = 0;
-		for line in source.split_inclusive('\n') {
+		let mut offset = shebang_end;
+		for line in source[shebang_end..].split_inclusive('\n') {
 			if !line.trim().is_empty() {
 				let trimmed = line.trim_start();
 				if trimmed.starts_with(MARKER_PREFIX) {
@@ -742,7 +761,11 @@ fn add_marker(source: &str, replace_existing: bool) -> String {
 			offset += line.len();
 		}
 	}
-	format!("{marker}{source}")
+	format!(
+		"{}{marker}{}",
+		&source[..shebang_end],
+		&source[shebang_end..]
+	)
 }
 
 fn preserve_comments(original: &str, replacement: String) -> String {
@@ -844,7 +867,8 @@ fn raw_string_end(source: &str, start: usize) -> Option<usize> {
 }
 
 fn validate_semantics(before: &str, after: &str) -> Result<()> {
-	let before_file = syn::parse_file(before).map_err(|error| {
+	let before = convert_legacy_source(before)?.0;
+	let before_file = syn::parse_file(&before).map_err(|error| {
 		MigrationError::InvalidMigration(format!(
 			"failed to parse legacy migration source: {error}"
 		))
@@ -956,6 +980,64 @@ fn migration() -> Migration {
 				.source
 				.starts_with("// reinhardt-migration-source: 1\n")
 		);
+	}
+
+	#[test]
+	fn preserves_shebang_before_source_marker() {
+		let source = "#!/usr/bin/env rust-script\nfn migration() -> Migration { Migration::new(\"0001\", \"app\") }\n";
+		let result = upgrade_source(source).unwrap();
+
+		assert!(
+			result
+				.source
+				.starts_with("#!/usr/bin/env rust-script\n// reinhardt-migration-source: 1\n")
+		);
+		assert_eq!(
+			upgrade_source(&result.source).unwrap().source,
+			result.source
+		);
+	}
+
+	#[test]
+	fn validates_semantics_for_legacy_column_type_aliases() {
+		let source = r#"fn migration() -> Migration {
+    Migration {
+        name: "0001_initial".to_string(),
+        app_label: "app".to_string(),
+        operations: vec![Operation::CreateTable {
+            name: "items".to_string(),
+            columns: vec![ColumnDefinition {
+                name: "id".to_string(),
+                field_type: FieldType::Integer,
+                not_null: true,
+                unique: false,
+                primary_key: true,
+                auto_increment: false,
+                default: None,
+                generated: None,
+                domain: None,
+            }],
+            constraints: vec![],
+            without_rowid: None,
+            interleave_in_parent: None,
+            partition: None,
+        }],
+        dependencies: vec![],
+        replaces: vec![],
+        atomic: true,
+        initial: None,
+        state_only: false,
+        database_only: false,
+        swappable_dependencies: vec![],
+        optional_dependencies: vec![],
+    }
+}
+"#;
+
+		let result = upgrade_source(source).unwrap();
+
+		assert!(result.changed);
+		assert!(result.source.contains("ColumnDefinition :: new"));
 	}
 
 	#[test]

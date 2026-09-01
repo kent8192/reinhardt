@@ -1526,6 +1526,7 @@ where
 		self.refresh_dirty();
 		self.values_signal.set(self.get_values());
 		self.sync_observed_values();
+		self.sync_runtime_widget_errors();
 		if self.revalidate_on == RevalidateOn::Change {
 			let _ = self.trigger();
 		}
@@ -1545,6 +1546,7 @@ where
 		self.path_errors.set(HashMap::new());
 		self.values_signal.set(values);
 		self.sync_observed_values();
+		self.sync_runtime_widget_errors();
 		self.sync_first_error();
 		if self.revalidate_on == RevalidateOn::Change {
 			let _ = self.trigger();
@@ -1725,6 +1727,7 @@ where
 		self.refresh_dirty();
 		self.values_signal.set(self.get_values());
 		self.sync_observed_values();
+		self.sync_runtime_widget_errors();
 	}
 
 	/// Makes the current values the defaults and clears dirty state.
@@ -2119,6 +2122,17 @@ where
 
 	fn sync_observed_values(&self) {
 		*self.observed_values.borrow_mut() = self.get_values();
+	}
+
+	fn sync_runtime_widget_errors(&self) {
+		let custom_widget_errors = collect_custom_widget_errors(&self.form);
+		sync_custom_widget_errors_in_state(
+			&self.state,
+			&self.custom_widget_error_fields,
+			&custom_widget_errors,
+			&self.collection_errors,
+			&self.path_errors,
+		);
 	}
 
 	fn rebuild_path_default_values(&self) {

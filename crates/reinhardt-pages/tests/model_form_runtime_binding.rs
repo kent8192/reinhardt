@@ -6,7 +6,7 @@ use reinhardt_core::model_form::{
 	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError,
 	ModelFormPolicy, ModelFormSchema, NativeModelFormPayload,
 };
-use reinhardt_core::reactive::{Effect, EffectTiming};
+use reinhardt_core::reactive::{Effect, EffectTiming, runtime::with_runtime};
 use reinhardt_pages::component::{
 	ControlKind, ControlValue, ControlWriteOutcome, NumberParseErrorKind,
 };
@@ -484,6 +484,45 @@ fn numeric_binding_rejection_and_snapshot_preserve_value_and_error() {
 
 		runtime.reset();
 		assert_eq!(form.value("count"), None);
+		assert!(runtime.get_field_state(form.count_field()).error.is_none());
+	});
+}
+
+#[rstest]
+fn programmatic_numeric_updates_clear_parse_errors() {
+	reinhardt_core::reactive::ReactiveScope::run(|| {
+		// Arrange
+		let form = binding_form!();
+		let runtime = use_form(&form).build();
+		let binding =
+			into_control_binding::<NumberBinding, _>(runtime.field(form.count_field()), ());
+		binding
+			.write(ControlValue::Text("7".to_owned()))
+			.expect("valid integer commits");
+		binding
+			.write(ControlValue::Text("1e".to_owned()))
+			.expect("numeric rejection is a write outcome");
+		assert!(runtime.get_field_state(form.count_field()).error.is_some());
+
+		// Act
+		runtime.set_value(form.count_field(), 9_i64);
+		with_runtime(|runtime| runtime.flush_updates());
+
+		// Assert
+		assert_eq!(form.value("count"), Some(serde_json::json!(9)));
+		assert!(
+			form.runtime_custom_widget_error(form.count_field())
+				.is_none(),
+			"the generated numeric parse error must be cleared"
+		);
+		assert!(runtime.get_field_state(form.count_field()).error.is_none());
+
+		binding
+			.write(ControlValue::Text("1e".to_owned()))
+			.expect("numeric rejection is a write outcome");
+		let values = runtime.get_values();
+		runtime.set_values(values);
+		with_runtime(|runtime| runtime.flush_updates());
 		assert!(runtime.get_field_state(form.count_field()).error.is_none());
 	});
 }

@@ -2322,6 +2322,7 @@ fn generate_model_form(
 		model_form_number_error_declarations,
 		model_form_number_error_initializers,
 		model_form_number_error_resets,
+		model_form_number_error_clearer,
 		model_form_runtime_binding_arms,
 		model_form_custom_error_arms,
 		model_form_custom_error_setters,
@@ -2356,6 +2357,12 @@ fn generate_model_form(
 			let resets = fields.iter().map(|field| {
 				let error = format_ident!("__{}_number_parse_error", field, span = field.span());
 				quote!(self.#error.set(::core::option::Option::None);)
+			});
+			let clear_arms = fields.iter().map(|field| {
+				let error = format_ident!("__{}_number_parse_error", field, span = field.span());
+				let name = field.to_string();
+				let name = name.strip_prefix("r#").unwrap_or(&name);
+				quote!(#name => self.#error.set(::core::option::Option::None),)
 			});
 			let binding_arms = fields.iter().map(|field| {
 				let variant = field_variant_ident(field);
@@ -2394,6 +2401,14 @@ fn generate_model_form(
 				quote!(#(#number_error_declarations)*),
 				quote!(#(#number_error_initializers)*),
 				quote!(#(#resets)*),
+				quote! {
+					fn __clear_number_parse_error(&self, field: &str) {
+						match field {
+							#(#clear_arms)*
+							_ => {}
+						}
+					}
+				},
 				quote!(#(#binding_arms)*),
 				quote!(#(#custom_error_arms)*),
 				quote!(#(#custom_error_setters,)*),
@@ -2405,6 +2420,9 @@ fn generate_model_form(
 			quote! {},
 			quote! {},
 			quote! {},
+			quote! {
+				fn __clear_number_parse_error(&self, _field: &str) {}
+			},
 			quote! {},
 			quote! {},
 			quote! {},
@@ -2878,6 +2896,7 @@ fn generate_model_form(
 			impl #form_ident {
 				#(#model_form_field_accessors)*
 				#model_form_binding_support
+				#model_form_number_error_clearer
 
 				fn new() -> Self {
 					let __model_state = ::std::rc::Rc::new(
@@ -2915,6 +2934,9 @@ fn generate_model_form(
 					drop(state);
 					if changed {
 						self.__state_version.update(|version| *version = version.wrapping_add(1));
+					}
+					if result.is_ok() {
+						self.__clear_number_parse_error(field);
 					}
 					result
 				}
@@ -3207,6 +3229,8 @@ fn generate_model_form(
 								error.to_string(),
 								::core::iter::empty::<(&str, &str)>(),
 							);
+							self.loading.set(false);
+							self.success.set(false);
 							self.error.set(::core::option::Option::Some(error.to_string()));
 							return ::core::result::Result::Err(error);
 						}
@@ -3965,6 +3989,7 @@ fn generate_model_form(
 						let _ = state.set_value(field, value.clone());
 					}
 					drop(state);
+					#model_form_number_error_resets
 					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 					for descriptor in <#schema_path as #pages_crate::form::ModelFormSchema>::fields() {
 						if descriptor.editable
@@ -4023,6 +4048,7 @@ fn generate_model_form(
 					if let ::core::result::Result::Err(error) = result {
 						panic!("model form field {:?} rejected value: {}", field_name, error);
 					}
+					self.__clear_number_parse_error(field_name);
 					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 					if let ::core::option::Option::Some(descriptor) =
 						<#schema_path as #pages_crate::form::ModelFormSchema>::fields()
@@ -4066,6 +4092,7 @@ fn generate_model_form(
 						let _ = state.clear_value(field_name);
 					}
 					drop(state);
+					self.__clear_number_parse_error(field_name);
 					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 					if <#schema_path as #pages_crate::form::ModelFormSchema>::fields()
 						.iter()

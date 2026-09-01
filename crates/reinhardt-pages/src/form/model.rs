@@ -291,7 +291,10 @@ where
 				self.values.insert(descriptor.name, converted);
 				Ok(())
 			}
-			Err(error) => Err(error),
+			Err(error) => {
+				self.values.remove(descriptor.name);
+				Err(error)
+			}
 		}
 	}
 
@@ -1486,6 +1489,10 @@ mod tests {
 	fn f32_fields_reject_values_that_would_narrow_to_infinity() {
 		let mut state = ModelFormState::<F32Schema, AllEditableModelFields>::new();
 
+		state
+			.set_value("ratio", serde_json::json!(1.5))
+			.expect("a finite value should be accepted");
+		assert_eq!(state.value("ratio"), Some(&serde_json::json!(1.5)));
 		assert!(
 			state
 				.set_value("ratio", serde_json::Value::String("1e100".to_owned()))

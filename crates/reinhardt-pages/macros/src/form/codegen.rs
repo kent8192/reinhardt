@@ -2698,17 +2698,17 @@ fn generate_model_form(
 	};
 	let model_form_number_validation = match &model_source.selection {
 		TypedModelFieldSelection::Fields(fields) => {
-			let checks = fields.iter().filter_map(|field| {
+			let checks = fields.iter().map(|field| {
 				let variant = field_variant_ident(field);
 				let error = format_ident!("__{}_number_parse_error", field, span = field.span());
-				Some(quote! {
+				quote! {
 					if let ::core::option::Option::Some(parse_error) = self.#error.get() {
 						error.add_field_error(
 							__ReinhardtModelFormField::#variant,
 							parse_error.to_string(),
 						);
 					}
-				})
+				}
 			});
 			quote! { #(#checks)* }
 		}

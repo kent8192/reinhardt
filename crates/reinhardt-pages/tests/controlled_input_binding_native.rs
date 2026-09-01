@@ -1207,7 +1207,7 @@ async fn range_binding_reconciles_native_control_bounds(reactive_scope: Reactive
 #[rstest]
 fn text_binding_accepts_an_input_type_with_text_fallback_semantics(reactive_scope: ReactiveScope) {
 	// Arrange
-	let value = signal_in_scope(&reactive_scope, "old".to_owned());
+	let value = signal_in_scope(&reactive_scope, "old\r\nvalue".to_owned());
 	let screen = render(
 		PageElement::new("input")
 			.attr("aria-label", "Fallback text target")
@@ -1215,12 +1215,15 @@ fn text_binding_accepts_an_input_type_with_text_fallback_semantics(reactive_scop
 			.control_binding(ControlBinding::text(value.clone())),
 	);
 	let input = screen.get_by_label("Fallback text target");
+	assert_eq!(value.get(), "oldvalue");
+	assert_eq!(input.value().as_deref(), Some("oldvalue"));
 
 	// Act
 	input
-		.dispatch(EventFixture::input().value("edited"))
+		.dispatch(EventFixture::input().value("edited\r\nvalue"))
 		.expect("unknown input type should use text fallback semantics");
 
 	// Assert
-	assert_eq!(value.get(), "edited");
+	assert_eq!(value.get(), "editedvalue");
+	assert_eq!(input.value().as_deref(), Some("editedvalue"));
 }

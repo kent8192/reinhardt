@@ -213,6 +213,36 @@ async fn ssr_renderer_omits_falsy_reactive_boolean_attributes() {
 	assert_eq!(html, "<button></button>");
 }
 
+#[tokio::test]
+async fn ssr_renderer_rejects_incompatible_reactive_control_shapes() {
+	// Arrange
+	let scope = ReactiveScope::new();
+	let (input, select) = scope.enter(|| {
+		let input = PageElement::new("input")
+			.attr("type", "text")
+			.reactive_attr("type", || Some("file".into()))
+			.control_binding(ControlBinding::text(Signal::new("secret".to_owned())))
+			.into_page();
+		let select = PageElement::new("select")
+			.attr("multiple", "multiple")
+			.reactive_attr("multiple", || Some("false".into()))
+			.control_binding(ControlBinding::select_many(Signal::new(vec![
+				"rust".to_owned(),
+			])))
+			.into_page();
+		(input, select)
+	});
+	let mut renderer = SsrRenderer::new();
+
+	// Act
+	let input_html = renderer.render_view(&input).await;
+	let select_html = renderer.render_view(&select).await;
+
+	// Assert
+	assert_eq!(input_html, "<input type=\"text\" value=\"secret\" />");
+	assert_eq!(select_html, "<select multiple=\"multiple\"></select>");
+}
+
 #[test]
 fn test_component_composition() {
 	let container = PageElement::new("div")

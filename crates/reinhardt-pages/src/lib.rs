@@ -422,6 +422,8 @@
 //! commands and already-canceled key events are treated as unknown. When a
 //! pointer-positioned number edit is sanitized before its inaccessible selection
 //! can be recovered, the error reports the browser's empty value.
+//! Reactive `type` and `multiple` updates are applied only while the resulting
+//! control remains compatible with its binding.
 //! Radio `value` expressions are evaluated once per rendered element. A bound
 //! single select projects only its first matching option in tree order during
 //! SSR, including options resolved inside a pending boundary; a multiple

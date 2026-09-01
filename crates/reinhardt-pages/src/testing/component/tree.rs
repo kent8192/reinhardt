@@ -1103,7 +1103,7 @@ impl ElementNode {
 			ControlKind::Text => {
 				self.tag.eq_ignore_ascii_case("textarea")
 					|| (self.tag.eq_ignore_ascii_case("input")
-						&& has_effective_text_type(self.attr("type")))
+						&& crate::control_binding::is_effective_text_input_type(self.attr("type")))
 			}
 			ControlKind::Number => {
 				self.tag.eq_ignore_ascii_case("input")
@@ -1226,9 +1226,20 @@ impl ElementNode {
 			{
 				continue;
 			}
+			let value = attribute.value();
+			if self.control_binding.as_ref().is_some_and(|binding| {
+				!crate::control_binding::controlled_attribute_update_is_supported(
+					&self.tag,
+					binding.kind(),
+					attribute.name(),
+					value.as_deref(),
+				)
+			}) {
+				continue;
+			}
 			self.attrs
 				.retain(|(name, _)| !name.eq_ignore_ascii_case(attribute.name()));
-			if let Some(value) = attribute.value()
+			if let Some(value) = value
 				&& (!is_boolean_attr(attribute.name()) || is_boolean_attr_truthy(&value))
 			{
 				self.attrs
@@ -1277,32 +1288,6 @@ impl ElementNode {
 	}
 }
 
-fn has_effective_text_type(input_type: Option<&str>) -> bool {
-	let Some(input_type) = input_type else {
-		return true;
-	};
-	crate::control_binding::is_text_input_type(input_type)
-		|| ![
-			"button",
-			"checkbox",
-			"date",
-			"datetime-local",
-			"file",
-			"hidden",
-			"image",
-			"month",
-			"number",
-			"radio",
-			"range",
-			"reset",
-			"submit",
-			"time",
-			"week",
-		]
-		.iter()
-		.any(|known| input_type.eq_ignore_ascii_case(known))
-}
-
 fn normalize_native_control_value(
 	element: &ElementNode,
 	binding: &ControlBinding,
@@ -1318,7 +1303,8 @@ fn normalize_native_control_value(
 	if binding.kind() == ControlKind::Text && input_type.eq_ignore_ascii_case("color") {
 		return ControlValue::Text(normalize_native_color_value(&raw));
 	}
-	if binding.kind() == ControlKind::Text && crate::control_binding::is_text_input_type(input_type)
+	if binding.kind() == ControlKind::Text
+		&& crate::control_binding::is_effective_text_input_type(Some(input_type))
 	{
 		let mut normalized = raw.replace(['\r', '\n'], "");
 		if input_type.eq_ignore_ascii_case("email")

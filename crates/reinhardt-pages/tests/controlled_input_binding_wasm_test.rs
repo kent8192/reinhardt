@@ -284,6 +284,127 @@ fn reactive_password_type_removes_the_serialized_bound_value(#[case] nested_in_r
 #[case(false)]
 #[case(true)]
 #[wasm_bindgen_test]
+fn reactive_text_binding_rejects_file_type_transition(#[case] nested_in_reactive_if: bool) {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_root = document.create_element("div").expect("root");
+		let _cleanup = AttachedRootCleanup(raw_root.clone());
+		let root = Element::new(raw_root);
+		let file_type = Signal::new(false);
+		let reactive_file_type = file_type;
+		let value = Signal::new("bound".to_owned());
+		let bound_value = value;
+		let input = move || {
+			let reactive_file_type = reactive_file_type;
+			PageElement::new("input")
+				.attr("type", "text")
+				.reactive_attr("type", move || {
+					Some(if reactive_file_type.get() {
+						"file".into()
+					} else {
+						"text".into()
+					})
+				})
+				.control_binding(ControlBinding::text(bound_value))
+				.into_page()
+		};
+		let page = if nested_in_reactive_if {
+			Page::reactive_if(|| true, input, || Page::Empty)
+		} else {
+			input()
+		};
+		page.mount(&root).expect("mount");
+		let input: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("input")
+			.unchecked_into();
+
+		file_type.set(true);
+		with_runtime(|runtime| runtime.flush_updates());
+
+		assert_eq!(input.type_(), "text");
+		assert_eq!(input.value(), "bound");
+		assert_eq!(value.get(), "bound");
+	});
+}
+
+#[rstest]
+#[case(false, false)]
+#[case(false, true)]
+#[case(true, false)]
+#[case(true, true)]
+#[wasm_bindgen_test]
+fn reactive_select_cardinality_changes_are_rejected(
+	#[case] starts_multiple: bool,
+	#[case] nested_in_reactive_if: bool,
+) {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_root = document.create_element("div").expect("root");
+		let _cleanup = AttachedRootCleanup(raw_root.clone());
+		let root = Element::new(raw_root);
+		let multiple = Signal::new(starts_multiple);
+		let reactive_multiple = multiple;
+		let binding = if starts_multiple {
+			ControlBinding::select_many(Signal::new(vec!["rust".to_owned()]))
+		} else {
+			ControlBinding::select_one(Signal::new("rust".to_owned()))
+		};
+		let select = move || {
+			let reactive_multiple = reactive_multiple;
+			let element = PageElement::new("select");
+			let element = if starts_multiple {
+				element.attr("multiple", "multiple")
+			} else {
+				element
+			};
+			element
+				.reactive_attr("multiple", move || {
+					Some(reactive_multiple.get().to_string().into())
+				})
+				.control_binding(binding.clone())
+				.child(
+					PageElement::new("option")
+						.attr("value", "rust")
+						.child("Rust"),
+				)
+				.child(
+					PageElement::new("option")
+						.attr("value", "wasm")
+						.child("WebAssembly"),
+				)
+				.into_page()
+		};
+		let page = if nested_in_reactive_if {
+			Page::reactive_if(|| true, select, || Page::Empty)
+		} else {
+			select()
+		};
+		page.mount(&root).expect("mount");
+		let select: web_sys::HtmlSelectElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("select")
+			.unchecked_into();
+
+		multiple.set(!starts_multiple);
+		with_runtime(|runtime| runtime.flush_updates());
+
+		assert_eq!(select.multiple(), starts_multiple);
+	});
+}
+
+#[rstest]
+#[case(false)]
+#[case(true)]
+#[wasm_bindgen_test]
 fn duplicate_static_password_type_uses_the_browser_first_value(
 	#[case] nested_in_reactive_if: bool,
 ) {
@@ -332,6 +453,11 @@ struct HydratedReactivePasswordInput {
 	value: Signal<String>,
 }
 
+struct HydratedRejectedReactiveTypeInput {
+	file_type: Signal<bool>,
+	value: Signal<String>,
+}
+
 struct HydratedDuplicateStaticPasswordInput {
 	value: Signal<String>,
 }
@@ -358,6 +484,33 @@ impl Component for HydratedReactivePasswordInput {
 				})
 			})
 			.control_binding(ControlBinding::text(self.value))
+			.into_page()
+	}
+}
+
+impl Component for HydratedRejectedReactiveTypeInput {
+	fn name() -> &'static str {
+		"HydratedRejectedReactiveTypeInput"
+	}
+
+	fn render(&self) -> Page {
+		let file_type = self.file_type;
+		let value = self.value;
+		PageElement::new("div")
+			.child(Page::reactive(move || {
+				let reactive_file_type = file_type;
+				PageElement::new("input")
+					.attr("type", "text")
+					.reactive_attr("type", move || {
+						Some(if reactive_file_type.get() {
+							"file".into()
+						} else {
+							"text".into()
+						})
+					})
+					.control_binding(ControlBinding::text(value))
+					.into_page()
+			}))
 			.into_page()
 	}
 }
@@ -531,6 +684,40 @@ fn hydration_initial_password_type_removes_the_serialized_bound_value() {
 		assert_eq!(input.value(), "secret");
 		assert_eq!(input.get_attribute("value"), None);
 		assert_eq!(value.get(), "secret");
+	});
+}
+
+#[wasm_bindgen_test]
+fn hydration_preserves_an_adopted_control_after_rejecting_its_initial_type() {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_root = document.create_element("div").expect("root");
+		let raw_input = document.create_element("input").expect("input");
+		raw_input.set_attribute("type", "text").expect("input type");
+		raw_input
+			.set_attribute("value", "server")
+			.expect("serialized value");
+		raw_root.append_child(&raw_input).expect("SSR child");
+		let input: web_sys::HtmlInputElement = raw_input.clone().unchecked_into();
+		let _cleanup = AttachedRootCleanup(raw_root.clone());
+		let root = Element::new(raw_root);
+		let file_type = Signal::new(true);
+		let value = Signal::new("server".to_owned());
+		let _state = SsrStateElement::install(&document);
+
+		reinhardt_pages::hydration::hydrate(
+			&HydratedRejectedReactiveTypeInput { file_type, value },
+			&root,
+		)
+		.expect("hydrate");
+
+		assert!(raw_input.is_same_node(root.as_web_sys().first_element_child().as_deref()));
+		assert_eq!(input.type_(), "text");
+		assert_eq!(input.value(), "server");
+		assert_eq!(value.get(), "server");
 	});
 }
 

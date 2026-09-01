@@ -277,7 +277,9 @@ default, so a later form reset preserves the pre-hydration control state. Later
 signal changes update the control. Password bindings set only the live value
 property and never expose the secret through an SSR or DOM `value` attribute.
 Reactive attributes reconcile a binding only when they can change the control's
-value, so unrelated presentation updates preserve an in-progress edit. See the
+value, so unrelated presentation updates preserve an in-progress edit. A
+reactive `type` or `multiple` update that would make the control incompatible
+with its binding is ignored, keeping the mounted controller usable. See the
 [React migration guide](docs/react_to_reinhardt.md#controlled-and-uncontrolled-form-controls)
 for event ordering, IME, numeric-error, and low-level escape-hatch details.
 For `input[type=number]`, the binding combines `beforeinput` metadata with the

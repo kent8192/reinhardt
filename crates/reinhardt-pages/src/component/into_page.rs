@@ -368,7 +368,18 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 						let binding = control_binding.clone();
 						let initializing = std::rc::Rc::clone(&initializing_reactive_attributes);
 						crate::reactive::Effect::new(move || {
-							match attribute.value() {
+							let value = attribute.value();
+							if binding.as_ref().is_some_and(|binding| {
+								!crate::control_binding::controlled_attribute_update_is_supported(
+									&element.as_web_sys().tag_name(),
+									binding.kind(),
+									attribute.name(),
+									value.as_deref(),
+								)
+							}) {
+								return;
+							}
+							match value {
 								Some(value)
 									if !is_safe_html_attribute(attribute.name(), &value) =>
 								{

@@ -661,6 +661,11 @@ fn validate_struct_fields(
 			));
 		};
 		let name = name.to_string();
+		if !field.attrs.is_empty() {
+			return Err(invalid_shape(&format!(
+				"generated struct literal field '{name}' contains attributes; conditional fields are unsupported"
+			)));
+		}
 		if !allowed.iter().any(|allowed| *allowed == name) {
 			return Err(invalid_shape(&format!(
 				"generated struct literal contains unsupported field '{name}'"
@@ -1264,6 +1269,29 @@ fn migration() -> Migration {
 		assert_eq!(
 			error.to_string(),
 			"Invalid migration: generated migration field 'operations' contains an attributed operation; conditional entries are unsupported"
+		);
+	}
+
+	#[test]
+	fn rejects_cfg_attributes_on_struct_fields() {
+		let source = r#"fn migration() -> Migration {
+    Migration {
+        name: "0001_initial".to_string(),
+        app_label: "app".to_string(),
+        operations: vec![],
+        dependencies: vec![],
+        #[cfg(feature = "atomic")]
+        atomic: true,
+        ..Default::default()
+    }
+}
+"#;
+
+		let error = upgrade_source(source).unwrap_err();
+
+		assert_eq!(
+			error.to_string(),
+			"Invalid migration: generated struct literal field 'atomic' contains attributes; conditional fields are unsupported"
 		);
 	}
 

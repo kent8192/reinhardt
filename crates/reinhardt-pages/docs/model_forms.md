@@ -86,6 +86,10 @@ but keep relation imports and other ORM-only surrounding items explicitly
 native-gated. WASM then needs only the contract types, not `Cluster`, its
 relationship graph, or a database driver.
 
+The native legacy schema retains target metadata for generated relationship
+identifiers outside the public allowlist. This lets `InlineFormSet` validate a
+server-owned relationship without exposing it in the named payload.
+
 The additive [`ModelFormContractSchema`](https://docs.rs/reinhardt-core/latest/reinhardt_core/model_form/trait.ModelFormContractSchema.html)
 bridge uses `contract_fields()` and `contract_default_boolean_is_true()` so
 legacy `ModelFormSchema::fields()` calls remain unambiguous for glob imports.
@@ -239,6 +243,9 @@ contract requires `fields: [...]`; `exclude: [...]` and
 supported in model-backed forms. Obtain request-scoped values through normal
 server-side request handling or injection instead. Ordinary forms may still
 use `ambient_arguments` for non-field values.
+
+Raw Rust identifiers use their unraw wire name throughout selection and
+submission, so `r#type` is encoded and looked up as the multipart part `type`.
 
 The selected model descriptor must match the typed server-function argument:
 scalar descriptors use JSON arguments, required file/image descriptors use

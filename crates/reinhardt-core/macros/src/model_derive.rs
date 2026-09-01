@@ -3377,7 +3377,7 @@ fn generate_model_form_support(
 	} else {
 		quote!(match field { #(#default_true_boolean_arms,)* _ => false })
 	};
-	let relation_target_match_arms = editable_fields
+	let relation_target_match_arms = field_infos
 		.iter()
 		.filter(|field| field.is_fk_id_field)
 		.map(|field| {

@@ -325,14 +325,7 @@ where
 			}
 		};
 		candidate.apply_payload(&self.data)?;
-		for (field, value) in &self.trusted_field_values {
-			if self.persistence_mode == ModelFormPersistenceMode::Update
-				&& T::primary_key_fields().contains(&field.as_str())
-			{
-				continue;
-			}
-			T::set_trusted_field_json(&mut candidate, field, value.clone())?;
-		}
+		self.apply_trusted_field_values(&mut candidate, None)?;
 
 		if let Some(validator) = &self.model_validator {
 			validator(&candidate).map_err(|errors| ModelFormError::ModelValidation { errors })?;
@@ -348,6 +341,23 @@ where
 			.map(String::as_str)
 			.chain(additional_field)
 			.collect()
+	}
+
+	fn apply_trusted_field_values(
+		&self,
+		candidate: &mut T,
+		excluded_field: Option<&str>,
+	) -> Result<(), ModelFormError> {
+		for (field, value) in &self.trusted_field_values {
+			if excluded_field == Some(field.as_str())
+				|| (self.persistence_mode == ModelFormPersistenceMode::Update
+					&& T::primary_key_fields().contains(&field.as_str()))
+			{
+				continue;
+			}
+			T::set_trusted_field_json(candidate, field, value.clone())?;
+		}
+		Ok(())
 	}
 
 	/// Returns whether the current payload can produce a valid model candidate.
@@ -583,7 +593,8 @@ where
 
 	/// Performs structural validation before an inline formset assigns a generated parent key.
 	///
-	/// Trusted child fields remain deferred alongside the generated parent key.
+	/// Registered trusted child values are applied while only the generated parent key remains
+	/// deferred.
 	///
 	/// Model-level validation intentionally runs only after the real key is installed, so
 	/// validators may safely depend on that relationship.
@@ -625,6 +636,10 @@ where
 			}
 		};
 		if let Err(error) = candidate.apply_payload(&self.data) {
+			self.record_validation_error(&error);
+			return false;
+		}
+		if let Err(error) = self.apply_trusted_field_values(&mut candidate, Some(deferred_field)) {
 			self.record_validation_error(&error);
 			return false;
 		}

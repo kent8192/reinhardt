@@ -617,7 +617,8 @@ The function-like `#[server_fn]` API infers multipart transport when a
 client-visible argument is exactly `UploadedFile` or `Option<UploadedFile>`.
 Argument identifiers become multipart part names. All other client-visible
 arguments remain scalar JSON parts, and the response codec remains JSON; do
-not add a multipart codec option.
+not add a multipart codec option. Raw Rust identifiers use their unraw part
+name, such as `type` for `r#type`.
 
 ```rust,no_run
 use reinhardt_core::parsers::UploadedFile;

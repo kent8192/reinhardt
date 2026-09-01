@@ -807,7 +807,7 @@ mod tests {
 	#[model(
 		app_label = "forms",
 		table_name = "advanced_formset_required_child_models",
-		form = true,
+		form(name = RequiredChildCreateForm, fields(content)),
 		info = false
 	)]
 	#[derive(Clone, Deserialize, Serialize)]
@@ -1154,6 +1154,35 @@ mod tests {
 
 		assert_eq!(formset.child_forms()[0].instance().unwrap().parent_id, 1);
 		assert_eq!(executor.fetch_one_calls, 2);
+	}
+
+	#[test]
+	fn test_inline_formset_preflight_rejects_invalid_trusted_child_value() {
+		let parent = TestModel {
+			id: None,
+			name: "parent".to_owned(),
+			email: "parent@example.com".to_owned(),
+		};
+		let mut formset = InlineFormSet::<TestModel, RequiredChildModel>::for_create(
+			parent,
+			"parent_id".to_owned(),
+		);
+		let mut data = RequiredChildModelModelFormData::<AllEditableModelFields>::empty();
+		data.set_content("child".to_owned())
+			.expect("child content should be accepted");
+		let mut child_form = ModelForm::<RequiredChildModel>::from_payload(data);
+		child_form
+			.set_trusted_field_value("tenant_key", json!(7))
+			.expect("trusted values are decoded during candidate construction");
+		formset.add_child_form(child_form);
+
+		assert!(!formset.is_valid());
+		assert_eq!(
+			formset.child_forms()[0].form().errors().get("tenant_key"),
+			Some(&vec![
+				"invalid type: integer `7`, expected a string".to_owned()
+			])
+		);
 	}
 
 	#[test]

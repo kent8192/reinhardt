@@ -756,6 +756,7 @@ mod tests {
 	use std::sync::atomic::{AtomicUsize, Ordering};
 
 	use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
+	use reinhardt_core::validators::{ValidationError, ValidationErrors};
 	use reinhardt_db::associations::ForeignKeyField;
 	use reinhardt_db::orm::connection::{
 		DatabaseBackend, OrmExecutor, QueryResult, QueryValue, Row,
@@ -815,6 +816,26 @@ mod tests {
 		content: String,
 	}
 
+	fn validate_required_child<P: ModelFormPolicy>(
+		payload: &CleanedRequiredChildModelModelFormData<P>,
+	) -> Result<(), ValidationErrors> {
+		let mut errors = ValidationErrors::new();
+		if payload
+			.content()
+			.is_some_and(|content| content == "blocked child")
+		{
+			errors.add(
+				"_all",
+				ValidationError::Custom("generated child validation failed".to_owned()),
+			);
+		}
+		if errors.is_empty() {
+			Ok(())
+		} else {
+			Err(errors)
+		}
+	}
+
 	#[model(
 		app_label = "forms",
 		table_name = "advanced_formset_required_child_models",
@@ -822,12 +843,14 @@ mod tests {
 		info = false
 	)]
 	#[derive(Clone, Deserialize, Serialize)]
+	#[form(validate = validate_required_child)]
 	struct RequiredChildModel {
 		#[field(primary_key = true)]
 		id: Option<i64>,
 		#[rel(foreign_key, related_name = "required_child_models")]
 		parent: ForeignKeyField<TestModel>,
 		#[field(max_length = 1_000)]
+		#[form(trim)]
 		content: String,
 	}
 
@@ -1132,7 +1155,7 @@ mod tests {
 			"parent_id".to_owned(),
 		);
 		let mut data = RequiredChildModelModelFormData::<AllEditableModelFields>::empty();
-		data.set_content("invalid child".to_owned())
+		data.set_content(" valid child ".to_owned())
 			.expect("child content should be accepted");
 		formset.add_child_form(
 			ModelForm::<RequiredChildModel>::from_payload(data).with_model_validator(
@@ -1154,15 +1177,67 @@ mod tests {
 		assert_eq!(structurally_valid, true);
 		let mut executor = FormsetExecutor::new([
 			Ok(test_model_row(1, "parent")),
-			Ok(child_model_row(2, 1, "invalid child")),
+			Ok(child_model_row(2, 1, "valid child")),
 		]);
 
 		tokio_test::block_on(formset.save(&mut executor))
 			.expect("child validator should observe the generated parent key");
 
 		assert_eq!(formset.child_forms()[0].instance().unwrap().parent_id, 1);
+		assert_eq!(
+			formset.child_forms()[0].instance().unwrap().content,
+			"valid child"
+		);
 		assert_eq!(validator_calls.load(Ordering::SeqCst), 1);
 		assert_eq!(executor.fetch_one_calls, 2);
+	}
+
+	#[rstest]
+	fn test_inline_formset_generated_validator_rejects_before_parent_persistence() {
+		// Arrange
+		let model_validator_calls = Arc::new(AtomicUsize::new(0));
+		let model_validator_calls_for_candidate = Arc::clone(&model_validator_calls);
+		let parent = TestModel {
+			id: None,
+			name: "parent".to_owned(),
+			email: "parent@example.com".to_owned(),
+		};
+		let mut formset = InlineFormSet::<TestModel, RequiredChildModel>::for_create(
+			parent,
+			"parent_id".to_owned(),
+		);
+		let mut data = RequiredChildModelModelFormData::<AllEditableModelFields>::empty();
+		data.set_content(" blocked child ".to_owned())
+			.expect("child content should be accepted");
+		formset.add_child_form(
+			ModelForm::<RequiredChildModel>::from_payload(data).with_model_validator(move |_| {
+				model_validator_calls_for_candidate.fetch_add(1, Ordering::SeqCst);
+				Ok(())
+			}),
+		);
+		let mut executor = FormsetExecutor::new([Ok(test_model_row(1, "parent"))]);
+
+		// Act
+		let error = tokio_test::block_on(formset.save(&mut executor))
+			.expect_err("generated child validation should reject before parent persistence");
+
+		// Assert
+		assert_eq!(
+			error,
+			ModelFormError::ModelValidation {
+				errors: vec!["inline formset contains invalid child fields".to_owned()],
+			}
+		);
+		assert_eq!(
+			formset.child_forms()[0].form().errors(),
+			&std::collections::HashMap::from([(
+				"_all".to_owned(),
+				vec!["generated child validation failed".to_owned()],
+			)])
+		);
+		assert_eq!(model_validator_calls.load(Ordering::SeqCst), 0);
+		assert_eq!(executor.fetch_one_calls, 0);
+		assert_eq!(executor.queries, Vec::<String>::new());
 	}
 
 	#[test]

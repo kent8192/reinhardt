@@ -34,6 +34,18 @@ pub trait ModelFormValidatingPayload: Sized {
 	///
 	/// **Parity: P2.** Runs equivalent generated validation on native and WASM targets.
 	fn clean_and_validate(self) -> Result<Self::Cleaned, ValidationErrors>;
+
+	/// Normalizes and validates while deferring one server-trusted required field.
+	///
+	/// **Parity: P0.** Native inline formsets override this hidden compatibility
+	/// hook; other implementations retain strict create validation.
+	#[doc(hidden)]
+	fn clean_and_validate_with_deferred_required_field(
+		self,
+		_deferred_field: &str,
+	) -> Result<Self::Cleaned, ValidationErrors> {
+		self.clean_and_validate()
+	}
 }
 
 /// A raw model form payload that can validate a partial model update.

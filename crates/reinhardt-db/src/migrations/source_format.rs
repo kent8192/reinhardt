@@ -406,6 +406,11 @@ fn convert_migration(expression: &ExprStruct) -> Result<TokenStream> {
 	let mut builder = quote! { #migration_path :: new(#name, #app_label) };
 	let operations_expression = field_expression(expression, "operations")?;
 	for operation in vec_expressions(&operations_expression, "operations")? {
+		if expression_contains_attributes(&operation) {
+			return Err(invalid_shape(
+				"generated migration field 'operations' contains an attributed operation; conditional entries are unsupported",
+			));
+		}
 		builder.extend(quote! { .add_operation(#operation) });
 	}
 	let dependencies = field_expression(expression, "dependencies")?;
@@ -438,6 +443,23 @@ fn convert_migration(expression: &ExprStruct) -> Result<TokenStream> {
 		builder.extend(quote! { .add_optional_dependency(#dependency) });
 	}
 	Ok(builder)
+}
+
+fn expression_contains_attributes(expression: &Expr) -> bool {
+	#[derive(Default)]
+	struct AttributeVisitor {
+		found: bool,
+	}
+
+	impl<'ast> syn::visit::Visit<'ast> for AttributeVisitor {
+		fn visit_attribute(&mut self, _attribute: &'ast syn::Attribute) {
+			self.found = true;
+		}
+	}
+
+	let mut visitor = AttributeVisitor::default();
+	syn::visit::Visit::visit_expr(&mut visitor, expression);
+	visitor.found
 }
 
 fn convert_partition_def(expression: &ExprStruct) -> Result<TokenStream> {
@@ -1150,6 +1172,39 @@ fn migration() -> Migration {
 		let error = upgrade_source(source).unwrap_err();
 
 		assert!(error.to_string().contains("attributed tuple"));
+	}
+
+	#[test]
+	fn rejects_cfg_attributes_on_operations() {
+		let source = r#"fn migration() -> Migration {
+    Migration {
+        name: "0001_initial".to_string(),
+        app_label: "app".to_string(),
+        operations: vec![
+            #[cfg(feature = "sqlite")]
+            Operation::RunSQL {
+                sql: "SELECT 1".to_string(),
+                reverse_sql: None,
+            },
+        ],
+        dependencies: vec![],
+        replaces: vec![],
+        atomic: true,
+        initial: None,
+        state_only: false,
+        database_only: false,
+        swappable_dependencies: vec![],
+        optional_dependencies: vec![],
+    }
+}
+"#;
+
+		let error = upgrade_source(source).unwrap_err();
+
+		assert_eq!(
+			error.to_string(),
+			"Invalid migration: generated migration field 'operations' contains an attributed operation; conditional entries are unsupported"
+		);
 	}
 
 	#[test]

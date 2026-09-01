@@ -13,7 +13,7 @@ use reinhardt_pages::server_fn::ServerFnError;
 use reinhardt_pages::server_fn::server_fn;
 use reinhardt_pages::{
 	ClientForm, ClientFormChoiceSource, ClientFormChoices, FieldError, ResetOnDeps,
-	UseFormAsyncSubmitOutcome, use_form,
+	UseFormAsyncSubmitOutcome, UseFormSubmitOutcome, use_form,
 };
 use serde::{Deserialize, Serialize};
 
@@ -206,6 +206,10 @@ fn client_form_runtime_bindings_update_typed_fields_and_report_numeric_rejection
 				.field_errors
 				.get()
 				.contains_key(&ProjectRequestClientFormField::RetryCount)
+		);
+		assert_eq!(
+			runtime.handle_submit(),
+			UseFormSubmitOutcome::ValidationFailed
 		);
 
 		number.write(ControlValue::Text("42".to_string())).unwrap();

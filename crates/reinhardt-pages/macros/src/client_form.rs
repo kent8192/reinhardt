@@ -467,14 +467,27 @@ fn generate_form_items(context: FormItemContext<'_>) -> proc_macro2::TokenStream
 		names.dedup();
 		quote! { #(#names)|* => ::core::option::Option::Some(#field_ident::#variant) }
 	});
+	let number_error_validation = numeric_field_tokens.iter().map(|field| {
+		let error = field.number_error_ident();
+		let variant = &field.variant;
+		quote! {
+			if let Some(error) = self.#error.get() {
+				let mut form_error = validation.err().unwrap_or_default();
+				form_error.add_field_error(#field_ident::#variant, error.to_string());
+				validation = ::core::result::Result::Err(form_error);
+			}
+		}
+	});
 	let runtime_validate_method = if validate {
 		quote! {
 			fn runtime_validate(&self) -> ::core::result::Result<(), #pages_crate::FormValidationError<Self::Field>> {
 				let request = #form_ident::values_to_request(&self.runtime_current_values());
-				#pages_crate::__private::client_form::validate_dto_request(
+				let mut validation = #pages_crate::__private::client_form::validate_dto_request(
 					&request,
 					#form_ident::field_from_name,
-				)
+				);
+				#(#number_error_validation)*
+				validation
 			}
 		}
 	} else {

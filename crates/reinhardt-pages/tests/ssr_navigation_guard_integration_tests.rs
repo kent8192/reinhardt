@@ -6,6 +6,7 @@ use reinhardt_pages::{
 	QueryOptions, SsrRenderer, component, layout, loader, navigation_guard,
 };
 use reinhardt_urls::routers::ClientRouter;
+use rstest::rstest;
 use serial_test::serial;
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -27,6 +28,14 @@ async fn ssr_guard(context: NavigationContext) -> Result<NavigationDecision, Nav
 	match context.destination() {
 		"/ssr-redirect/" => Ok(NavigationDecision::Redirect {
 			location: "/login?next=%2Faccount".to_owned(),
+			replace: true,
+		}),
+		"/ssr-self-redirect/" => Ok(NavigationDecision::Redirect {
+			location: "/ssr-self-redirect/./".to_owned(),
+			replace: true,
+		}),
+		"/ssr-cross-origin-redirect/" => Ok(NavigationDecision::Redirect {
+			location: "https://evil.example/login".to_owned(),
 			replace: true,
 		}),
 		"/ssr-not-found/" => Ok(NavigationDecision::NotFound),
@@ -73,6 +82,24 @@ async fn ssr_guarded_loader() -> Result<String, String> {
 )]
 fn ssr_redirect(Loader(value): Loader<String>) -> Page {
 	Page::text(value)
+}
+
+#[component(
+	"/ssr-self-redirect/",
+	name = "ssr-self-redirect",
+	navigation_guard = ssr_guard,
+)]
+fn ssr_self_redirect() -> Page {
+	Page::text("self redirect route")
+}
+
+#[component(
+	"/ssr-cross-origin-redirect/",
+	name = "ssr-cross-origin-redirect",
+	navigation_guard = ssr_guard,
+)]
+fn ssr_cross_origin_redirect() -> Page {
+	Page::text("cross-origin redirect route")
 }
 
 #[component(
@@ -132,6 +159,8 @@ fn router() -> ClientRouter {
 	ClientRouter::new()
 		.not_found(|| Page::text("configured not found"))
 		.component(ssr_redirect)
+		.component(ssr_self_redirect)
+		.component(ssr_cross_origin_redirect)
 		.component(ssr_not_found)
 		.component(ssr_forbidden)
 		.component(ssr_error)
@@ -144,6 +173,30 @@ fn reset_counts() {
 	GUARD_CALLS.store(0, Ordering::SeqCst);
 	QUERY_CALLS.store(0, Ordering::SeqCst);
 	EVENTS.with(|events| events.borrow_mut().clear());
+}
+
+#[rstest]
+#[case("/ssr-self-redirect/", "navigation guard redirect loop detected")]
+#[case(
+	"/ssr-cross-origin-redirect/",
+	"navigation guard redirect destination must be same-origin"
+)]
+#[serial(ssr_navigation_guard)]
+fn unsafe_redirects_return_error_without_setting_accessor(
+	#[case] path: &str,
+	#[case] expected_message: &str,
+) {
+	tokio_test::block_on(async {
+		reset_counts();
+		let router = router();
+		let mut renderer = SsrRenderer::new();
+		let output = renderer.render_route_to_string(&router, path).await;
+
+		assert_eq!(output.status, 500);
+		assert!(output.html.contains(expected_message));
+		assert!(!output.html.contains("redirect route"));
+		assert_eq!(renderer.route_redirect_location(), None);
+	});
 }
 
 #[test]

@@ -20,6 +20,9 @@ use futures_util::future::try_join_all;
 use reinhardt_urls::routers::client_router::ClientRouter;
 use std::cell::RefCell;
 use std::rc::Rc;
+use url::Url;
+
+const REDIRECT_NORMALIZATION_BASE: &str = "http://reinhardt.invalid/";
 
 /// Buffered output from a route render, including its HTTP-like status.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,7 +108,7 @@ impl SsrRenderer {
 
 		let (store, serialized_loaders) = match attempt {
 			RouteAttempt::Decision(decision) => {
-				return self.navigation_decision_output(router, decision);
+				return self.navigation_decision_output(router, path, decision);
 			}
 			RouteAttempt::Prepared(prepared) => prepared,
 		};
@@ -140,6 +143,7 @@ impl SsrRenderer {
 	fn navigation_decision_output(
 		&mut self,
 		router: &ClientRouter,
+		request_path: &str,
 		decision: NavigationDecision,
 	) -> SsrRouteOutput {
 		match decision {
@@ -147,6 +151,20 @@ impl SsrRenderer {
 				unreachable!("allow decisions are rendered in the attempt")
 			}
 			NavigationDecision::Redirect { location, .. } => {
+				let request_target = match normalize_redirect_target(request_path) {
+					Ok(target) => target,
+					Err(error) => return navigation_guard_error_output(error),
+				};
+				let redirect_target = match normalize_redirect_target(&location) {
+					Ok(target) => target,
+					Err(error) => return navigation_guard_error_output(error),
+				};
+				if request_target == redirect_target {
+					return navigation_guard_error_output(NavigationGuardError::with_status(
+						"navigation guard redirect loop detected",
+						500,
+					));
+				}
 				self.set_route_redirect_location(location);
 				SsrRouteOutput {
 					html: String::new(),
@@ -167,6 +185,23 @@ impl SsrRenderer {
 			},
 		}
 	}
+}
+
+fn normalize_redirect_target(target: &str) -> Result<String, NavigationGuardError> {
+	let base = Url::parse(REDIRECT_NORMALIZATION_BASE).expect("fixed redirect base is valid");
+	let url = base.join(target).map_err(|error| {
+		NavigationGuardError::with_status(
+			format!("navigation guard redirect destination is invalid: {error}"),
+			500,
+		)
+	})?;
+	if url.origin() != base.origin() {
+		return Err(NavigationGuardError::with_status(
+			"navigation guard redirect destination must be same-origin",
+			500,
+		));
+	}
+	Ok(url.into())
 }
 
 enum RouteAttempt {

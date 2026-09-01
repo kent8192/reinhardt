@@ -557,6 +557,19 @@ impl FilesystemRepository {
 			GeneratedStorage::Stored | GeneratedStorage::Virtual => {}
 			_ => return Self::unsupported_rendering(format!("{context}.GeneratedStorage")),
 		}
+		let has_typed_expression = generated.expr.is_some();
+		let has_token_expression = generated.expr_tokens.is_some();
+		let has_raw_sql = generated.raw_sql.is_some();
+		if !has_typed_expression && !has_token_expression && !has_raw_sql {
+			return Self::unsupported_rendering(format!(
+				"{context}: no expression, expression tokens, or raw SQL"
+			));
+		}
+		if has_raw_sql && (has_typed_expression || has_token_expression) {
+			return Self::unsupported_rendering(format!(
+				"{context}: conflicting expression representations"
+			));
+		}
 		if generated.expr.is_none() && generated.expr_tokens.is_some() {
 			let Some(expression) = generated.typed_expr() else {
 				return Self::unsupported_rendering(format!("{context}.expr_tokens"));
@@ -1084,7 +1097,7 @@ mod tests {
 	use super::*;
 	use crate::migrations::fields::FieldType;
 	use crate::migrations::operations::{
-		ColumnDefinition, InterleaveSpec, Operation, PartitionOptions,
+		ColumnDefinition, GeneratedColumnDefinition, InterleaveSpec, Operation, PartitionOptions,
 	};
 	use crate::migrations::{FilesystemSource, MigrationSource};
 	use rstest::rstest;
@@ -1133,6 +1146,68 @@ mod tests {
 		// Assert
 		assert!(rendered.contains("Operation::RunRust"));
 		assert!(rendered.contains("seed_data()"));
+	}
+
+	fn migration_with_generated_column(generated: GeneratedColumnDefinition) -> Migration {
+		Migration::new("0001_generated", "polls").add_operation(Operation::CreateTable {
+			name: "items".to_string(),
+			columns: vec![
+				ColumnDefinition::new("computed", FieldType::Integer)
+					.with_generated(Some(generated)),
+			],
+			constraints: vec![],
+			without_rowid: None,
+			partition: None,
+			interleave_in_parent: None,
+		})
+	}
+
+	#[test]
+	fn render_rejects_empty_generated_column_metadata() {
+		let repository = FilesystemRepository::new(TempDir::new().unwrap().path());
+		let migration = migration_with_generated_column(GeneratedColumnDefinition::from_parts(
+			None,
+			None,
+			None,
+			GeneratedStorage::Stored,
+		));
+
+		let error = repository
+			.render(
+				&migration,
+				MigrationRenderOptions {
+					include_header: false,
+				},
+			)
+			.unwrap_err();
+
+		assert!(error.to_string().contains("no expression"));
+	}
+
+	#[test]
+	fn render_rejects_conflicting_generated_column_metadata() {
+		let repository = FilesystemRepository::new(TempDir::new().unwrap().path());
+		let migration = migration_with_generated_column(GeneratedColumnDefinition::from_parts(
+			Some(Box::new(SchemaExpr::col("source"))),
+			None,
+			Some("source".to_string()),
+			GeneratedStorage::Stored,
+		));
+
+		let error = repository
+			.render(
+				&migration,
+				MigrationRenderOptions {
+					include_header: false,
+				},
+			)
+			.unwrap_err();
+
+		assert!(
+			error
+				.to_string()
+				.contains("conflicting expression representations")
+		);
 	}
 
 	#[test]

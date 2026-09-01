@@ -3,6 +3,7 @@
 use super::{MigrationError, Result};
 use proc_macro2::{LineColumn, Span, TokenStream};
 use quote::quote;
+use syn::spanned::Spanned;
 use syn::{Expr, ExprStruct, File, Item, Stmt};
 
 /// Current generated migration source format.
@@ -45,8 +46,11 @@ pub fn upgrade_source(source: &str) -> Result<UpgradeResult> {
 		let file = syn::parse_file(&current).map_err(|error| {
 			MigrationError::InvalidMigration(format!("failed to parse migration source: {error}"))
 		})?;
-		let expression = migration_expression(&file)?;
-		let targets = outermost_target_structs(expression);
+		let expressions = migration_expressions(&file)?;
+		let targets = expressions
+			.into_iter()
+			.flat_map(outermost_target_structs)
+			.collect::<Vec<_>>();
 		if targets.is_empty() {
 			break;
 		}
@@ -54,14 +58,21 @@ pub fn upgrade_source(source: &str) -> Result<UpgradeResult> {
 		let mut edits = Vec::with_capacity(targets.len());
 		for target in targets {
 			let replacement = convert_struct(&target)?;
-			let start = span_offset(
-				&current,
-				target.path.segments.first().map_or_else(
-					|| Span::call_site().start(),
-					|segment| segment.ident.span().start(),
-				),
-			)
-			.ok_or_else(|| invalid_shape("cannot locate generated struct literal in source"))?;
+			let start_location = target
+				.path
+				.leading_colon
+				.as_ref()
+				.map(|colon| colon.span().start())
+				.or_else(|| {
+					target
+						.path
+						.segments
+						.first()
+						.map(|segment| segment.ident.span().start())
+				})
+				.unwrap_or_else(|| Span::call_site().start());
+			let start = span_offset(&current, start_location)
+				.ok_or_else(|| invalid_shape("cannot locate generated struct literal in source"))?;
 			let end =
 				span_offset(&current, target.brace_token.span.close().end()).ok_or_else(|| {
 					invalid_shape("cannot locate generated struct literal end in source")
@@ -71,7 +82,11 @@ pub fn upgrade_source(source: &str) -> Result<UpgradeResult> {
 					"generated struct literal has an invalid source span",
 				));
 			}
-			edits.push((start, end, replacement.to_string()));
+			edits.push((
+				start,
+				end,
+				preserve_comments(&current[start..end], replacement.to_string()),
+			));
 		}
 		current = apply_edits(&current, edits)?;
 		converted = true;
@@ -91,7 +106,7 @@ pub fn upgrade_source(source: &str) -> Result<UpgradeResult> {
 
 	let needs_marker = marker != Some(CURRENT_SOURCE_FORMAT_VERSION);
 	if needs_marker {
-		current = add_marker(&current);
+		current = add_marker(&current, marker.is_some());
 	}
 
 	if converted {
@@ -108,25 +123,26 @@ pub fn upgrade_source(source: &str) -> Result<UpgradeResult> {
 
 fn parse_marker(source: &str) -> Result<Option<u32>> {
 	let first_non_empty = source.lines().find(|line| !line.trim().is_empty());
-	let Some(line) = first_non_empty else {
+	let Some(first_non_empty) = first_non_empty else {
 		return Err(invalid_shape("migration source is empty"));
 	};
-	let marker_lines = source
-		.lines()
-		.filter(|candidate| candidate.trim_start().starts_with(MARKER_PREFIX))
-		.count();
-	if marker_lines > 1 {
+	let syntax_offset = first_syntax_offset(source)?;
+	let marker_lines = leading_marker_lines(source, syntax_offset);
+	if marker_lines.len() > 1 {
 		return Err(invalid_shape(
 			"migration source contains duplicate format markers",
 		));
 	}
-	let trimmed = line.trim();
+	let trimmed = first_non_empty.trim();
 	if !trimmed.starts_with(MARKER_PREFIX) {
-		if marker_lines == 1 {
+		if !marker_lines.is_empty() {
 			return Err(invalid_shape(
 				"migration source format marker must be the first non-empty line",
 			));
 		}
+		return Ok(None);
+	}
+	if marker_lines.is_empty() {
 		return Ok(None);
 	}
 	let value = trimmed
@@ -136,10 +152,85 @@ fn parse_marker(source: &str) -> Result<Option<u32>> {
 	Ok(Some(value))
 }
 
-fn migration_expression(file: &File) -> Result<&Expr> {
-	file.items
+pub(crate) fn validate_source_version(source: &str) -> Result<()> {
+	if let Some(version) = parse_marker(source)?
+		&& version > CURRENT_SOURCE_FORMAT_VERSION
+	{
+		return Err(MigrationError::InvalidMigration(format!(
+			"migration source format {version} requires a newer Reinhardt tool (current: {})",
+			CURRENT_SOURCE_FORMAT_VERSION
+		)));
+	}
+	Ok(())
+}
+
+fn first_syntax_offset(source: &str) -> Result<usize> {
+	let tokens = source
+		.parse::<TokenStream>()
+		.map_err(|error| invalid_shape(&format!("failed to lex migration source: {error}")))?;
+	let Some(token) = tokens.into_iter().next() else {
+		return Ok(source.len());
+	};
+	span_offset(source, token.span().start())
+		.ok_or_else(|| invalid_shape("cannot locate first Rust syntax token in source"))
+}
+
+fn leading_marker_lines(source: &str, syntax_offset: usize) -> Vec<&str> {
+	let end = syntax_offset.min(source.len());
+	let bytes = source.as_bytes();
+	let mut index = 0;
+	let mut markers = Vec::new();
+	while index < end {
+		if bytes[index].is_ascii_whitespace() {
+			index += 1;
+			continue;
+		}
+		if bytes[index..].starts_with(b"//") {
+			let line_end = source[index..end]
+				.find('\n')
+				.map_or(end, |offset| index + offset);
+			let line = &source[index..line_end];
+			if line.trim_start().starts_with(MARKER_PREFIX) {
+				markers.push(line);
+			}
+			index = line_end + usize::from(line_end < end);
+			continue;
+		}
+		if bytes[index..].starts_with(b"/*") {
+			index = skip_block_comment(source, index, end);
+			continue;
+		}
+		break;
+	}
+	markers
+}
+
+fn skip_block_comment(source: &str, start: usize, limit: usize) -> usize {
+	let bytes = source.as_bytes();
+	let mut depth = 1;
+	let mut index = start + 2;
+	while index + 1 < limit {
+		if bytes[index..].starts_with(b"/*") {
+			depth += 1;
+			index += 2;
+		} else if bytes[index..].starts_with(b"*/") {
+			depth -= 1;
+			index += 2;
+			if depth == 0 {
+				return index;
+			}
+		} else {
+			index += 1;
+		}
+	}
+	limit
+}
+
+fn migration_expressions(file: &File) -> Result<Vec<&Expr>> {
+	let expressions = file
+		.items
 		.iter()
-		.find_map(|item| {
+		.filter_map(|item| {
 			let Item::Fn(function) = item else {
 				return None;
 			};
@@ -153,7 +244,11 @@ fn migration_expression(file: &File) -> Result<&Expr> {
 					Some(expression)
 				})
 		})
-		.ok_or_else(|| invalid_shape("missing migration() entrypoint"))
+		.collect::<Vec<_>>();
+	if expressions.is_empty() {
+		return Err(invalid_shape("missing migration() entrypoint"));
+	}
+	Ok(expressions)
 }
 
 #[derive(Default)]
@@ -199,23 +294,39 @@ fn outermost_target_structs(expression: &Expr) -> Vec<ExprStruct> {
 }
 
 fn is_target_struct(expression: &ExprStruct) -> bool {
-	match expression
+	let Some(name) = expression
 		.path
 		.segments
 		.last()
 		.map(|segment| segment.ident.to_string())
-	{
-		Some(name) => matches!(
-			name.as_str(),
-			"Migration"
-				| "PartitionDef"
-				| "InterleaveSpec"
-				| "ColumnDefinition"
-				| "GeneratedColumnDefinition"
-				| "BulkLoadOptions"
-		),
-		None => false,
+	else {
+		return false;
+	};
+	if !matches!(
+		name.as_str(),
+		"Migration"
+			| "PartitionDef"
+			| "InterleaveSpec"
+			| "ColumnDefinition"
+			| "GeneratedColumnDefinition"
+			| "BulkLoadOptions"
+	) {
+		return false;
 	}
+	let segments = expression.path.segments.iter().collect::<Vec<_>>();
+	if segments.len() == 1 {
+		return true;
+	}
+	let prefix = segments[..segments.len() - 1]
+		.iter()
+		.map(|segment| segment.ident.to_string())
+		.collect::<Vec<_>>();
+	prefix.starts_with(&[
+		"reinhardt".to_owned(),
+		"db".to_owned(),
+		"migrations".to_owned(),
+	]) || prefix.starts_with(&["reinhardt_db".to_owned(), "migrations".to_owned()])
+		|| prefix.starts_with(&["crate".to_owned(), "migrations".to_owned()])
 }
 
 fn convert_struct(expression: &ExprStruct) -> Result<TokenStream> {
@@ -612,35 +723,124 @@ fn apply_edits(source: &str, mut edits: Vec<(usize, usize, String)>) -> Result<S
 	Ok(result)
 }
 
-fn add_marker(source: &str) -> String {
+fn add_marker(source: &str, replace_existing: bool) -> String {
 	let marker = format!("{MARKER_PREFIX} {CURRENT_SOURCE_FORMAT_VERSION}\n");
-	let mut offset = 0;
-	for line in source.split_inclusive('\n') {
-		if line.trim_start().starts_with(MARKER_PREFIX) {
-			let mut result = String::with_capacity(source.len() + marker.len());
-			result.push_str(&source[..offset]);
-			result.push_str(&marker);
-			result.push_str(&source[offset + line.len()..]);
-			return result;
+	if replace_existing {
+		let mut offset = 0;
+		for line in source.split_inclusive('\n') {
+			if !line.trim().is_empty() {
+				let trimmed = line.trim_start();
+				if trimmed.starts_with(MARKER_PREFIX) {
+					let mut result = String::with_capacity(source.len() + marker.len());
+					result.push_str(&source[..offset]);
+					result.push_str(&marker);
+					result.push_str(&source[offset + line.len()..]);
+					return result;
+				}
+				break;
+			}
+			offset += line.len();
 		}
-		offset += line.len();
-	}
-	if offset < source.len() && source[offset..].trim_start().starts_with(MARKER_PREFIX) {
-		let mut result = String::with_capacity(source.len() + marker.len());
-		result.push_str(&source[..offset]);
-		result.push_str(&marker);
-		return result;
-	}
-	if source.starts_with("#![")
-		&& let Some(newline) = source.find('\n')
-	{
-		let mut result = String::with_capacity(source.len() + marker.len());
-		result.push_str(&source[..=newline]);
-		result.push_str(&marker);
-		result.push_str(&source[newline + 1..]);
-		return result;
 	}
 	format!("{marker}{source}")
+}
+
+fn preserve_comments(original: &str, replacement: String) -> String {
+	let comments = extract_comments(original);
+	if comments.is_empty() {
+		return replacement;
+	}
+	let mut preserved = String::new();
+	for comment in comments {
+		preserved.push_str(comment.trim_start());
+		preserved.push('\n');
+	}
+	preserved.push_str(&replacement);
+	preserved
+}
+
+fn extract_comments(source: &str) -> Vec<String> {
+	let bytes = source.as_bytes();
+	let mut comments = Vec::new();
+	let mut index = 0;
+	while index < bytes.len() {
+		if let Some(end) = raw_string_end(source, index) {
+			index = end;
+			continue;
+		}
+		match bytes[index] {
+			b'"' => {
+				index = skip_quoted(source, index, b'"').unwrap_or(index + 1);
+			}
+			b'\'' => {
+				index = skip_quoted(source, index, b'\'').unwrap_or(index + 1);
+			}
+			b'/' if bytes[index..].starts_with(b"//") => {
+				let start = index;
+				index += 2;
+				while index < bytes.len() && bytes[index] != b'\n' {
+					index += 1;
+				}
+				comments.push(source[start..index].to_owned());
+			}
+			b'/' if bytes[index..].starts_with(b"/*") => {
+				let start = index;
+				index = skip_block_comment(source, index, bytes.len());
+				comments.push(source[start..index].to_owned());
+			}
+			_ => index += 1,
+		}
+	}
+	comments
+}
+
+fn skip_quoted(source: &str, start: usize, quote: u8) -> Option<usize> {
+	let bytes = source.as_bytes();
+	let mut index = start + 1;
+	while index < bytes.len() {
+		match bytes[index] {
+			b'\\' => index += 2,
+			value if value == quote => return Some(index + 1),
+			_ => index += 1,
+		}
+	}
+	None
+}
+
+fn raw_string_end(source: &str, start: usize) -> Option<usize> {
+	let bytes = source.as_bytes();
+	let raw_start = if bytes[start] == b'b' && bytes.get(start + 1) == Some(&b'r') {
+		start + 1
+	} else if bytes[start] == b'r' {
+		start
+	} else {
+		return None;
+	};
+	let mut index = raw_start + 1;
+	let mut hashes = 0;
+	while bytes.get(index) == Some(&b'#') {
+		hashes += 1;
+		index += 1;
+	}
+	if bytes.get(index) != Some(&b'"') {
+		return None;
+	}
+	index += 1;
+	while index < bytes.len() {
+		if bytes[index] == b'"' {
+			let mut close = index + 1;
+			let mut matched = 0;
+			while matched < hashes && bytes.get(close) == Some(&b'#') {
+				matched += 1;
+				close += 1;
+			}
+			if matched == hashes {
+				return Some(close);
+			}
+		}
+		index += 1;
+	}
+	None
 }
 
 fn validate_semantics(before: &str, after: &str) -> Result<()> {
@@ -837,5 +1037,144 @@ fn migration() -> Migration {
 "#;
 		let error = upgrade_source(source).unwrap_err();
 		assert!(error.to_string().contains("struct-update expression"));
+	}
+
+	#[test]
+	fn inserts_marker_before_inner_attributes() {
+		let source = "#![allow(dead_code)]\nfn migration() -> Migration { Migration::new(\"0001\", \"app\") }\n";
+		let result = upgrade_source(source).unwrap();
+
+		assert!(
+			result
+				.source
+				.starts_with("// reinhardt-migration-source: 1\n#![allow(dead_code)]")
+		);
+	}
+
+	#[test]
+	fn ignores_marker_text_inside_raw_strings() {
+		let source = r#"fn migration() -> Migration {
+    let note = r"// reinhardt-migration-source: 7";
+    Migration::new("0001", "app")
+}
+"#;
+		let result = upgrade_source(source).unwrap();
+
+		assert_eq!(result.from_version, None);
+		assert!(
+			result
+				.source
+				.starts_with("// reinhardt-migration-source: 1\n")
+		);
+		assert!(
+			result
+				.source
+				.contains("let note = r\"// reinhardt-migration-source: 7\"")
+		);
+	}
+
+	#[test]
+	fn converts_absolute_framework_paths_without_duplicate_colons() {
+		let source = r#"use reinhardt::db::migrations::prelude::*;
+
+fn migration() -> Migration {
+    ::reinhardt::db::migrations::Migration {
+        name: "0001_initial".to_string(),
+        app_label: "app".to_string(),
+        operations: vec![],
+        dependencies: vec![],
+        replaces: vec![],
+        atomic: true,
+        initial: None,
+        state_only: false,
+        database_only: false,
+        swappable_dependencies: vec![],
+        optional_dependencies: vec![],
+    }
+}
+"#;
+		let result = upgrade_source(source).unwrap();
+
+		assert!(!result.source.contains("::::"));
+		assert!(syn::parse_file(&result.source).is_ok());
+	}
+
+	#[test]
+	fn converts_all_cfg_gated_migration_entrypoints() {
+		let source = r#"fn migration() -> Migration {
+    Migration {
+        name: "0001_initial".to_string(),
+        app_label: "app".to_string(),
+        operations: vec![],
+        dependencies: vec![],
+        replaces: vec![],
+        atomic: true,
+        initial: None,
+        state_only: false,
+        database_only: false,
+        swappable_dependencies: vec![],
+        optional_dependencies: vec![],
+    }
+}
+
+#[cfg(feature = "sqlite")]
+fn migration() -> Migration {
+    Migration {
+        name: "0002_backend".to_string(),
+        app_label: "app".to_string(),
+        operations: vec![],
+        dependencies: vec![],
+        replaces: vec![],
+        atomic: true,
+        initial: None,
+        state_only: false,
+        database_only: false,
+        swappable_dependencies: vec![],
+        optional_dependencies: vec![],
+    }
+}
+"#;
+		let result = upgrade_source(source).unwrap();
+
+		assert_eq!(result.source.matches(":: new").count(), 2);
+	}
+
+	#[test]
+	fn preserves_comments_inside_converted_literals() {
+		let source = r#"fn migration() -> Migration {
+    Migration {
+        name: "0001_initial".to_string(),
+        app_label: "app".to_string(),
+        operations: vec![
+            // Keep this explanation with the migration.
+        ],
+        dependencies: vec![],
+        replaces: vec![],
+        atomic: true,
+        initial: None,
+        state_only: false,
+        database_only: false,
+        swappable_dependencies: vec![],
+        optional_dependencies: vec![],
+    }
+}
+"#;
+		let result = upgrade_source(source).unwrap();
+
+		assert!(
+			result
+				.source
+				.contains("// Keep this explanation with the migration.")
+		);
+	}
+
+	#[test]
+	fn ignores_application_types_with_framework_like_names() {
+		let application: ExprStruct = syn::parse_str("app::Migration { value: 1 }").unwrap();
+		let framework: ExprStruct =
+			syn::parse_str("reinhardt::db::migrations::Migration { value: 1 }").unwrap();
+
+		assert!(!is_target_struct(&application));
+		assert!(is_target_struct(&framework));
 	}
 }

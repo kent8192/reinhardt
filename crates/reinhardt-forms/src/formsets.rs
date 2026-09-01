@@ -250,7 +250,11 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 				})?;
 		let fk_field = self.fk_field.clone();
 		for child_form in &mut self.child_forms {
-			child_form.set_trusted_field_value(&fk_field, parent_id.clone())?;
+			if child_form.has_deferred_required_field(&fk_field) {
+				child_form.set_deferred_trusted_field_value(&fk_field, parent_id.clone())?;
+			} else {
+				child_form.set_trusted_field_value(&fk_field, parent_id.clone())?;
+			}
 			child_form.save(executor).await?;
 		}
 		Ok(())
@@ -324,14 +328,27 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 		Ok(())
 	}
 
+	fn can_defer_foreign_key_requiredness(&self) -> bool {
+		match C::Schema::fields()
+			.iter()
+			.find(|descriptor| descriptor.name == self.fk_field)
+		{
+			Some(descriptor) => descriptor.generated_relation_id && descriptor.required,
+			None => C::trusted_relation_field_kind(&self.fk_field).is_some(),
+		}
+	}
+
 	/// Validate all child forms
 	pub fn is_valid(&mut self) -> bool {
 		let mut all_valid = true;
+		let can_defer_foreign_key = self.can_defer_foreign_key_requiredness();
 
 		for child_form in &mut self.child_forms {
 			match child_form.build_instance() {
 				Ok(_) => {}
-				Err(ModelFormError::MissingModelField { field }) if field == self.fk_field => {
+				Err(ModelFormError::MissingModelField { field })
+					if field == self.fk_field && can_defer_foreign_key =>
+				{
 					// The trusted parent key is assigned after the create parent has been saved,
 					// but every other required child field must still be validated first.
 					if !child_form.is_valid_with_deferred_required_field(&self.fk_field) {
@@ -339,7 +356,8 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 					}
 				}
 				Err(ModelFormError::FieldValidation { errors })
-					if errors.len() == 1
+					if can_defer_foreign_key
+						&& errors.len() == 1
 						&& errors.get(&self.fk_field).is_some_and(|messages| {
 							messages.len() == 1 && messages[0] == "This field is required."
 						}) =>
@@ -765,6 +783,9 @@ mod tests {
 	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 	use serde_json::json;
+	use serial_test::serial;
+
+	static REQUIRED_CHILD_GENERATED_VALIDATOR_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 	// Test model implementation
 	#[model(
@@ -819,14 +840,30 @@ mod tests {
 	fn validate_required_child<P: ModelFormPolicy>(
 		payload: &CleanedRequiredChildModelModelFormData<P>,
 	) -> Result<(), ValidationErrors> {
+		REQUIRED_CHILD_GENERATED_VALIDATOR_CALLS.fetch_add(1, Ordering::SeqCst);
 		let mut errors = ValidationErrors::new();
 		if payload
 			.content()
 			.is_some_and(|content| content == "blocked child")
+			&& payload.parent_id().is_none()
 		{
 			errors.add(
 				"_all",
-				ValidationError::Custom("generated child validation failed".to_owned()),
+				ValidationError::Custom(
+					"generated child validation requires the parent key".to_owned(),
+				),
+			);
+		}
+		if payload
+			.content()
+			.is_some_and(|content| content == "valid child")
+			&& payload.parent_id().is_some()
+		{
+			errors.add(
+				"_all",
+				ValidationError::Custom(
+					"generated validation reran after parent key injection".to_owned(),
+				),
 			);
 		}
 		if errors.is_empty() {
@@ -1142,7 +1179,9 @@ mod tests {
 	}
 
 	#[rstest]
+	#[serial(inline_generated_validator)]
 	fn test_inline_formset_defers_model_validator_until_generated_parent_key_is_assigned() {
+		REQUIRED_CHILD_GENERATED_VALIDATOR_CALLS.store(0, Ordering::SeqCst);
 		let validator_calls = Arc::new(AtomicUsize::new(0));
 		let validator_calls_for_candidate = Arc::clone(&validator_calls);
 		let parent = TestModel {
@@ -1189,12 +1228,18 @@ mod tests {
 			"valid child"
 		);
 		assert_eq!(validator_calls.load(Ordering::SeqCst), 1);
+		assert_eq!(
+			REQUIRED_CHILD_GENERATED_VALIDATOR_CALLS.load(Ordering::SeqCst),
+			1
+		);
 		assert_eq!(executor.fetch_one_calls, 2);
 	}
 
 	#[rstest]
+	#[serial(inline_generated_validator)]
 	fn test_inline_formset_generated_validator_rejects_before_parent_persistence() {
 		// Arrange
+		REQUIRED_CHILD_GENERATED_VALIDATOR_CALLS.store(0, Ordering::SeqCst);
 		let model_validator_calls = Arc::new(AtomicUsize::new(0));
 		let model_validator_calls_for_candidate = Arc::clone(&model_validator_calls);
 		let parent = TestModel {
@@ -1232,29 +1277,49 @@ mod tests {
 			formset.child_forms()[0].form().errors(),
 			&std::collections::HashMap::from([(
 				"_all".to_owned(),
-				vec!["generated child validation failed".to_owned()],
+				vec!["generated child validation requires the parent key".to_owned()],
 			)])
 		);
 		assert_eq!(model_validator_calls.load(Ordering::SeqCst), 0);
+		assert_eq!(
+			REQUIRED_CHILD_GENERATED_VALIDATOR_CALLS.load(Ordering::SeqCst),
+			1
+		);
 		assert_eq!(executor.fetch_one_calls, 0);
 		assert_eq!(executor.queries, Vec::<String>::new());
 	}
 
-	#[test]
+	#[rstest]
 	fn test_inline_formset_rejects_editable_scalar_as_foreign_key() {
 		let parent = test_model(1, "parent");
 		let mut formset =
 			InlineFormSet::<TestModel, ScalarChildModel>::for_update(parent, "position".to_owned());
+		let mut data = ScalarChildModelModelFormData::<AllEditableModelFields>::empty();
+		data.set_content("child".to_owned())
+			.expect("child content should be accepted");
+		formset.add_child_form(ModelForm::from_payload(data));
+
+		assert_eq!(formset.is_valid(), false);
+		assert_eq!(
+			formset.child_forms()[0].form().errors(),
+			&std::collections::HashMap::from([(
+				"position".to_owned(),
+				vec!["This field is required.".to_owned()],
+			)])
+		);
 		let mut executor = FormsetExecutor::new(Vec::<Result<Row, Error>>::new());
 
 		let error = tokio_test::block_on(formset.save(&mut executor)).unwrap_err();
 
-		assert!(matches!(
+		assert_eq!(
 			error,
-			ModelFormError::FieldValidation { errors }
-				if errors.get("position")
-					== Some(&vec!["foreign key field is not a generated relationship identifier".to_owned()])
-		));
+			ModelFormError::FieldValidation {
+				errors: std::collections::HashMap::from([(
+					"position".to_owned(),
+					vec!["foreign key field is not a generated relationship identifier".to_owned(),],
+				)]),
+			}
+		);
 		assert_eq!(executor.fetch_one_calls, 0);
 	}
 

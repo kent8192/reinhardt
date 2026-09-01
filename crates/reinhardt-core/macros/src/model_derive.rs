@@ -3402,6 +3402,7 @@ fn generate_model_form_support(
 			let field_name = &field.name;
 			let field_literal = LitStr::new(&field.name.to_string(), field.name.span());
 			if is_model_form_editable(field, field_infos) {
+				let field_ty = &field.ty;
 				let (is_optional, _) = extract_option_type(&field.ty);
 				let relation_is_nullable = model_form_relation_id_is_nullable(field, field_infos);
 				let nullable = field
@@ -3428,7 +3429,13 @@ fn generate_model_form_support(
 				quote! {
 					#field_name: match data.#field_name.as_ref() {
 						::core::option::Option::Some(value) => value.clone(),
-						::core::option::Option::None => #unresolved,
+						::core::option::Option::None => match server_values.get(#field_literal) {
+							::core::option::Option::Some(value) => #serde_json_crate::from_value::<#field_ty>(value.clone())
+								.map_err(|error| #forms_crate::model_form::ModelFormError::FieldValidation {
+									errors: ::std::collections::HashMap::from([(#field_literal.to_owned(), vec![error.to_string()])]),
+								})?,
+							::core::option::Option::None => #unresolved,
+						},
 					}
 				}
 			} else if server_context_names.contains(&field.name.to_string()) {
@@ -13221,6 +13228,7 @@ mod tests {
 		assert_eq!(
 			form_model_methods,
 			vec![
+				"clean_for_update",
 				"build_from_cleaned_compat",
 				"apply_cleaned",
 				"set_trusted_field_json",

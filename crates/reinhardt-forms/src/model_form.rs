@@ -206,6 +206,18 @@ where
 	P: ModelFormPolicy,
 	D: ModelFormPayload<P>,
 {
+	if !S::fields().iter().any(|descriptor| {
+		descriptor.name == deferred_field && descriptor.generated_relation_id && descriptor.required
+	}) {
+		let mut errors = ValidationErrors::new();
+		errors.add(
+			deferred_field.to_owned(),
+			ValidationError::Custom(
+				"only generated relationship identifiers may be deferred".to_owned(),
+			),
+		);
+		return Err(errors);
+	}
 	clean_generated_payload_with_trusted_values::<S, P, D>(data, None, true, Some(deferred_field))
 }
 
@@ -327,6 +339,7 @@ where
 	supplied_fields: Vec<&'static str>,
 	instance: Option<T>,
 	cleaned_data: Option<T::CleanedData<P>>,
+	deferred_required_field: Option<String>,
 	validated_candidate: Option<T>,
 	trusted_field_values: HashMap<String, Value>,
 	persistence_mode: ModelFormPersistenceMode,
@@ -384,6 +397,7 @@ where
 			supplied_fields,
 			instance,
 			cleaned_data: None,
+			deferred_required_field: None,
 			validated_candidate: None,
 			trusted_field_values: HashMap::new(),
 			persistence_mode,
@@ -474,6 +488,7 @@ where
 		}
 		.map_err(model_form_error_from_validation_errors)?;
 		self.cleaned_data = Some(cleaned);
+		self.deferred_required_field = None;
 		Ok(())
 	}
 
@@ -669,6 +684,7 @@ where
 		bound_values.insert(field_name.to_owned(), form_value);
 		self.form.bind(bound_values);
 		self.cleaned_data = None;
+		self.deferred_required_field = None;
 		self.validated_candidate = None;
 		if !self.supplied_fields.contains(&field_name) {
 			self.supplied_fields.push(field_name);
@@ -692,8 +708,51 @@ where
 		self.trusted_field_values
 			.insert(field_name.to_owned(), value);
 		self.cleaned_data = None;
+		self.deferred_required_field = None;
 		self.validated_candidate = None;
 		Ok(())
+	}
+
+	pub(crate) fn set_deferred_trusted_field_value(
+		&mut self,
+		field_name: &str,
+		value: Value,
+	) -> Result<(), ModelFormError> {
+		self.finalize_transaction_save()?;
+		let descriptor = T::Schema::fields()
+			.iter()
+			.find(|descriptor| descriptor.name == field_name)
+			.copied();
+		let trusted_relation = descriptor
+			.is_some_and(|descriptor| descriptor.generated_relation_id && descriptor.required)
+			|| (descriptor.is_none() && T::trusted_relation_field_kind(field_name).is_some());
+		if !trusted_relation {
+			return Err(ModelFormError::FieldValidation {
+				errors: HashMap::from([(
+					field_name.to_owned(),
+					vec!["only generated relationship identifiers may be deferred".to_owned()],
+				)]),
+			});
+		}
+		if self.cleaned_data.is_none()
+			|| self.deferred_required_field.as_deref() != Some(field_name)
+		{
+			return Err(ModelFormError::FieldValidation {
+				errors: HashMap::from([(
+					field_name.to_owned(),
+					vec!["deferred relationship field was not validated".to_owned()],
+				)]),
+			});
+		}
+		self.trusted_field_values
+			.insert(field_name.to_owned(), value);
+		self.deferred_required_field = None;
+		self.validated_candidate = None;
+		Ok(())
+	}
+
+	pub(crate) fn has_deferred_required_field(&self, field_name: &str) -> bool {
+		self.cleaned_data.is_some() && self.deferred_required_field.as_deref() == Some(field_name)
 	}
 
 	/// Returns a reference to the underlying form.
@@ -703,6 +762,7 @@ where
 	/// Returns a mutable reference to the underlying form.
 	pub fn form_mut(&mut self) -> &mut Form {
 		self.cleaned_data = None;
+		self.deferred_required_field = None;
 		self.validated_candidate = None;
 		&mut self.form
 	}
@@ -722,6 +782,14 @@ where
 	/// Model-level validation intentionally runs only after the real key is installed, so
 	/// validators may safely depend on that relationship.
 	pub(crate) fn is_valid_with_deferred_required_field(&mut self, deferred_field: &str) -> bool {
+		if self.cleaned_data.is_some()
+			&& self.deferred_required_field.as_deref() == Some(deferred_field)
+		{
+			return true;
+		}
+		self.cleaned_data = None;
+		self.deferred_required_field = None;
+		self.validated_candidate = None;
 		let mut valid = self.form.is_valid();
 		for descriptor in T::Schema::fields() {
 			if descriptor.name == deferred_field
@@ -767,6 +835,14 @@ where
 			}
 		};
 		self.cleaned_data = Some(cleaned);
+		self.deferred_required_field = T::Schema::fields()
+			.iter()
+			.find(|descriptor| descriptor.name == deferred_field)
+			.filter(|descriptor| descriptor.generated_relation_id && descriptor.required)
+			.map(|descriptor| descriptor.name.to_owned())
+			.or_else(|| {
+				T::trusted_relation_field_kind(deferred_field).map(|_| deferred_field.to_owned())
+			});
 		self.validated_candidate = None;
 		true
 	}
@@ -1724,6 +1800,25 @@ mod tests {
 				.map(|(field, _)| field)
 				.collect::<Vec<_>>(),
 			["owner_id", "published"]
+		);
+	}
+
+	#[rstest]
+	fn deferred_cleaning_rejects_non_relation_required_fields() {
+		let mut data = QuestionModelFormData::<QuestionPolicy>::empty();
+		data.set_title("Question".to_owned())
+			.expect("question title should be accepted");
+		let mut form = ModelForm::<Question, QuestionPolicy>::from_payload(data);
+
+		let valid = form.is_valid_with_deferred_required_field("owner_id");
+
+		assert_eq!(valid, false);
+		assert_eq!(
+			form.form().errors(),
+			&HashMap::from([(
+				"owner_id".to_owned(),
+				vec!["only generated relationship identifiers may be deferred".to_owned()],
+			)])
 		);
 	}
 

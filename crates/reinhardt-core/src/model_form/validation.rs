@@ -39,6 +39,7 @@ pub trait ModelFormValidatingPayload: Sized {
 	///
 	/// **Parity: P0.** Native inline formsets override this hidden compatibility
 	/// hook; other implementations retain strict create validation.
+	#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 	#[doc(hidden)]
 	fn clean_and_validate_with_deferred_required_field(
 		self,

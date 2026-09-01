@@ -1188,11 +1188,25 @@ impl Page {
 				output.push_str(el.tag_name());
 				let binding = el.bound_control();
 				let binding_value = binding.map(ControlBinding::read);
+				let reactive_input_type = el
+					.reactive_attrs()
+					.iter()
+					.enumerate()
+					.rfind(|(_, attribute)| attribute.name().eq_ignore_ascii_case("type"))
+					.map(|(index, attribute)| (index, attribute.value()));
+				let mut input_type_is_password = el
+					.attrs()
+					.iter()
+					.rfind(|(name, _)| name.eq_ignore_ascii_case("type"))
+					.is_some_and(|(_, value)| value.eq_ignore_ascii_case("password"));
+				if let Some((_, value)) = reactive_input_type.as_ref() {
+					input_type_is_password = value
+						.as_deref()
+						.is_some_and(|value| value.eq_ignore_ascii_case("password"));
+				}
 				let omits_bound_password_value = el.tag_name().eq_ignore_ascii_case("input")
-					&& el.attrs().iter().any(|(name, value)| {
-						name.eq_ignore_ascii_case("type") && value.eq_ignore_ascii_case("password")
-					}) && binding
-					.is_some_and(|binding| binding.kind() == ControlKind::Text);
+					&& input_type_is_password
+					&& binding.is_some_and(|binding| binding.kind() == ControlKind::Text);
 				let projected_input_value = if omits_bound_password_value {
 					None
 				} else {
@@ -1252,7 +1266,11 @@ impl Page {
 					{
 						continue;
 					}
-					if let Some(value) = attribute.value()
+					let value = match reactive_input_type.as_ref() {
+						Some((type_index, value)) if *type_index == index => value.clone(),
+						_ => attribute.value(),
+					};
+					if let Some(value) = value
 						&& is_safe_html_attribute(attribute.name(), &value)
 						&& (!is_boolean_attr(attribute.name()) || is_boolean_attr_truthy(&value))
 					{
@@ -1639,8 +1657,12 @@ impl<A: IntoPage, B: IntoPage, C: IntoPage, D: IntoPage> IntoPage for (A, B, C, 
 
 #[cfg(test)]
 mod tests {
+	use std::cell::Cell;
+	use std::rc::Rc;
+
 	use super::*;
 	use crate::reactive::{ReactiveScope, Signal};
+	use rstest::rstest;
 
 	#[cfg(feature = "page-hot-reload")]
 	#[test]
@@ -1988,6 +2010,52 @@ mod tests {
 				.into_page();
 
 			assert_eq!(input.render_to_string(), "<input type=\"password\" />");
+		});
+	}
+
+	#[rstest]
+	fn render_to_string_omits_bound_password_values_for_reactive_types() {
+		ReactiveScope::run(|| {
+			// Arrange
+			let type_evaluations = Rc::new(Cell::new(0));
+			let reactive_type_evaluations = Rc::clone(&type_evaluations);
+			let overridden_value_evaluations = Rc::new(Cell::new(0));
+			let reactive_value_evaluations = Rc::clone(&overridden_value_evaluations);
+			let superseded_class_evaluations = Rc::new(Cell::new(0));
+			let first_class_evaluations = Rc::clone(&superseded_class_evaluations);
+			let final_class_evaluations = Rc::new(Cell::new(0));
+			let last_class_evaluations = Rc::clone(&final_class_evaluations);
+			let input = PageElement::new("input")
+				.attr("type", "text")
+				.reactive_attr("type", move || {
+					reactive_type_evaluations.set(reactive_type_evaluations.get() + 1);
+					Some("password".into())
+				})
+				.reactive_attr("value", move || {
+					reactive_value_evaluations.set(reactive_value_evaluations.get() + 1);
+					Some("exposed".into())
+				})
+				.reactive_attr("class", move || {
+					first_class_evaluations.set(first_class_evaluations.get() + 1);
+					Some("superseded".into())
+				})
+				.reactive_attr("class", move || {
+					last_class_evaluations.set(last_class_evaluations.get() + 1);
+					Some("final".into())
+				})
+				.attr("value", "stale")
+				.control_binding(ControlBinding::text(Signal::new("secret".to_owned())))
+				.into_page();
+
+			// Act
+			let html = input.render_to_string();
+
+			// Assert
+			assert_eq!(html, "<input type=\"password\" class=\"final\" />");
+			assert_eq!(type_evaluations.get(), 1);
+			assert_eq!(overridden_value_evaluations.get(), 0);
+			assert_eq!(superseded_class_evaluations.get(), 0);
+			assert_eq!(final_class_evaluations.get(), 1);
 		});
 	}
 

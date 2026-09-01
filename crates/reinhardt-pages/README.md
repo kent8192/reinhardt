@@ -274,7 +274,9 @@ let _controls = page!({
 Hydration first adopts the live DOM value, preserving browser restoration and
 edits made before hydration. The adopted value also becomes the browser reset
 default, so a later form reset preserves the pre-hydration control state. Later
-signal changes update the control. See the
+signal changes update the control. Password bindings set only the live value
+property and never expose the secret through an SSR or DOM `value` attribute.
+See the
 [React migration guide](docs/react_to_reinhardt.md#controlled-and-uncontrolled-form-controls)
 for event ordering, IME, numeric-error, and low-level escape-hatch details.
 For `input[type=number]`, the binding combines `beforeinput` metadata with the

@@ -2185,10 +2185,24 @@ fn render_element_opening(
 	let mut html = String::new();
 	html.push('<');
 	html.push_str(element.tag_name());
-	let omits_bound_password_value = element.tag_name().eq_ignore_ascii_case("input")
-		&& effective_attribute_value(element, "type")
+	let reactive_input_type = element
+		.reactive_attrs()
+		.iter()
+		.enumerate()
+		.rfind(|(_, attribute)| attribute.name().eq_ignore_ascii_case("type"))
+		.map(|(index, attribute)| (index, attribute.value()));
+	let mut input_type_is_password = element
+		.attrs()
+		.iter()
+		.rfind(|(name, _)| name.eq_ignore_ascii_case("type"))
+		.is_some_and(|(_, value)| value.eq_ignore_ascii_case("password"));
+	if let Some((_, value)) = reactive_input_type.as_ref() {
+		input_type_is_password = value
 			.as_deref()
-			.is_some_and(|value| value.eq_ignore_ascii_case("password"))
+			.is_some_and(|value| value.eq_ignore_ascii_case("password"));
+	}
+	let omits_bound_password_value = element.tag_name().eq_ignore_ascii_case("input")
+		&& input_type_is_password
 		&& element
 			.bound_control()
 			.is_some_and(|binding| binding.kind() == ControlKind::Text);
@@ -2240,7 +2254,11 @@ fn render_element_opening(
 		{
 			continue;
 		}
-		if let Some(value) = attribute.value()
+		let value = match reactive_input_type.as_ref() {
+			Some((type_index, value)) if *type_index == index => value.clone(),
+			_ => attribute.value(),
+		};
+		if let Some(value) = value
 			&& (!is_boolean_attr(attribute.name()) || is_boolean_attr_truthy(&value))
 			&& !(omits_bound_password_value
 				&& attribute
@@ -2273,21 +2291,6 @@ fn render_element_opening(
 	}
 
 	html
-}
-
-fn effective_attribute_value(element: &PageElement, name: &str) -> Option<String> {
-	let mut value = element
-		.attrs()
-		.iter()
-		.filter(|(attribute, _)| attribute.eq_ignore_ascii_case(name))
-		.map(|(_, value)| value.to_string())
-		.next_back();
-	for attribute in element.reactive_attrs() {
-		if attribute.name().eq_ignore_ascii_case(name) {
-			value = attribute.value().map(|value| value.into_owned());
-		}
-	}
-	value
 }
 
 fn push_escaped_attribute(html: &mut String, name: &str, value: &str) {
@@ -2660,17 +2663,44 @@ mod tests {
 	#[test]
 	fn render_element_opening_uses_the_effective_reactive_input_type() {
 		ReactiveScope::run(|| {
+			let type_evaluations = Rc::new(Cell::new(0));
+			let reactive_type_evaluations = Rc::clone(&type_evaluations);
+			let overridden_value_evaluations = Rc::new(Cell::new(0));
+			let reactive_value_evaluations = Rc::clone(&overridden_value_evaluations);
+			let superseded_class_evaluations = Rc::new(Cell::new(0));
+			let first_class_evaluations = Rc::clone(&superseded_class_evaluations);
+			let final_class_evaluations = Rc::new(Cell::new(0));
+			let last_class_evaluations = Rc::clone(&final_class_evaluations);
 			let element = PageElement::new("input")
 				.attr("type", "text")
-				.reactive_attr("type", || Some("password".into()))
+				.reactive_attr("type", move || {
+					reactive_type_evaluations.set(reactive_type_evaluations.get() + 1);
+					Some("password".into())
+				})
+				.reactive_attr("value", move || {
+					reactive_value_evaluations.set(reactive_value_evaluations.get() + 1);
+					Some("exposed".into())
+				})
+				.reactive_attr("class", move || {
+					first_class_evaluations.set(first_class_evaluations.get() + 1);
+					Some("superseded".into())
+				})
+				.reactive_attr("class", move || {
+					last_class_evaluations.set(last_class_evaluations.get() + 1);
+					Some("final".into())
+				})
 				.attr("value", "stale")
 				.control_binding(ControlBinding::text(Signal::new("secret".to_owned())));
 			let projection = project(element.bound_control());
 
 			assert_eq!(
 				render_element_opening(&element, &projection, None),
-				"<input type=\"password\" data-rh-password-omitted=\"true\""
+				"<input type=\"password\" class=\"final\" data-rh-password-omitted=\"true\""
 			);
+			assert_eq!(type_evaluations.get(), 1);
+			assert_eq!(overridden_value_evaluations.get(), 0);
+			assert_eq!(superseded_class_evaluations.get(), 0);
+			assert_eq!(final_class_evaluations.get(), 1);
 		});
 	}
 

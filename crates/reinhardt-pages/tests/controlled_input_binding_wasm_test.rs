@@ -260,6 +260,7 @@ fn reactive_password_type_removes_the_serialized_bound_value(#[case] nested_in_r
 			.unchecked_into();
 
 		password_type.set(true);
+		with_runtime(|runtime| runtime.flush_updates());
 
 		assert_eq!(input.type_(), "password");
 		assert_eq!(input.value(), "secret");

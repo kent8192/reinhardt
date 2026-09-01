@@ -200,6 +200,27 @@ async fn execute_dry_run_does_not_write_migration_file() {
 #[rstest]
 #[tokio::test]
 #[serial(command_current_dir)]
+async fn execute_check_succeeds_for_empty_model_registry() {
+	let _registry = ModelRegistryGuard::clear();
+	let project_dir = create_project_root();
+	let _cwd = ProjectDirGuard::enter(project_dir.path());
+	let migrations_dir = project_dir.path().join("migrations");
+
+	let mut ctx = makemigrations_context(None, &migrations_dir);
+	ctx.set_option("check".to_string(), "true".to_string());
+
+	let result = MakeMigrationsCommand.execute(&ctx).await;
+
+	assert!(result.is_ok(), "check failed: {:?}", result.err());
+	assert!(
+		!migrations_dir.exists(),
+		"check must not create the migrations directory"
+	);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(command_current_dir)]
 async fn execute_empty_requires_app_label() {
 	let _registry = ModelRegistryGuard::clear();
 	let project_dir = create_project_root();

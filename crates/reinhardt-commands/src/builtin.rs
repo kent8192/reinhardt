@@ -2377,6 +2377,10 @@ impl BaseCommand for MakeMigrationsCommand {
 					.collect();
 
 				if changed_apps.is_empty() {
+					if is_check {
+						ctx.info("No changes detected");
+						return Ok(());
+					}
 					return Err(CommandError::ExecutionError(
 						"No models found. Cannot determine app_label automatically.".to_string(),
 					));

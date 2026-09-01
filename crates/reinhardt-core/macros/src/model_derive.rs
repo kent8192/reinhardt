@@ -70,9 +70,9 @@ fn is_model_form_csrf_field_name(field_name: &str) -> bool {
 }
 
 use crate::crate_paths::{
-	get_linkme_crate, get_reinhardt_apps_crate, get_reinhardt_core_crate, get_reinhardt_crate,
-	get_reinhardt_db_crate, get_reinhardt_forms_crate, get_reinhardt_migrations_crate,
-	get_reinhardt_orm_crate, get_serde_crate, get_serde_json_crate,
+	get_dependency_crate, get_linkme_crate, get_reinhardt_apps_crate, get_reinhardt_core_crate,
+	get_reinhardt_crate, get_reinhardt_db_crate, get_reinhardt_forms_crate,
+	get_reinhardt_migrations_crate, get_reinhardt_orm_crate, get_serde_crate, get_serde_json_crate,
 };
 use crate::identifier_case::to_snake_case;
 use crate::rel::RelAttribute;
@@ -3309,6 +3309,10 @@ fn generate_model_form_support(
 			}
 		}
 	});
+	let trusted_field_names = field_infos
+		.iter()
+		.map(|field| LitStr::new(&ident_to_wire_name(&field.name), field.name.span()))
+		.collect::<Vec<_>>();
 	let field_literals: Vec<_> = editable_fields
 		.iter()
 		.map(|field| LitStr::new(&ident_to_wire_name(&field.name), field.name.span()))
@@ -3578,7 +3582,7 @@ fn generate_model_form_support(
 					quote!(::std::default::Default::default())
 				} else if required {
 					quote! {
-						if deferred_field == #field_literal {
+						if deferred_fields.contains(&#field_literal) {
 							::std::default::Default::default()
 						} else {
 							return ::core::result::Result::Err(
@@ -3623,7 +3627,7 @@ fn generate_model_form_support(
 					}
 				} else if required {
 					quote! {
-						if deferred_field == #field_literal {
+						if deferred_fields.contains(&#field_literal) {
 							::std::default::Default::default()
 						} else {
 							return ::core::result::Result::Err(
@@ -3653,7 +3657,7 @@ fn generate_model_form_support(
 					quote!(::std::default::Default::default())
 				} else if required {
 					quote! {
-						if deferred_field == #field_literal {
+						if deferred_fields.contains(&#field_literal) {
 							::std::default::Default::default()
 						} else {
 							return ::core::result::Result::Err(
@@ -3883,9 +3887,9 @@ fn generate_model_form_support(
 				#build_from_payload_body
 			}
 
-			fn build_from_payload_with_deferred_required_field<P: #core_crate::model_form::ModelFormPolicy>(
+			fn build_from_payload_with_deferred_required_fields<P: #core_crate::model_form::ModelFormPolicy>(
 				data: &Self::Data<P>,
-				deferred_field: &str,
+				deferred_fields: &[&str],
 			) -> ::core::result::Result<Self, #forms_crate::model_form::ModelFormError> {
 				#build_from_payload_with_deferred_field_body
 			}
@@ -3909,6 +3913,10 @@ fn generate_model_form_support(
 						errors: ::std::collections::HashMap::from([(field.to_owned(), vec!["unknown trusted model field".to_owned()])]),
 					}),
 				}
+			}
+
+			fn accepts_trusted_field(field: &str) -> bool {
+				matches!(field, #(#trusted_field_names)|*)
 			}
 
 			fn trusted_relation_field_kind(
@@ -4075,19 +4083,26 @@ fn named_model_form_canonical_scalar_type(path: &syn::Path) -> Option<TokenStrea
 	}
 
 	if path_has_exact_segments(path, &["rust_decimal", "Decimal"]) {
-		Some(quote!(::rust_decimal::Decimal))
+		let rust_decimal_crate = get_dependency_crate("rust_decimal");
+		Some(quote!(#rust_decimal_crate::Decimal))
 	} else if path_has_exact_segments(path, &["uuid", "Uuid"]) {
-		Some(quote!(::uuid::Uuid))
+		let uuid_crate = get_dependency_crate("uuid");
+		Some(quote!(#uuid_crate::Uuid))
 	} else if path_has_exact_segments(path, &["chrono", "NaiveDate"]) {
-		Some(quote!(::chrono::NaiveDate))
+		let chrono_crate = get_dependency_crate("chrono");
+		Some(quote!(#chrono_crate::NaiveDate))
 	} else if path_has_exact_segments(path, &["chrono", "NaiveTime"]) {
-		Some(quote!(::chrono::NaiveTime))
+		let chrono_crate = get_dependency_crate("chrono");
+		Some(quote!(#chrono_crate::NaiveTime))
 	} else if path_has_exact_segments(path, &["chrono", "NaiveDateTime"]) {
-		Some(quote!(::chrono::NaiveDateTime))
+		let chrono_crate = get_dependency_crate("chrono");
+		Some(quote!(#chrono_crate::NaiveDateTime))
 	} else if is_canonical_chrono_datetime_utc(path) {
-		Some(quote!(::chrono::DateTime<::chrono::Utc>))
+		let chrono_crate = get_dependency_crate("chrono");
+		Some(quote!(#chrono_crate::DateTime<#chrono_crate::Utc>))
 	} else if path_has_exact_segments(path, &["serde_json", "Value"]) {
-		Some(quote!(::serde_json::Value))
+		let serde_json_crate = get_dependency_crate("serde_json");
+		Some(quote!(#serde_json_crate::Value))
 	} else {
 		None
 	}
@@ -4320,6 +4335,7 @@ pub(crate) fn generate_named_model_form_contract(
 		let reserved = [
 			"fields",
 			"model_form",
+			"clone",
 			"default",
 			"supplied_fields",
 			"forbidden_fields",
@@ -13369,6 +13385,31 @@ mod tests {
 				"field `{field_name}` must be rejected: {error}",
 			);
 		}
+	}
+
+	#[test]
+	fn test_named_model_form_rejects_clone_accessor_collision() {
+		let args = quote! {
+			app_label = "fixture_tests",
+			table_name = "fixture_models",
+			form(name = FixtureCreateForm, fields(clone))
+		};
+		let input = quote! {
+			struct FixtureModel {
+				#[field(primary_key = true)]
+				id: i64,
+				#[field(max_length = 64)]
+				clone: String,
+			}
+		};
+
+		let error = crate::model_attribute::model_attribute_impl(args, syn::parse2(input).unwrap())
+			.expect_err("named contract accessors must not shadow Clone::clone");
+
+		assert_eq!(
+			error.to_string(),
+			"named model form field name collides with generated contract API"
+		);
 	}
 
 	#[test]

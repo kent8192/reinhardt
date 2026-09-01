@@ -2,6 +2,10 @@
 
 use reinhardt::model;
 use serde::{Deserialize, Serialize};
+use decimal as rust_decimal;
+use identifier as uuid;
+use json as serde_json;
+use time as chrono;
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 use reinhardt::db::associations::ForeignKeyField;
@@ -54,16 +58,34 @@ pub struct RawIdentifierDocument {
 	pub r#type: String,
 }
 
+#[model(
+	app_label = "scalar_documents",
+	table_name = "scalar_documents",
+	form(name = ScalarCreateForm, fields(price, external_id, day, metadata)),
+	info = false
+)]
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ScalarDocument {
+	#[field(primary_key = true)]
+	pub id: i64,
+	pub price: rust_decimal::Decimal,
+	pub external_id: uuid::Uuid,
+	pub day: chrono::NaiveDate,
+	pub metadata: serde_json::Value,
+}
+
 #[cfg(test)]
 mod tests {
 	use super::{
 		ClusterCreateForm, ClusterCreateFormData, ClusterCreateFormField, ClusterCreateFormSchema,
 		RawIdentifierCreateForm, RawIdentifierCreateFormData, RawIdentifierCreateFormField,
-		RawIdentifierCreateFormSchema,
+		RawIdentifierCreateFormSchema, ScalarCreateFormSchema,
 	};
 	use reinhardt_core::model_form::{
-		ModelFormContract, ModelFormContractField, ModelFormContractSchema, ModelFormPayload,
+		ModelFormContract, ModelFormContractField, ModelFormContractSchema, ModelFormFieldKind,
+		ModelFormPayload,
 	};
+	use json as serde_json;
 	use wasm_bindgen_test::wasm_bindgen_test;
 
 	#[wasm_bindgen_test]
@@ -104,6 +126,21 @@ mod tests {
 		assert_eq!(
 			serde_json::to_value(raw_payload).expect("raw identifier payload should serialize"),
 			serde_json::json!({ "type": "json" }),
+		);
+		assert_eq!(
+			<ScalarCreateFormSchema as ModelFormContractSchema>::contract_fields()
+				.iter()
+				.map(|field| field.kind)
+				.collect::<Vec<_>>(),
+			[
+				ModelFormFieldKind::Decimal {
+					min: None,
+					max: None,
+				},
+				ModelFormFieldKind::Uuid,
+				ModelFormFieldKind::Date,
+				ModelFormFieldKind::Json,
+			],
 		);
 	}
 }

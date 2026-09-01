@@ -35,9 +35,11 @@ native = ["reinhardt/core", "reinhardt/database", "reinhardt/forms"]
 [dependencies]
 reinhardt = {{ path = "{}", package = "reinhardt-web", default-features = false }}
 reinhardt-core = {{ path = "{}" }}
-chrono = {{ version = "0.4", features = ["serde"] }}
+decimal = {{ package = "rust_decimal", version = "1.0", features = ["serde"] }}
+identifier = {{ package = "uuid", version = "1.0", features = ["serde"] }}
+json = {{ package = "serde_json", version = "1.0" }}
 serde = {{ version = "1.0", features = ["derive"] }}
-serde_json = "1.0"
+time = {{ package = "chrono", version = "0.4", features = ["serde"] }}
 
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 ctor = "0.8.0"

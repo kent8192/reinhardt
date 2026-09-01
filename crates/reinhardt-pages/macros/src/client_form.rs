@@ -387,38 +387,38 @@ fn generate_form_items(context: FormItemContext<'_>) -> proc_macro2::TokenStream
 			}
 		}
 	});
-	let runtime_control_binding_arms = field_token_fields.iter().map(|field| {
+	let runtime_control_binding_arms = field_token_fields.iter().filter_map(|field| {
 		let name = &field.name;
 		let variant = &field.variant;
 		match &field.kind {
-			FieldKind::String | FieldKind::OptionString => quote! {
+			FieldKind::String | FieldKind::OptionString => Some(quote! {
 				(#field_ident::#variant, #pages_crate::component::ControlKind::Text) => {
 					::core::option::Option::Some(#pages_crate::component::ControlBinding::text(self.#name))
-				}
+				},
 				(#field_ident::#variant, #pages_crate::component::ControlKind::Radio) => request
 					.radio_value
 					.map(|value| #pages_crate::component::ControlBinding::radio(self.#name, value)),
 				(#field_ident::#variant, #pages_crate::component::ControlKind::SelectOne) => {
 					::core::option::Option::Some(#pages_crate::component::ControlBinding::select_one(self.#name))
-				}
-			},
+				},
+			}),
 			FieldKind::Scalar => {
 				let error = field.number_error_ident();
-				quote! {
+				Some(quote! {
 					(#field_ident::#variant, #pages_crate::component::ControlKind::Number) => {
 						::core::option::Option::Some(#pages_crate::component::ControlBinding::number_with_error(
 							self.#name,
 							self.#error,
 						))
-					}
-				}
+					},
+				})
 			}
-			FieldKind::Bool => quote! {
+			FieldKind::Bool => Some(quote! {
 				(#field_ident::#variant, #pages_crate::component::ControlKind::Checkbox) => {
 					::core::option::Option::Some(#pages_crate::component::ControlBinding::checkbox(self.#name))
-				}
-			},
-			_ => quote! {},
+				},
+			}),
+			_ => None,
 		}
 	});
 	let custom_widget_error_arms = numeric_field_tokens.iter().map(|field| {
@@ -566,7 +566,7 @@ fn generate_form_items(context: FormItemContext<'_>) -> proc_macro2::TokenStream
 				request: #pages_crate::RuntimeControlBindingRequest,
 			) -> ::core::option::Option<#pages_crate::component::ControlBinding> {
 				let binding = match (field, request.kind) {
-					#(#runtime_control_binding_arms,)*
+					#(#runtime_control_binding_arms)*
 					_ => ::core::option::Option::None,
 				};
 				binding.map(|binding| {

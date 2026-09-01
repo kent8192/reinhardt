@@ -554,42 +554,45 @@ where
 
 		#[cfg(wasm)]
 		{
-			let mut pending_guard =
-				crate::form_state::SubmitPendingGuard::new(self.form.form_state().is_submitting);
-			match self.mutation.action.try_is_pending_untracked() {
-				Some(false) => {}
-				Some(true) => {
-					pending_guard.disarm();
-					return MutationDispatchOutcome::AlreadyPending;
+			crate::reactive::untracked(|| {
+				let mut pending_guard = crate::form_state::SubmitPendingGuard::new(
+					self.form.form_state().is_submitting,
+				);
+				match self.mutation.action.try_is_pending_untracked() {
+					Some(false) => {}
+					Some(true) => {
+						pending_guard.disarm();
+						return MutationDispatchOutcome::AlreadyPending;
+					}
+					None => return MutationDispatchOutcome::AlreadyPending,
 				}
-				None => return MutationDispatchOutcome::AlreadyPending,
-			}
-			match self.form.begin_submit_lifecycle() {
-				crate::UseFormSubmitOutcome::AlreadyPending => {
-					pending_guard.disarm();
-					return MutationDispatchOutcome::AlreadyPending;
+				match self.form.begin_submit_lifecycle() {
+					crate::UseFormSubmitOutcome::AlreadyPending => {
+						pending_guard.disarm();
+						return MutationDispatchOutcome::AlreadyPending;
+					}
+					crate::UseFormSubmitOutcome::ValidationFailed => {
+						pending_guard.disarm();
+						self.mutation.reset_action_preserving_result();
+						return MutationDispatchOutcome::ValidationFailed;
+					}
+					crate::UseFormSubmitOutcome::Submitted => {}
 				}
-				crate::UseFormSubmitOutcome::ValidationFailed => {
+				let input = match (self.prepare)(&self.form) {
+					Ok(input) => input,
+					Err(error) => {
+						self.form.complete_mutation_validation_error(error);
+						pending_guard.disarm();
+						self.mutation.reset_action_preserving_result();
+						return MutationDispatchOutcome::ValidationFailed;
+					}
+				};
+				let outcome = self.mutation.dispatch(input);
+				if outcome == MutationDispatchOutcome::Dispatched {
 					pending_guard.disarm();
-					self.mutation.reset_action_preserving_result();
-					return MutationDispatchOutcome::ValidationFailed;
 				}
-				crate::UseFormSubmitOutcome::Submitted => {}
-			}
-			let input = match (self.prepare)(&self.form) {
-				Ok(input) => input,
-				Err(error) => {
-					self.form.complete_mutation_validation_error(error);
-					pending_guard.disarm();
-					self.mutation.reset_action_preserving_result();
-					return MutationDispatchOutcome::ValidationFailed;
-				}
-			};
-			let outcome = self.mutation.dispatch(input);
-			if outcome == MutationDispatchOutcome::Dispatched {
-				pending_guard.disarm();
-			}
-			outcome
+				outcome
+			})
 		}
 	}
 }

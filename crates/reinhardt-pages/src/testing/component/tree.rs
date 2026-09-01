@@ -1156,6 +1156,11 @@ impl ElementNode {
 	}
 
 	fn project_controlled_attributes(&mut self, binding: &ControlBinding, value: &ControlValue) {
+		let omits_password_value = binding.kind() == ControlKind::Text
+			&& self.tag.eq_ignore_ascii_case("input")
+			&& self
+				.attr("type")
+				.is_some_and(|input_type| input_type.eq_ignore_ascii_case("password"));
 		let projects_value = self.tag.eq_ignore_ascii_case("input")
 			&& matches!(
 				binding.kind(),
@@ -1172,7 +1177,7 @@ impl ElementNode {
 				ControlKind::Radio => binding.radio_value(),
 				_ => None,
 			};
-			if let Some(value) = projected_value {
+			if let Some(value) = projected_value.filter(|_| !omits_password_value) {
 				self.attrs.push(("value".to_owned(), value.to_owned()));
 			}
 		}
@@ -1508,6 +1513,37 @@ mod case_normalization_tests {
 				dom.element(node).unwrap().attrs(),
 				&[("value".to_owned(), "current".to_owned())]
 			);
+		});
+	}
+
+	#[rstest]
+	fn native_password_control_omits_bound_value_after_reactive_type_change() {
+		ReactiveScope::run(|| {
+			let password_type = Signal::new(false);
+			let reactive_password_type = password_type;
+			let value = Signal::new("secret".to_owned());
+			let mut dom = TestDom::render(
+				PageElement::new("input")
+					.attr("type", "text")
+					.reactive_attr("type", move || {
+						Some(if reactive_password_type.get() {
+							"password".into()
+						} else {
+							"text".into()
+						})
+					})
+					.control_binding(ControlBinding::text(value))
+					.into_page(),
+			);
+			let node = dom.children(dom.root())[0];
+
+			assert_eq!(dom.element(node).unwrap().attr("value"), Some("secret"));
+			password_type.set(true);
+			dom.refresh_control_bindings();
+
+			assert_eq!(dom.element(node).unwrap().attr("type"), Some("password"));
+			assert_eq!(dom.element(node).unwrap().attr("value"), None);
+			assert_eq!(value.get(), "secret");
 		});
 	}
 

@@ -384,7 +384,7 @@ fn convert_struct(expression: &ExprStruct) -> Result<TokenStream> {
 }
 
 fn convert_migration(expression: &ExprStruct) -> Result<TokenStream> {
-	validate_fields(
+	let uses_default_rest = validate_migration_fields(
 		expression,
 		&[
 			"name",
@@ -422,8 +422,13 @@ fn convert_migration(expression: &ExprStruct) -> Result<TokenStream> {
 			builder.extend(quote! { .add_replacement(#app, #migration) });
 		}
 	}
-	let atomic =
-		optional_field_expression(expression, "atomic").unwrap_or_else(|| syn::parse_quote!(true));
+	let atomic = optional_field_expression(expression, "atomic").unwrap_or_else(|| {
+		if uses_default_rest {
+			syn::parse_quote!(false)
+		} else {
+			syn::parse_quote!(true)
+		}
+	});
 	let initial =
 		optional_field_expression(expression, "initial").unwrap_or_else(|| syn::parse_quote!(None));
 	let state_only = optional_field_expression(expression, "state_only")
@@ -611,7 +616,20 @@ fn convert_bulk_load_options(expression: &ExprStruct) -> Result<TokenStream> {
 }
 
 fn validate_fields(expression: &ExprStruct, allowed: &[&str]) -> Result<()> {
-	if expression.rest.is_some() {
+	validate_struct_fields(expression, allowed, false).map(|_| ())
+}
+
+fn validate_migration_fields(expression: &ExprStruct, allowed: &[&str]) -> Result<bool> {
+	validate_struct_fields(expression, allowed, true)
+}
+
+fn validate_struct_fields(
+	expression: &ExprStruct,
+	allowed: &[&str],
+	allow_default_rest: bool,
+) -> Result<bool> {
+	let uses_default_rest = expression.rest.as_deref().is_some_and(is_default_rest);
+	if expression.rest.is_some() && (!allow_default_rest || !uses_default_rest) {
 		return Err(invalid_shape(
 			"generated struct literal uses a struct-update expression",
 		));
@@ -636,7 +654,29 @@ fn validate_fields(expression: &ExprStruct, allowed: &[&str]) -> Result<()> {
 		}
 		seen.push(name);
 	}
-	Ok(())
+	Ok(uses_default_rest)
+}
+
+fn is_default_rest(expression: &Expr) -> bool {
+	let Expr::Call(call) = expression else {
+		return false;
+	};
+	if !call.args.is_empty() {
+		return false;
+	}
+	let Expr::Path(path) = &*call.func else {
+		return false;
+	};
+	call.attrs.is_empty()
+		&& path.attrs.is_empty()
+		&& path.qself.is_none()
+		&& path.path.leading_colon.is_none()
+		&& path
+			.path
+			.segments
+			.iter()
+			.all(|segment| matches!(segment.arguments, syn::PathArguments::None))
+		&& path_matches(&path.path, &["Default", "default"])
 }
 
 fn validate_aliases(expression: &ExprStruct, aliases: &[&str]) -> Result<()> {
@@ -949,6 +989,7 @@ fn invalid_shape(message: &str) -> MigrationError {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	#[test]
 	fn upgrades_nested_literals_and_preserves_unrelated_text() {
@@ -1207,8 +1248,30 @@ fn migration() -> Migration {
 		);
 	}
 
+	#[rstest]
+	#[case::function_call("migration_defaults()")]
+	#[case::qualified_default("std::default::Default::default()")]
+	#[case::default_with_argument("Default::default(())")]
+	#[case::generic_default("Default::default::<Migration>()")]
+	fn rejects_arbitrary_generated_struct_updates(#[case] rest: &str) {
+		let source = format!(
+			r#"fn migration() -> Migration {{
+    Migration {{
+        name: "0001_initial".to_string(),
+        app_label: "app".to_string(),
+        operations: vec![],
+        dependencies: vec![],
+        ..{rest}
+    }}
+}}
+"#
+		);
+		let error = upgrade_source(&source).unwrap_err();
+		assert!(error.to_string().contains("struct-update expression"));
+	}
+
 	#[test]
-	fn rejects_generated_struct_updates() {
+	fn applies_default_semantics_for_omitted_migration_fields() {
 		let source = r#"fn migration() -> Migration {
     Migration {
         name: "0001_initial".to_string(),
@@ -1219,8 +1282,69 @@ fn migration() -> Migration {
     }
 }
 "#;
-		let error = upgrade_source(source).unwrap_err();
-		assert!(error.to_string().contains("struct-update expression"));
+
+		let result = upgrade_source(source).unwrap();
+		let file = syn::parse_file(&result.source).unwrap();
+		let migration = crate::migrations::ast_parser::extract_migration_metadata_strict(
+			&file,
+			"app",
+			"0001_initial",
+		)
+		.unwrap();
+
+		assert_eq!(migration.operations, vec![]);
+		assert_eq!(migration.dependencies, vec![]);
+		assert_eq!(migration.replaces, vec![]);
+		assert!(!migration.atomic);
+		assert_eq!(migration.initial, None);
+		assert!(!migration.state_only);
+		assert!(!migration.database_only);
+		assert_eq!(migration.swappable_dependencies, vec![]);
+		assert_eq!(migration.optional_dependencies, vec![]);
+	}
+
+	#[rstest]
+	#[case::tweet(
+		"tweet",
+		1,
+		include_str!("../../tests/fixtures/migration_source/v0_1_4/twitter/tweet/0001_initial.rs")
+	)]
+	#[case::auth(
+		"auth",
+		4,
+		include_str!("../../tests/fixtures/migration_source/v0_1_4/twitter/auth/0001_initial.rs")
+	)]
+	#[case::dm(
+		"dm",
+		3,
+		include_str!("../../tests/fixtures/migration_source/v0_1_4/twitter/dm/0001_initial.rs")
+	)]
+	#[case::profile(
+		"profile",
+		1,
+		include_str!("../../tests/fixtures/migration_source/v0_1_4/twitter/profile/0001_initial.rs")
+	)]
+	fn upgrades_v0_1_4_generated_twitter_migrations(
+		#[case] app_label: &str,
+		#[case] operation_count: usize,
+		#[case] source: &str,
+	) {
+		let result = upgrade_source(source).unwrap();
+		let file = syn::parse_file(&result.source).unwrap();
+		let migration = crate::migrations::ast_parser::extract_migration_metadata_strict(
+			&file,
+			app_label,
+			"0001_initial",
+		)
+		.unwrap();
+
+		assert!(result.changed);
+		assert_eq!(result.from_version, None);
+		assert_eq!(migration.operations.len(), operation_count);
+		assert_eq!(
+			upgrade_source(&result.source).unwrap().source,
+			result.source
+		);
 	}
 
 	#[test]

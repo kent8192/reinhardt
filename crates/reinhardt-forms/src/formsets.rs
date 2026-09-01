@@ -787,6 +787,23 @@ mod tests {
 
 	static REQUIRED_CHILD_GENERATED_VALIDATOR_CALLS: AtomicUsize = AtomicUsize::new(0);
 
+	struct AtomicUsizeResetGuard {
+		counter: &'static AtomicUsize,
+	}
+
+	impl AtomicUsizeResetGuard {
+		fn new(counter: &'static AtomicUsize) -> Self {
+			counter.store(0, Ordering::SeqCst);
+			Self { counter }
+		}
+	}
+
+	impl Drop for AtomicUsizeResetGuard {
+		fn drop(&mut self) {
+			self.counter.store(0, Ordering::SeqCst);
+		}
+	}
+
 	// Test model implementation
 	#[model(
 		app_label = "forms",
@@ -1181,7 +1198,8 @@ mod tests {
 	#[rstest]
 	#[serial(inline_generated_validator)]
 	fn test_inline_formset_defers_model_validator_until_generated_parent_key_is_assigned() {
-		REQUIRED_CHILD_GENERATED_VALIDATOR_CALLS.store(0, Ordering::SeqCst);
+		let _generated_validator_calls_reset =
+			AtomicUsizeResetGuard::new(&REQUIRED_CHILD_GENERATED_VALIDATOR_CALLS);
 		let validator_calls = Arc::new(AtomicUsize::new(0));
 		let validator_calls_for_candidate = Arc::clone(&validator_calls);
 		let parent = TestModel {
@@ -1239,7 +1257,8 @@ mod tests {
 	#[serial(inline_generated_validator)]
 	fn test_inline_formset_generated_validator_rejects_before_parent_persistence() {
 		// Arrange
-		REQUIRED_CHILD_GENERATED_VALIDATOR_CALLS.store(0, Ordering::SeqCst);
+		let _generated_validator_calls_reset =
+			AtomicUsizeResetGuard::new(&REQUIRED_CHILD_GENERATED_VALIDATOR_CALLS);
 		let model_validator_calls = Arc::new(AtomicUsize::new(0));
 		let model_validator_calls_for_candidate = Arc::clone(&model_validator_calls);
 		let parent = TestModel {

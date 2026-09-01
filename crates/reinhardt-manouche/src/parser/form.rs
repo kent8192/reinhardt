@@ -350,10 +350,7 @@ impl Parse for FormMacro {
 
 		match (model_form, model) {
 			(Some(contract), None) => {
-				form.model_source = Some(ModelFormSource::Contract {
-					contract,
-					overrides,
-				});
+				form.model_source = Some(ModelFormSource::contract(contract, overrides));
 			}
 			(None, Some(model)) => {
 				if has_explicit_fields {
@@ -374,7 +371,7 @@ impl Parse for FormMacro {
 						"model-backed form! requires `policy: YourPolicy` so the server function can enforce the selected fields",
 					)
 				})?;
-				form.model_source = Some(ModelFormSource::Legacy {
+				form.model_source = Some(ModelFormSource {
 					model,
 					policy,
 					selection,
@@ -1632,6 +1629,33 @@ mod tests {
 		assert!(matches!(form.action, FormAction::Url(_)));
 	}
 
+	#[test]
+	fn public_form_macro_struct_literal_keeps_legacy_shape() {
+		let form = FormMacro {
+			name: None,
+			action: FormAction::None,
+			method: None,
+			class: None,
+			state: None,
+			callbacks: crate::FormCallbacks::new(),
+			watch: None,
+			derived: None,
+			redirect_on_success: None,
+			success_url: None,
+			initial_loader: None,
+			choices_loader: None,
+			slots: None,
+			fields: Vec::new(),
+			model_source: None,
+			validators: Vec::new(),
+			strip_arguments: Vec::new(),
+			ambient_arguments_source: None,
+			span: Span::call_site(),
+		};
+
+		assert!(form.model_source.is_none());
+	}
+
 	#[rstest]
 	fn test_parse_server_fn_action() {
 		// Arrange
@@ -1669,15 +1693,13 @@ mod tests {
 		let form: FormMacro = syn::parse2(input).expect("named model form should parse");
 
 		// Assert
-		let ModelFormSource::Contract {
-			contract,
-			overrides,
-		} = form
+		let source = form
 			.model_source
-			.expect("named model form source should be recorded")
-		else {
-			panic!("named model form should use the contract source");
-		};
+			.expect("named model form source should be recorded");
+		let contract = source
+			.contract_path()
+			.expect("contract path should be present");
+		let overrides = &source.overrides;
 		assert_eq!(contract.segments.last().unwrap().ident, "ClusterCreateForm");
 		assert_eq!(overrides.len(), 1);
 		assert_eq!(overrides[0].field, "name");
@@ -1758,15 +1780,12 @@ mod tests {
 		let source = form
 			.model_source
 			.expect("model source should be recorded for model forms");
-		let ModelFormSource::Legacy {
+		let ModelFormSource {
 			model,
 			policy,
 			selection,
 			overrides,
-		} = source
-		else {
-			panic!("legacy model form should use the legacy source");
-		};
+		} = source;
 		assert_eq!(model.segments.last().unwrap().ident, "Question");
 		assert_eq!(policy.segments.last().unwrap().ident, "QuestionFields");
 		let ModelFieldSelection::Fields(fields) = selection else {
@@ -1806,9 +1825,7 @@ mod tests {
 		let source = form
 			.model_source
 			.expect("model source should be recorded for model forms");
-		let ModelFormSource::Legacy { selection, .. } = source else {
-			panic!("legacy model form should use the legacy source");
-		};
+		let ModelFormSource { selection, .. } = source;
 		let ModelFieldSelection::Exclude(fields) = selection else {
 			panic!("model form should exclude fields");
 		};

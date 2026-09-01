@@ -40,10 +40,26 @@ pub struct Cluster {
 	pub api_url: Option<String>,
 }
 
+#[model(
+	app_label = "keywords",
+	table_name = "keyword_documents",
+	form(name = RawIdentifierCreateForm, fields(r#type)),
+	info = false
+)]
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct RawIdentifierDocument {
+	#[field(primary_key = true)]
+	pub id: i64,
+	#[field(max_length = 32)]
+	pub r#type: String,
+}
+
 #[cfg(test)]
 mod tests {
 	use super::{
 		ClusterCreateForm, ClusterCreateFormData, ClusterCreateFormField, ClusterCreateFormSchema,
+		RawIdentifierCreateForm, RawIdentifierCreateFormData, RawIdentifierCreateFormField,
+		RawIdentifierCreateFormSchema,
 	};
 	use reinhardt_core::model_form::{
 		ModelFormContract, ModelFormContractField, ModelFormContractSchema, ModelFormPayload,
@@ -72,6 +88,22 @@ mod tests {
 		assert_eq!(
 			serde_json::to_value(&payload).expect("named contract should serialize in WASM"),
 			serde_json::json!({ "name": "cluster-a", "api_url": null }),
+		);
+		assert_eq!(
+			<RawIdentifierCreateFormSchema as ModelFormContractSchema>::contract_fields()
+				.iter()
+				.map(|field| field.name)
+				.collect::<Vec<_>>(),
+			["type"],
+		);
+		assert_eq!(RawIdentifierCreateFormField::Type.name(), "type");
+		assert_eq!(RawIdentifierCreateForm::r#type().name, "type");
+		let mut raw_payload = RawIdentifierCreateFormData::default();
+		raw_payload.set_type("json".to_owned());
+		assert_eq!(raw_payload.supplied_fields(), ["type"]);
+		assert_eq!(
+			serde_json::to_value(raw_payload).expect("raw identifier payload should serialize"),
+			serde_json::json!({ "type": "json" }),
 		);
 	}
 }

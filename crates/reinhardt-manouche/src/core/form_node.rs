@@ -118,26 +118,43 @@ pub struct FormMacro {
 }
 
 /// Source configuration for a model-backed form.
+///
+/// Named target-neutral contracts use [`ModelFormSource::contract`] and can be
+/// identified with [`ModelFormSource::contract_path`]. The four public fields
+/// remain unchanged for compatibility with existing AST consumers.
 #[derive(Debug, Clone)]
-pub enum ModelFormSource {
-	/// Legacy model, policy, and field-selection source.
-	Legacy {
-		/// Model type used to generate form fields.
-		model: Path,
-		/// Nameable policy enforced by the server-function payload.
-		policy: Path,
-		/// Fields selected from the model.
-		selection: ModelFieldSelection,
-		/// Presentation overrides for selected model fields.
-		overrides: Vec<ModelFieldOverride>,
-	},
-	/// Named target-neutral ModelForm contract source.
-	Contract {
-		/// Contract marker supplying schema, payload, and field tokens.
-		contract: Path,
-		/// Presentation overrides for contract fields.
-		overrides: Vec<ModelFieldOverride>,
-	},
+pub struct ModelFormSource {
+	/// Model type used to generate form fields.
+	pub model: Path,
+	/// Nameable policy enforced by the server-function payload.
+	pub policy: Path,
+	/// Fields selected from the model.
+	pub selection: ModelFieldSelection,
+	/// Presentation overrides for selected model fields.
+	pub overrides: Vec<ModelFieldOverride>,
+}
+
+impl ModelFormSource {
+	/// Creates a source backed by a named target-neutral model-form contract.
+	pub fn contract(contract: Path, overrides: Vec<ModelFieldOverride>) -> Self {
+		Self {
+			model: contract,
+			// An empty policy path is not a valid user-authored Rust path and is
+			// reserved as the internal marker for a contract source. Keeping the
+			// legacy four fields intact preserves struct-literal compatibility.
+			policy: Path {
+				leading_colon: None,
+				segments: Default::default(),
+			},
+			selection: ModelFieldSelection::Fields(Vec::new()),
+			overrides,
+		}
+	}
+
+	/// Returns the contract path when this source is backed by a named contract.
+	pub fn contract_path(&self) -> Option<&Path> {
+		self.policy.segments.is_empty().then_some(&self.model)
+	}
 }
 
 /// Selection policy for a model-backed form.

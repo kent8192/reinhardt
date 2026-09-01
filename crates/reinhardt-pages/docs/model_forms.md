@@ -58,7 +58,8 @@ strict JSON boundary: it serializes selected supplied fields only and rejects
 unknown keys, duplicate keys, and incompatible values on deserialization. A
 nullable selected value distinguishes omission from an explicit JSON `null`.
 
-Selected fields may use `String`, numeric primitives, `bool`,
+Selected fields may use `String`, `bool`, and the native ORM-supported numeric
+primitives `i32`, `i64`, `f32`, and `f64`,
 `rust_decimal::Decimal`, `uuid::Uuid`, `chrono::NaiveDate`,
 `chrono::NaiveTime`, `chrono::NaiveDateTime`, `chrono::DateTime<chrono::Utc>`,
 `serde_json::Value`, or one `Option<T>` layer. Relationships, generated

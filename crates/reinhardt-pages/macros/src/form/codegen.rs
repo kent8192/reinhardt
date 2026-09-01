@@ -48,6 +48,7 @@ use quote::{ToTokens, format_ident, quote};
 use syn::ext::IdentExt;
 
 use crate::crate_paths::get_reinhardt_pages_crate_info;
+use reinhardt_manouche::core::attr_utils::ident_to_wire_name;
 use reinhardt_manouche::core::{
 	AmbientArgumentsSource, FormMethod, TypedButtonControlDef, TypedButtonKind, TypedChoiceItem,
 	TypedChoiceOption, TypedCustomAttr, TypedDatalistDef, TypedFieldNativeAttrs, TypedFieldType,
@@ -114,7 +115,7 @@ fn custom_widget_touched_ident(field: &TypedFormFieldDef) -> Option<syn::Ident> 
 	if matches!(field.widget, TypedWidget::CustomExperimental(_)) {
 		Some(format_ident!(
 			"__{}_custom_widget_touched",
-			field.name,
+			ident_to_wire_name(&field.name),
 			span = field.name.span()
 		))
 	} else {
@@ -146,8 +147,7 @@ fn collection_item_values_ident(
 }
 
 fn upper_camel_ident_fragment(ident: &syn::Ident) -> String {
-	let raw = ident.to_string();
-	let input = raw.strip_prefix("r#").unwrap_or(&raw);
+	let input = ident_to_wire_name(ident);
 	let mut out = String::new();
 	let mut upper_next = true;
 	for ch in input.chars() {
@@ -216,7 +216,7 @@ fn generate_ambient_argument_deprecation_markers(
 
 fn upper_snake_ident_fragment(ident: &syn::Ident) -> String {
 	let mut out = String::new();
-	for (index, ch) in ident.to_string().chars().enumerate() {
+	for (index, ch) in ident_to_wire_name(ident).chars().enumerate() {
 		if ch.is_ascii_uppercase() && index > 0 {
 			out.push('_');
 		}
@@ -234,7 +234,7 @@ fn should_pass_csrf_as_business_argument(macro_ast: &TypedFormMacro) -> bool {
 
 fn is_csrf_argument_name(name: &syn::Ident) -> bool {
 	matches!(
-		name.to_string().as_str(),
+		ident_to_wire_name(name).as_str(),
 		"csrf_token" | "_csrf_token" | "csrfmiddlewaretoken"
 	)
 }
@@ -254,7 +254,7 @@ fn generate_form_runtime_contract(
 		.map(|field| {
 			format!(
 				"{} ({})",
-				field.name,
+				ident_to_wire_name(&field.name),
 				field_type_to_string(&field.field_type)
 			)
 		})
@@ -267,8 +267,8 @@ fn generate_form_runtime_contract(
 				.map(|field| {
 					format!(
 						"{}.{} ({})",
-						collection.name,
-						field.name,
+						ident_to_wire_name(&collection.name),
+						ident_to_wire_name(&field.name),
 						field_type_to_string(&field.field_type)
 					)
 				}),
@@ -411,8 +411,7 @@ fn generate_form_runtime_contract(
 		.iter()
 		.zip(field_variants.iter())
 		.map(|(field, variant)| {
-			let name = field.name.to_string();
-			let name = name.strip_prefix("r#").unwrap_or(&name).to_string();
+			let name = ident_to_wire_name(&field.name);
 			quote! {
 				#name => ::core::option::Option::Some(#field_ident::#variant),
 			}
@@ -620,7 +619,7 @@ fn generate_form_runtime_contract(
 		.iter()
 		.zip(field_variants.iter())
 		.map(|(field, variant)| {
-			let field_id = field.name.to_string();
+			let field_id = ident_to_wire_name(&field.name);
 			quote! {
 				#field_ident::#variant => #field_id,
 			}
@@ -779,12 +778,12 @@ fn generate_form_runtime_contract(
 		.iter()
 		.map(|collection| {
 			let collection_name = &collection.name;
-			let collection_name_text = collection.name.to_string();
+			let collection_name_text = ident_to_wire_name(&collection.name);
 			let value_inserts: Vec<TokenStream> = collect_scalar_fields(&collection.fields)
 				.iter()
 				.map(|field| {
 					let field_name = &field.name;
-					let field_name_text = field.name.to_string();
+					let field_name_text = ident_to_wire_name(&field.name);
 					quote! {
 						{
 							let value: ::std::rc::Rc<dyn ::core::any::Any> =
@@ -817,11 +816,11 @@ fn generate_form_runtime_contract(
 		.iter()
 		.map(|collection| {
 			let collection_name = &collection.name;
-			let collection_name_text = collection.name.to_string();
+			let collection_name_text = ident_to_wire_name(&collection.name);
 			let path_checks: Vec<TokenStream> = collect_scalar_fields(&collection.fields)
 				.iter()
 				.map(|field| {
-					let field_name_text = field.name.to_string();
+					let field_name_text = ident_to_wire_name(&field.name);
 					quote! {
 						if path_key
 							== ::std::format!(
@@ -847,12 +846,12 @@ fn generate_form_runtime_contract(
 		.iter()
 		.map(|collection| {
 			let collection_name = &collection.name;
-			let collection_name_text = collection.name.to_string();
+			let collection_name_text = ident_to_wire_name(&collection.name);
 			let value_checks: Vec<TokenStream> = collect_scalar_fields(&collection.fields)
 				.iter()
 				.map(|field| {
 					let field_name = &field.name;
-					let field_name_text = field.name.to_string();
+					let field_name_text = ident_to_wire_name(&field.name);
 					let field_type = field_type_to_value_type(&field.field_type);
 					quote! {
 						if path_key
@@ -882,12 +881,12 @@ fn generate_form_runtime_contract(
 		.iter()
 		.map(|collection| {
 			let collection_name = &collection.name;
-			let collection_name_text = collection.name.to_string();
+			let collection_name_text = ident_to_wire_name(&collection.name);
 			let signal_updates: Vec<TokenStream> = collect_scalar_fields(&collection.fields)
 				.iter()
 				.map(|field| {
 					let field_name = &field.name;
-					let field_name_text = field.name.to_string();
+					let field_name_text = ident_to_wire_name(&field.name);
 					let field_type = field_type_to_value_type(&field.field_type);
 					quote! {
 						{
@@ -954,7 +953,7 @@ fn generate_form_runtime_contract(
 			.iter()
 			.zip(collection_variants.iter())
 			.map(|(collection, variant)| {
-				let name = collection.name.to_string();
+				let name = ident_to_wire_name(&collection.name);
 				quote! {
 					#collection_ident::#variant => #name.to_string(),
 				}
@@ -1091,12 +1090,12 @@ fn generate_form_runtime_contract(
 			.flat_map(|((collection, collection_variant), field_ident)| {
 				let collection_variant = collection_variant.clone();
 				let field_ident = field_ident.clone();
-				let collection_name = collection.name.to_string();
+				let collection_name = ident_to_wire_name(&collection.name);
 				let field_path_ident = field_path_ident.clone();
 				collect_scalar_fields(&collection.fields)
 					.into_iter()
 					.map(move |field| {
-						let field_name = field.name.to_string();
+						let field_name = ident_to_wire_name(&field.name);
 						let field_variant = field_variant_ident(&field.name);
 						quote! {
 							#field_path_ident::#collection_variant {
@@ -1111,10 +1110,10 @@ fn generate_form_runtime_contract(
 			.iter()
 			.zip(collection_variants.iter())
 			.map(|(collection, collection_variant)| {
-				let collection_name = collection.name.to_string();
+				let collection_name = ident_to_wire_name(&collection.name);
 				let field_names: Vec<String> = collect_scalar_fields(&collection.fields)
 					.iter()
-					.map(|field| field.name.to_string())
+					.map(|field| ident_to_wire_name(&field.name))
 					.collect();
 				quote! {
 					#collection_ident::#collection_variant => {
@@ -1448,7 +1447,7 @@ fn generate_form_runtime_contract(
 		.zip(collection_variants.iter())
 		.flat_map(|(collection, collection_variant)| {
 			let collection_name = &collection.name;
-			let collection_name_text = collection.name.to_string();
+			let collection_name_text = ident_to_wire_name(&collection.name);
 			let mut checks = Vec::new();
 			if let Some(min_items) = collection.min_items {
 				let message = format!(
@@ -1501,7 +1500,7 @@ fn generate_form_runtime_contract(
 		.zip(collection_field_idents.iter())
 		.flat_map(|((collection, collection_variant), field_ident)| {
 			let collection_name = collection.name.clone();
-			let collection_name_text = collection.name.to_string();
+			let collection_name_text = ident_to_wire_name(&collection.name);
 			let collection_variant = collection_variant.clone();
 			let field_ident = field_ident.clone();
 			let field_path_ident = field_path_ident.clone();
@@ -1512,9 +1511,10 @@ fn generate_form_runtime_contract(
 						return None;
 					}
 					let field_name = field.name.clone();
-					let field_name_text = field.name.to_string();
+					let field_name_text = ident_to_wire_name(&field.name);
 					let field_variant = field_variant_ident(&field.name);
-					let message = format!("{}.{} is required", collection_name_text, field_name_text);
+					let message =
+						format!("{}.{} is required", collection_name_text, field_name_text);
 					let empty_check =
 						runtime_collection_required_empty_check(&field_name, &field.field_type)?;
 					Some(quote! {
@@ -1920,18 +1920,18 @@ fn generate_model_form(
 	pages_crate: &TokenStream,
 	use_statement: &TokenStream,
 ) -> TokenStream {
-	let (model, policy, selection, contract, overrides) = match model_source {
-		TypedModelFormSource::Legacy {
-			model,
-			policy,
-			selection,
-			overrides,
-		} => (Some(model), Some(policy), Some(selection), None, overrides),
-		TypedModelFormSource::Contract {
-			contract,
-			overrides,
-		} => (None, None, None, Some(contract), overrides),
-	};
+	let (model, policy, selection, contract, overrides) =
+		if let Some(contract) = model_source.contract_path() {
+			(None, None, None, Some(contract), &model_source.overrides)
+		} else {
+			let TypedModelFormSource {
+				model,
+				policy,
+				selection,
+				overrides,
+			} = model_source;
+			(Some(model), Some(policy), Some(selection), None, overrides)
+		};
 	let form_ident = &macro_ast.name;
 	let legacy_policy_ident = format_ident!("{}SelectionPolicy", form_ident);
 	let data_ident = format_ident!("{}Data", form_ident);
@@ -1987,12 +1987,12 @@ fn generate_model_form(
 		let selection_policy_body = match selection.expect("legacy selection") {
 			TypedModelFieldSelection::Fields(fields) if fields.is_empty() => quote! { false },
 			TypedModelFieldSelection::Fields(fields) => {
-				let names = fields.iter().map(ToString::to_string);
+				let names = fields.iter().map(ident_to_wire_name);
 				quote! { ::core::matches!(field, #(#names)|*) }
 			}
 			TypedModelFieldSelection::Exclude(fields) if fields.is_empty() => quote! { true },
 			TypedModelFieldSelection::Exclude(fields) => {
-				let names = fields.iter().map(ToString::to_string);
+				let names = fields.iter().map(ident_to_wire_name);
 				quote! { !::core::matches!(field, #(#names)|*) }
 			}
 		};
@@ -2034,8 +2034,7 @@ fn generate_model_form(
 			TypedModelFieldSelection::Fields(fields) => {
 				let selection_ident = format_ident!("__ReinhardtModelFormSelection");
 				let argument_impls = fields.iter().enumerate().map(|(index, field)| {
-					let name = field.to_string();
-					let name = name.strip_prefix("r#").unwrap_or(&name);
+					let name = ident_to_wire_name(field);
 					quote! {
 						#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 						impl #pages_crate::form::ModelFormSelectionArgument<#index> for #selection_ident {
@@ -2124,8 +2123,7 @@ fn generate_model_form(
 		Some(selection) => match selection {
 			TypedModelFieldSelection::Fields(fields) => {
 				let names = fields.iter().map(|field| {
-					let name = field.to_string();
-					let name = name.strip_prefix("r#").unwrap_or(&name);
+					let name = ident_to_wire_name(field);
 					quote!(#name)
 				});
 				quote! {
@@ -2154,9 +2152,8 @@ fn generate_model_form(
 			TypedModelFieldSelection::Fields(fields) => fields
 				.iter()
 				.map(|field| {
-					let method = format_ident!("{}_field", field);
-					let name = field.to_string();
-					let name = name.strip_prefix("r#").unwrap_or(&name);
+					let method = format_ident!("{}_field", ident_to_wire_name(field));
+					let name = ident_to_wire_name(field);
 					quote! {
 						pub fn #method(&self) -> __ReinhardtModelFormField {
 							__ReinhardtModelFormField(#name)
@@ -2178,8 +2175,7 @@ fn generate_model_form(
 		Some(selection) => match selection {
 			TypedModelFieldSelection::Fields(fields) => {
 				let names = fields.iter().map(|field| {
-					let name = field.to_string();
-					let name = name.strip_prefix("r#").unwrap_or(&name);
+					let name = ident_to_wire_name(field);
 					quote!(__ReinhardtModelFormField(#name))
 				});
 				(
@@ -2255,7 +2251,7 @@ fn generate_model_form(
 	};
 
 	let override_arms = overrides.iter().map(|override_| {
-		let name = override_.field.to_string();
+		let name = ident_to_wire_name(&override_.field);
 		let widget = override_
 			.widget
 			.as_ref()
@@ -2279,7 +2275,7 @@ fn generate_model_form(
 	let range_override_names: Vec<String> = overrides
 		.iter()
 		.filter(|override_| matches!(override_.widget, Some(TypedWidget::RangeInput)))
-		.map(|override_| override_.field.to_string())
+		.map(|override_| ident_to_wire_name(&override_.field))
 		.collect();
 	let is_range_override = if range_override_names.is_empty() {
 		quote!(false)
@@ -2289,7 +2285,7 @@ fn generate_model_form(
 	let color_override_names: Vec<String> = overrides
 		.iter()
 		.filter(|override_| matches!(override_.widget, Some(TypedWidget::ColorInput)))
-		.map(|override_| override_.field.to_string())
+		.map(|override_| ident_to_wire_name(&override_.field))
 		.collect();
 	let is_color_override = if color_override_names.is_empty() {
 		quote!(false)
@@ -3457,7 +3453,7 @@ pub(super) fn generate(
 	let crate_info = get_reinhardt_pages_crate_info();
 	let use_statement = &crate_info.use_statement;
 	let pages_crate = &crate_info.ident;
-	if let Some(model_source) = &macro_ast.model_source {
+	if let Some(model_source) = macro_ast.model_source.as_ref() {
 		return generate_model_form(macro_ast, model_source, pages_crate, use_statement);
 	}
 
@@ -4687,7 +4683,7 @@ fn generate_metadata_function(
 	let field_metadata: Vec<TokenStream> = all_fields
 		.iter()
 		.map(|field| {
-			let name = field.name.to_string();
+			let name = ident_to_wire_name(&field.name);
 			let field_type = field_type_to_string(&field.field_type);
 			let widget = widget_to_string(&field.widget);
 			let required = field.validation.required;
@@ -5498,7 +5494,7 @@ fn generate_collection_view(
 	pages_crate: &TokenStream,
 ) -> TokenStream {
 	let collection_name = &collection.name;
-	let collection_name_str = collection.name.to_string();
+	let collection_name_str = ident_to_wire_name(&collection.name);
 	let collection_class = collection
 		.class
 		.as_deref()
@@ -5563,7 +5559,7 @@ fn generate_collection_field_view(
 	pages_crate: &TokenStream,
 	collection_name: &str,
 ) -> TokenStream {
-	let field_name_str = field.name.to_string();
+	let field_name_str = ident_to_wire_name(&field.name);
 	let input_type = widget_to_input_type(&field.widget);
 	let label_text = field.display.label.as_deref().unwrap_or(&field_name_str);
 	let placeholder = field.display.placeholder.as_deref().unwrap_or("");
@@ -5778,7 +5774,7 @@ fn generate_collection_bind_listener(
 	collection_name: &str,
 ) -> TokenStream {
 	let field_name = &field.name;
-	let field_name_str = field.name.to_string();
+	let field_name_str = ident_to_wire_name(&field.name);
 	let field_type = field_type_to_value_type(&field.field_type);
 	let collection_name_str = collection_name.to_string();
 	let (event_type, payload_type) = match field.widget {
@@ -7325,14 +7321,13 @@ fn generate_file_server_fn_contract(
 
 	let argument_names: Vec<String> = fields
 		.iter()
-		.map(|field| field.name.to_string().trim_start_matches("r#").to_owned())
-		.chain(macro_ast.strip_arguments.iter().map(|argument| {
-			argument
-				.name
-				.to_string()
-				.trim_start_matches("r#")
-				.to_owned()
-		}))
+		.map(|field| ident_to_wire_name(&field.name))
+		.chain(
+			macro_ast
+				.strip_arguments
+				.iter()
+				.map(|argument| ident_to_wire_name(&argument.name)),
+		)
 		.collect();
 	let argument_count = argument_names.len();
 	let argument_marker_types: Vec<&syn::Ident> = fields

@@ -107,6 +107,18 @@ struct NamedBooleanDocument {
 
 #[model(
 	app_label = "forms",
+	form(name = RawIdentifierCreateForm, fields(r#type))
+)]
+#[derive(Clone, Deserialize, Serialize)]
+struct RawIdentifierDocument {
+	#[field(primary_key = true)]
+	id: i64,
+	#[field(max_length = 32)]
+	r#type: String,
+}
+
+#[model(
+	app_label = "forms",
 	form(
 		name = SupportedScalarCreateForm,
 		fields(count, ratio, price, external_id, day, time, aware_at, naive_at, metadata)
@@ -220,6 +232,34 @@ fn named_contract_native_payload_reuses_checkbox_normalization() {
 	let json: BooleanCreateFormData =
 		serde_json::from_value(serde_json::json!({})).expect("JSON payload should decode");
 	assert_eq!(json.published(), None);
+}
+
+#[test]
+fn named_contract_normalizes_raw_identifiers_across_native_and_wire_surfaces() {
+	assert_eq!(
+		<RawIdentifierCreateFormSchema as ModelFormContractSchema>::contract_fields()
+			.iter()
+			.map(|field| field.name)
+			.collect::<Vec<_>>(),
+		["type"]
+	);
+	assert_eq!(RawIdentifierCreateFormField::Type.name(), "type");
+	assert_eq!(RawIdentifierCreateForm::r#type().name, "type");
+	assert_eq!(
+		<RawIdentifierDocument as db::orm::Model>::field_metadata()
+			.into_iter()
+			.map(|field| field.name)
+			.collect::<Vec<_>>(),
+		["id", "type"]
+	);
+
+	let mut payload = RawIdentifierCreateFormData::default();
+	payload.set_type("json".to_owned());
+	assert_eq!(payload.r#type(), Some(&"json".to_owned()));
+	assert_eq!(
+		serde_json::to_value(&payload).expect("raw identifier payload should serialize"),
+		serde_json::json!({ "type": "json" })
+	);
 }
 
 #[test]

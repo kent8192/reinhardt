@@ -16,6 +16,7 @@ use proc_macro2::Span;
 use std::collections::HashSet;
 use syn::{Error, Result};
 
+use crate::core::attr_utils::ident_to_wire_name;
 use crate::core::{
 	AmbientArgumentsSource, FormAction, FormCallbacks, FormChoiceItem, FormControlEntryDef,
 	FormControlEntryKind, FormCustomWidgetSpec, FormDatalistDef, FormDerived, FormFieldCollection,
@@ -98,49 +99,50 @@ pub fn validate_form_with_ambient_arguments_source(
 	let fields = transform_fields(&ast.fields)?;
 	validate_list_references(&fields)?;
 	let model_source = transform_model_source(&ast.model_source)?;
-	if model_source.is_some() && !matches!(&action, TypedFormAction::ServerFn(_)) {
+	let model_backed = model_source.is_some();
+	if model_backed && !matches!(&action, TypedFormAction::ServerFn(_)) {
 		return Err(Error::new(
 			ast.span,
 			"model-backed form! requires an explicit `server_fn`",
 		));
 	}
-	if model_source.is_some() && (redirect_on_success.is_some() || success_url.is_some()) {
+	if model_backed && (redirect_on_success.is_some() || success_url.is_some()) {
 		return Err(Error::new(
 			ast.span,
 			"model-backed form! does not support `redirect_on_success` or `success_url`; configure submission lifecycle through `use_form(&form)`",
 		));
 	}
-	if model_source.is_some() && initial_loader.is_some() {
+	if model_backed && initial_loader.is_some() {
 		return Err(Error::new(
 			ast.span,
 			"model-backed form! does not support `initial_loader`; initialize values through the generated form state",
 		));
 	}
-	if model_source.is_some() && choices_loader.is_some() {
+	if model_backed && choices_loader.is_some() {
 		return Err(Error::new(
 			ast.span,
 			"model-backed form! does not support `choices_loader`; configure static choices through the generated model schema",
 		));
 	}
-	if model_source.is_some() && !matches!(method, FormMethod::Post) {
+	if model_backed && !matches!(method, FormMethod::Post) {
 		return Err(Error::new(
 			ast.span,
 			"model-backed form! requires `method: Post` for its server_fn action",
 		));
 	}
-	if model_source.is_some() && slots.is_some() {
+	if model_backed && slots.is_some() {
 		return Err(Error::new(
 			ast.span,
 			"model-backed form! does not support `slots`; compose surrounding page content outside the generated form",
 		));
 	}
-	if model_source.is_some() && (ast.watch.is_some() || ast.derived.is_some()) {
+	if model_backed && (ast.watch.is_some() || ast.derived.is_some()) {
 		return Err(Error::new(
 			ast.span,
 			"model-backed form! does not support `watch` or `derived` clauses",
 		));
 	}
-	if model_source.is_some() && ast.callbacks.has_any() {
+	if model_backed && ast.callbacks.has_any() {
 		return Err(Error::new(
 			ast.span,
 			"model-backed form! does not support callback clauses; configure submission lifecycle through `use_form(&form)`",
@@ -199,45 +201,40 @@ fn transform_model_source(
 		return Ok(None);
 	};
 
-	match source {
-		ModelFormSource::Legacy {
-			model,
-			policy,
-			selection,
-			overrides,
-		} => {
-			let selection = match selection {
-				ModelFieldSelection::Fields(fields) => {
-					validate_unique_model_field_names(fields, "fields")?;
-					TypedModelFieldSelection::Fields(fields.clone())
-				}
-				ModelFieldSelection::Exclude(fields) => {
-					validate_unique_model_field_names(fields, "exclude")?;
-					TypedModelFieldSelection::Exclude(fields.clone())
-				}
-			};
-			let overrides = transform_model_overrides(overrides, |field| match &selection {
-				TypedModelFieldSelection::Fields(fields) => fields.iter().any(|name| name == field),
-				TypedModelFieldSelection::Exclude(fields) => {
-					!fields.iter().any(|name| name == field)
-				}
-			})?;
-
-			Ok(Some(TypedModelFormSource::Legacy {
-				model: model.clone(),
-				policy: policy.clone(),
-				selection,
-				overrides,
-			}))
-		}
-		ModelFormSource::Contract {
-			contract,
-			overrides,
-		} => Ok(Some(TypedModelFormSource::Contract {
-			contract: contract.clone(),
-			overrides: transform_model_overrides(overrides, |_| true)?,
-		})),
+	if let Some(contract) = source.contract_path() {
+		return Ok(Some(TypedModelFormSource::contract(
+			contract.clone(),
+			transform_model_overrides(&source.overrides, |_| true)?,
+		)));
 	}
+
+	let ModelFormSource {
+		model,
+		policy,
+		selection,
+		overrides,
+	} = source;
+	let selection = match selection {
+		ModelFieldSelection::Fields(fields) => {
+			validate_unique_model_field_names(fields, "fields")?;
+			TypedModelFieldSelection::Fields(fields.clone())
+		}
+		ModelFieldSelection::Exclude(fields) => {
+			validate_unique_model_field_names(fields, "exclude")?;
+			TypedModelFieldSelection::Exclude(fields.clone())
+		}
+	};
+	let overrides = transform_model_overrides(overrides, |field| match &selection {
+		TypedModelFieldSelection::Fields(fields) => fields.iter().any(|name| name == field),
+		TypedModelFieldSelection::Exclude(fields) => !fields.iter().any(|name| name == field),
+	})?;
+
+	Ok(Some(TypedModelFormSource {
+		model: model.clone(),
+		policy: policy.clone(),
+		selection,
+		overrides,
+	}))
 }
 
 fn transform_model_overrides(
@@ -248,7 +245,7 @@ fn transform_model_overrides(
 	overrides
 		.iter()
 		.map(|override_| {
-			let field = override_.field.to_string();
+			let field = ident_to_wire_name(&override_.field);
 			if !is_selected(&override_.field) {
 				return Err(Error::new(
 					override_.field.span(),
@@ -279,7 +276,7 @@ fn transform_model_overrides(
 fn validate_unique_model_field_names(fields: &[syn::Ident], clause: &str) -> Result<()> {
 	let mut seen = HashSet::new();
 	for field in fields {
-		let name = field.to_string();
+		let name = ident_to_wire_name(field);
 		if !seen.insert(name.clone()) {
 			return Err(Error::new(
 				field.span(),
@@ -3157,19 +3154,69 @@ mod tests {
 		let typed = parse_and_validate(input).expect("named model form should validate");
 
 		// Assert
-		let TypedModelFormSource::Contract {
-			contract,
-			overrides,
-		} = typed
+		let source = typed
 			.model_source
-			.expect("typed contract source should be present")
-		else {
-			panic!("named model form should use the contract source");
-		};
+			.expect("typed contract source should be present");
+		let contract = source
+			.contract_path()
+			.expect("contract path should be present");
+		let overrides = &source.overrides;
 		assert_eq!(contract.segments.last().unwrap().ident, "ClusterCreateForm");
 		assert_eq!(overrides.len(), 1);
 		assert_eq!(overrides[0].widget, Some(TypedWidget::Textarea));
 		assert_eq!(overrides[0].label.as_deref(), Some("Name"));
+	}
+
+	#[test]
+	fn legacy_model_form_source_keeps_its_struct_literal_shape() {
+		let source = ModelFormSource {
+			model: syn::parse_str("Question").expect("model path should parse"),
+			policy: syn::parse_str("QuestionPolicy").expect("policy path should parse"),
+			selection: ModelFieldSelection::Fields(vec![
+				syn::parse_str("title").expect("field identifier should parse"),
+			]),
+			overrides: Vec::new(),
+		};
+		let typed = TypedModelFormSource {
+			model: source.model.clone(),
+			policy: source.policy.clone(),
+			selection: TypedModelFieldSelection::Fields(vec![
+				syn::parse_str("title").expect("field identifier should parse"),
+			]),
+			overrides: Vec::new(),
+		};
+
+		assert_eq!(source.model.segments.last().unwrap().ident, "Question");
+		assert_eq!(
+			typed.policy.segments.last().unwrap().ident,
+			"QuestionPolicy"
+		);
+	}
+
+	#[test]
+	fn public_typed_form_macro_struct_literal_keeps_legacy_shape() {
+		let form = TypedFormMacro {
+			name: syn::parse_str("LegacyForm").expect("form name should parse"),
+			action: TypedFormAction::None,
+			method: FormMethod::Post,
+			styling: TypedFormStyling::default(),
+			state: None,
+			callbacks: TypedFormCallbacks::new(),
+			watch: None,
+			derived: None,
+			redirect_on_success: None,
+			success_url: None,
+			initial_loader: None,
+			choices_loader: None,
+			slots: None,
+			fields: Vec::new(),
+			model_source: None,
+			validators: Vec::new(),
+			strip_arguments: Vec::new(),
+			span: Span::call_site(),
+		};
+
+		assert!(form.model_source.is_none());
 	}
 
 	#[rstest]
@@ -3198,15 +3245,12 @@ mod tests {
 		let source = typed
 			.model_source
 			.expect("typed model source should be present");
-		let TypedModelFormSource::Legacy {
+		let TypedModelFormSource {
 			model,
 			policy,
 			selection,
 			overrides,
-		} = source
-		else {
-			panic!("legacy model form should use the legacy source");
-		};
+		} = source;
 		assert_eq!(model.segments.last().unwrap().ident, "Question");
 		assert_eq!(policy.segments.last().unwrap().ident, "QuestionFields");
 		assert!(matches!(selection, TypedModelFieldSelection::Fields(_)));

@@ -121,7 +121,10 @@ use reinhardt::forms::{Form, Field, CharField, IntegerField};
 - **Named target-neutral contracts**: `#[model(form(name = Contract,
   fields(field, ...)))]` emits a concrete selected-field payload and schema on
   native and WASM, plus a native-only `Contract::model_form(data)` adapter to
-  `ModelForm<T, ContractPolicy>`
+  `ModelForm<T, ContractPolicy>`. Selected fields are limited to `String`,
+  `bool`, `i32`, `i64`, `f32`, `f64`, `rust_decimal::Decimal`, `uuid::Uuid`,
+  the supported `chrono` date/time types, `serde_json::Value`, and one
+  `Option<T>` layer.
 
 Public JSON fields denied by the active policy are recorded during
 deserialization and rejected by native candidate construction. Hiding a field

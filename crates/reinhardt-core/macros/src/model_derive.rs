@@ -29,6 +29,7 @@ use std::collections::{HashMap, HashSet};
 use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, quote};
 use syn::Token;
+use syn::ext::IdentExt;
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{
@@ -36,6 +37,16 @@ use syn::{
 	parse_quote,
 };
 use syn::{Ident, LitBool, LitStr, bracketed, parenthesized};
+
+/// Return an identifier's source-level name without Rust's raw-identifier marker.
+///
+/// Generated Rust identifiers should keep the original `Ident` so names such as
+/// `r#type` remain valid field and method references.  Strings emitted into
+/// metadata, descriptors, diagnostics, and serialized payloads are wire names,
+/// so they must use the unraw spelling instead.
+fn ident_to_wire_name(ident: &Ident) -> String {
+	ident.unraw().to_string()
+}
 
 use crate::crate_paths::{
 	get_linkme_crate, get_reinhardt_apps_crate, get_reinhardt_core_crate, get_reinhardt_crate,
@@ -773,10 +784,11 @@ fn parse_named_model_form(input: syn::parse::ParseStream) -> Result<NamedModelFo
 	}
 	let mut names = HashSet::new();
 	for field in &fields {
-		if !names.insert(field.to_string()) {
+		let field_name = ident_to_wire_name(field);
+		if !names.insert(field_name.clone()) {
 			return Err(syn::Error::new_spanned(
 				field,
-				format!("named model form field `{field}` is specified more than once"),
+				format!("named model form field `{field_name}` is specified more than once"),
 			));
 		}
 	}
@@ -1860,7 +1872,7 @@ fn lower_model_fields(fields: &Punctuated<syn::Field, Token![,]>) -> Result<Lowe
 
 	for field in fields {
 		let is_fk_id_field = field.ident.as_ref().is_some_and(|field_name| {
-			let name = field_name.to_string();
+			let name = ident_to_wire_name(field_name);
 			let ty = field.ty.to_token_stream().to_string();
 			name.ends_with("_id")
 				&& (ty.contains("InfoModel") || ty.contains("Model"))
@@ -2922,7 +2934,7 @@ fn is_model_form_editable(field: &FieldInfo, field_infos: &[FieldInfo]) -> bool 
 	}
 
 	if field.is_fk_id_field {
-		let relation_name = field.name.to_string();
+		let relation_name = ident_to_wire_name(&field.name);
 		return relation_name
 			.strip_suffix("_id")
 			.and_then(|name| field_infos.iter().find(|candidate| candidate.name == name))
@@ -2950,7 +2962,7 @@ fn model_form_kind(field: &FieldInfo) -> Result<TokenStream> {
 			&field.name,
 			format!(
 				"editable model field `{}` has no supported model-form mapping; set editable = false or use an explicit non-model form",
-				field.name
+				ident_to_wire_name(&field.name)
 			),
 		))
 	};
@@ -3093,7 +3105,7 @@ fn model_form_relation_id_target_type<'a>(
 	field: &FieldInfo,
 	field_infos: &'a [FieldInfo],
 ) -> Result<&'a Type> {
-	let field_name = field.name.to_string();
+	let field_name = ident_to_wire_name(&field.name);
 	let relation_name = field_name.strip_suffix("_id").ok_or_else(|| {
 		syn::Error::new_spanned(
 			&field.name,
@@ -3117,7 +3129,7 @@ fn model_form_relation_id_is_nullable(field: &FieldInfo, field_infos: &[FieldInf
 		return false;
 	}
 
-	let field_name = field.name.to_string();
+	let field_name = ident_to_wire_name(&field.name);
 	let Some(relation_name) = field_name.strip_suffix("_id") else {
 		return false;
 	};
@@ -3207,7 +3219,7 @@ fn generate_model_form_support(
 	let field_names: Vec<_> = editable_fields.iter().map(|field| &field.name).collect();
 	let mut generated_method_names = HashSet::new();
 	for field in &editable_fields {
-		let field_name = field.name.to_string();
+		let field_name = ident_to_wire_name(&field.name);
 		let setter_name = format!("set_{field_name}");
 		let trusted_setter_name = format!("set_trusted_{field_name}");
 		let collides_with_reserved_api = [
@@ -3250,7 +3262,7 @@ fn generate_model_form_support(
 		.iter()
 		.filter(|field| field.is_fk_id_field)
 		.map(|field| {
-			let name = LitStr::new(&field.name.to_string(), field.name.span());
+			let name = LitStr::new(&ident_to_wire_name(&field.name), field.name.span());
 			let kind = if field.is_fk_id_field {
 				model_form_relation_id_kind(field, field_infos)
 			} else {
@@ -3260,8 +3272,8 @@ fn generate_model_form_support(
 		})
 		.collect::<Result<Vec<_>>>()?;
 	let trusted_field_assignments = field_infos.iter().map(|field| {
-		let name = LitStr::new(&field.name.to_string(), field.name.span());
-		let ident = Ident::new(&field.name.to_string(), field.name.span());
+		let name = LitStr::new(&ident_to_wire_name(&field.name), field.name.span());
+		let ident = &field.name;
 		let ty = &field.ty;
 		quote! {
 			#name => {
@@ -3279,13 +3291,13 @@ fn generate_model_form_support(
 	});
 	let field_literals: Vec<_> = editable_fields
 		.iter()
-		.map(|field| LitStr::new(&field.name.to_string(), field.name.span()))
+		.map(|field| LitStr::new(&ident_to_wire_name(&field.name), field.name.span()))
 		.collect();
 	let descriptor_entries = editable_fields
 		.iter()
 		.zip(&field_kinds)
 		.map(|(field, kind)| {
-			let name = LitStr::new(&field.name.to_string(), field.name.span());
+			let name = LitStr::new(&ident_to_wire_name(&field.name), field.name.span());
 			let (is_optional, _) = extract_option_type(&field.ty);
 			let relation_is_nullable = model_form_relation_id_is_nullable(field, field_infos);
 			let nullable = field
@@ -3315,7 +3327,7 @@ fn generate_model_form_support(
 			value_type.to_token_stream().to_string() == "bool" && field.config.default.is_some()
 		})
 		.map(|field| {
-			let name = LitStr::new(&field.name.to_string(), field.name.span());
+			let name = LitStr::new(&ident_to_wire_name(&field.name), field.name.span());
 			let default = field
 				.config
 				.default
@@ -3333,7 +3345,7 @@ fn generate_model_form_support(
 		.iter()
 		.filter(|field| field.is_fk_id_field)
 		.map(|field| {
-			let name = LitStr::new(&field.name.to_string(), field.name.span());
+			let name = LitStr::new(&ident_to_wire_name(&field.name), field.name.span());
 			let target = model_form_relation_id_target_type(field, field_infos)?;
 			Ok(
 				quote!(#name => ::core::any::TypeId::of::<T>() == ::core::any::TypeId::of::<#target>()),
@@ -3361,8 +3373,11 @@ fn generate_model_form_support(
 		.iter()
 		.zip(&field_types)
 		.map(|(field_name, field_ty)| {
-			let setter_name = Ident::new(&format!("set_{}", field_name), field_name.span());
-			let field_literal = LitStr::new(&field_name.to_string(), field_name.span());
+			let setter_name = Ident::new(
+				&format!("set_{}", ident_to_wire_name(field_name)),
+				field_name.span(),
+			);
+			let field_literal = LitStr::new(&ident_to_wire_name(field_name), field_name.span());
 			quote! {
 				pub fn #setter_name(
 					&mut self,
@@ -3384,7 +3399,10 @@ fn generate_model_form_support(
 		.iter()
 		.zip(&field_types)
 		.map(|(field_name, field_ty)| {
-			let setter_name = Ident::new(&format!("set_trusted_{field_name}"), field_name.span());
+			let setter_name = Ident::new(
+				&format!("set_trusted_{}", ident_to_wire_name(field_name)),
+				field_name.span(),
+			);
 			quote! {
 				pub fn #setter_name(&mut self, value: #field_ty) {
 					self.#field_name = ::core::option::Option::Some(value);
@@ -3493,12 +3511,12 @@ fn generate_model_form_support(
 			let (is_optional, _) = extract_option_type(&field.ty);
 			!is_optional && field.config.blank != Some(true)
 		})
-		.map(|field| LitStr::new(&field.name.to_string(), field.name.span()));
+		.map(|field| LitStr::new(&ident_to_wire_name(&field.name), field.name.span()));
 	let build_assignments: Vec<_> = field_infos
 		.iter()
 		.map(|field| {
 			let field_name = &field.name;
-			let field_literal = LitStr::new(&field.name.to_string(), field.name.span());
+			let field_literal = LitStr::new(&ident_to_wire_name(field_name), field.name.span());
 			if is_model_form_editable(field, field_infos) {
 				let (is_optional, _) = extract_option_type(&field.ty);
 				let relation_is_nullable = model_form_relation_id_is_nullable(field, field_infos);
@@ -3561,7 +3579,7 @@ fn generate_model_form_support(
 		.iter()
 		.map(|field| {
 			let field_name = &field.name;
-			let field_literal = LitStr::new(&field.name.to_string(), field.name.span());
+			let field_literal = LitStr::new(&ident_to_wire_name(field_name), field.name.span());
 			if is_model_form_editable(field, field_infos) {
 				let (is_optional, _) = extract_option_type(&field.ty);
 				let relation_is_nullable = model_form_relation_id_is_nullable(field, field_infos);
@@ -4107,12 +4125,21 @@ fn named_model_form_type_is_boolean(ty: &Type) -> bool {
 }
 
 fn named_model_form_variant(field: &Ident) -> Ident {
-	let name = field.to_string();
-	let name = name.strip_prefix("r#").unwrap_or(&name);
+	let name = named_model_form_wire_name(field);
 	Ident::new(
-		&crate::pascal_case::to_pascal_case_with_suffix(name, ""),
+		&crate::pascal_case::to_pascal_case_with_suffix(&name, ""),
 		field.span(),
 	)
+}
+
+/// Return the source field's identifier without Rust's raw-identifier marker.
+///
+/// Rust identifiers are used for generated struct access, while descriptor,
+/// policy, serde, and diagnostic names are wire names. Keeping this conversion
+/// in one place prevents `r#type` from leaking into the target-neutral contract
+/// surface.
+fn named_model_form_wire_name(field: &Ident) -> String {
+	ident_to_wire_name(field)
 }
 
 /// Generate the target-neutral output for a nested `form(...)` declaration.
@@ -4169,7 +4196,7 @@ pub(crate) fn generate_named_model_form_contract(
 	let mut generated_variants = HashMap::new();
 	let mut selected = Vec::with_capacity(config.fields.len());
 	for selected_name in &config.fields {
-		let selected_string = selected_name.to_string();
+		let selected_string = named_model_form_wire_name(selected_name);
 		let relation_name = selected_string.strip_suffix("_id").and_then(|name| {
 			lowered.field_infos.iter().find(|field| {
 				field.name == name
@@ -4181,7 +4208,7 @@ pub(crate) fn generate_named_model_form_contract(
 			return Err(syn::Error::new_spanned(
 				selected_name,
 				format!(
-					"named model form field `{selected_name}` is a generated relationship identifier and is not supported"
+					"named model form field `{selected_string}` is a generated relationship identifier and is not supported"
 				),
 			));
 		}
@@ -4195,10 +4222,10 @@ pub(crate) fn generate_named_model_form_contract(
 				selected_name,
 				if matches.is_empty() {
 					format!(
-						"named model form field `{selected_name}` does not exist on `{model_name}`"
+						"named model form field `{selected_string}` does not exist on `{model_name}`"
 					)
 				} else {
-					format!("named model form field `{selected_name}` is declared more than once")
+					format!("named model form field `{selected_string}` is declared more than once")
 				},
 			));
 		};
@@ -4206,7 +4233,7 @@ pub(crate) fn generate_named_model_form_contract(
 			return Err(syn::Error::new_spanned(
 				selected_name,
 				format!(
-					"named model form field `{selected_name}` has unsupported relationship type `{}`",
+					"named model form field `{selected_string}` has unsupported relationship type `{}`",
 					field.ty.to_token_stream()
 				),
 			));
@@ -4215,7 +4242,7 @@ pub(crate) fn generate_named_model_form_contract(
 			return Err(syn::Error::new_spanned(
 				selected_name,
 				format!(
-					"named model form field `{selected_name}` has unsupported file or image type `{}`",
+					"named model form field `{selected_string}` has unsupported file or image type `{}`",
 					field.ty.to_token_stream()
 				),
 			));
@@ -4223,14 +4250,14 @@ pub(crate) fn generate_named_model_form_contract(
 		if !is_model_form_editable(field, &lowered.field_infos) {
 			return Err(syn::Error::new_spanned(
 				selected_name,
-				format!("named model form field `{selected_name}` is not editable"),
+				format!("named model form field `{selected_string}` is not editable"),
 			));
 		}
 		if !named_model_form_type_is_supported(&field.ty) {
 			return Err(syn::Error::new_spanned(
 				selected_name,
 				format!(
-					"named model form field `{selected_name}` has unsupported Rust type `{}`",
+					"named model form field `{selected_string}` has unsupported Rust type `{}`",
 					field.ty.to_token_stream()
 				),
 			));
@@ -4251,10 +4278,7 @@ pub(crate) fn generate_named_model_form_contract(
 			));
 		}
 
-		let getter = selected_string
-			.strip_prefix("r#")
-			.unwrap_or(&selected_string)
-			.to_owned();
+		let getter = selected_string.clone();
 		let setter = format!("set_{getter}");
 		let reserved = [
 			"fields",
@@ -4302,14 +4326,14 @@ pub(crate) fn generate_named_model_form_contract(
 	});
 	let field_literals: Vec<_> = selected
 		.iter()
-		.map(|field| LitStr::new(&field.name.to_string(), field.name.span()))
+		.map(|field| LitStr::new(&named_model_form_wire_name(&field.name), field.name.span()))
 		.collect();
 	let variants: Vec<_> = selected
 		.iter()
 		.map(|field| named_model_form_variant(&field.name))
 		.collect();
 	let variant_docs = selected.iter().map(|field| {
-		let field_name = LitStr::new(&field.name.to_string(), field.name.span());
+		let field_name = LitStr::new(&named_model_form_wire_name(&field.name), field.name.span());
 		let variant = named_model_form_variant(&field.name);
 		quote! {
 			#[doc = concat!("Field token for `", #field_name, "`. Parity: P2.")]
@@ -4321,7 +4345,7 @@ pub(crate) fn generate_named_model_form_contract(
 		.map(|field| model_form_kind(field))
 		.collect::<Result<Vec<_>>>()?;
 	let descriptors = selected.iter().zip(&kinds).map(|(field, kind)| {
-		let name = LitStr::new(&field.name.to_string(), field.name.span());
+		let name = LitStr::new(&named_model_form_wire_name(&field.name), field.name.span());
 		let (is_optional, _) = extract_option_type(&field.ty);
 		let nullable = field.config.null.unwrap_or(is_optional);
 		let required =
@@ -4344,7 +4368,7 @@ pub(crate) fn generate_named_model_form_contract(
 		contract_name.span(),
 	);
 	let descriptor_accessors = field_idents.iter().enumerate().map(|(index, name)| {
-		let field_name = LitStr::new(&name.to_string(), name.span());
+		let field_name = LitStr::new(&named_model_form_wire_name(name), name.span());
 		quote! {
 			#[doc = concat!("Returns the descriptor for `", #field_name, "`. Parity: P2.")]
 			pub const fn #name() -> &'static #core_crate::model_form::ModelFormFieldDescriptor {
@@ -4353,7 +4377,7 @@ pub(crate) fn generate_named_model_form_contract(
 		}
 	});
 	let marker_accessors = field_idents.iter().map(|name| {
-		let field_name = LitStr::new(&name.to_string(), name.span());
+		let field_name = LitStr::new(&named_model_form_wire_name(name), name.span());
 		quote! {
 			#[doc = concat!("Returns the descriptor for `", #field_name, "`. Parity: P2.")]
 			pub const fn #name() -> &'static #core_crate::model_form::ModelFormFieldDescriptor {
@@ -4362,7 +4386,7 @@ pub(crate) fn generate_named_model_form_contract(
 		}
 	});
 	let getters = field_idents.iter().zip(&field_types).map(|(name, ty)| {
-		let field_name = LitStr::new(&name.to_string(), name.span());
+		let field_name = LitStr::new(&named_model_form_wire_name(name), name.span());
 		quote! {
 			#[doc = concat!("Returns the supplied value for `", #field_name, "`. Parity: P2.")]
 			pub fn #name(&self) -> ::core::option::Option<&#ty> {
@@ -4371,10 +4395,11 @@ pub(crate) fn generate_named_model_form_contract(
 		}
 	});
 	let setters = field_idents.iter().zip(&field_types).map(|(name, ty)| {
-		let bare_name = name.to_string();
-		let bare_name = bare_name.strip_prefix("r#").unwrap_or(&bare_name);
-		let setter = Ident::new(&format!("set_{bare_name}"), name.span());
-		let field_name = LitStr::new(&name.to_string(), name.span());
+		let setter = Ident::new(
+			&format!("set_{}", named_model_form_wire_name(name)),
+			name.span(),
+		);
+		let field_name = LitStr::new(&named_model_form_wire_name(name), name.span());
 		quote! {
 			#[doc = concat!("Sets the supplied value for `", #field_name, "`. Parity: P2.")]
 			pub fn #setter(&mut self, value: #ty) {
@@ -4459,7 +4484,7 @@ pub(crate) fn generate_named_model_form_contract(
 			else {
 				return None;
 			};
-			let name = LitStr::new(&field.name.to_string(), field.name.span());
+			let name = LitStr::new(&named_model_form_wire_name(&field.name), field.name.span());
 			Some(quote!(#name => #default))
 		})
 		.collect::<Vec<_>>();
@@ -4478,7 +4503,10 @@ pub(crate) fn generate_named_model_form_contract(
 	let ordered_variants = variants.iter().map(|variant| quote!(#field_name::#variant));
 	let native_adapter = get_reinhardt_forms_crate().map(|forms_crate| {
 		let assignments = field_idents.iter().map(|field| {
-			let setter = Ident::new(&format!("set_trusted_{field}"), field.span());
+			let setter = Ident::new(
+				&format!("set_trusted_{}", named_model_form_wire_name(field)),
+				field.span(),
+			);
 			quote! {
 				if let ::core::option::Option::Some(value) = data.#field {
 					legacy.#setter(value);
@@ -4796,11 +4824,11 @@ fn generate_field_accessors(
 	let mut unique_field_names: HashSet<String> = field_infos
 		.iter()
 		.filter(|field| field.config.unique == Some(true))
-		.map(|field| field.name.to_string())
+		.map(|field| ident_to_wire_name(&field.name))
 		.collect();
 
 	if let [primary_key] = primary_key_fields.as_slice() {
-		unique_field_names.insert(primary_key.name.to_string());
+		unique_field_names.insert(ident_to_wire_name(&primary_key.name));
 	}
 
 	for constraint in constraints {
@@ -4821,14 +4849,14 @@ fn generate_field_accessors(
 		.filter(|field| !field.config.skip)
 		.map(|field| {
 			let field_name = &field.name;
-			let logical_name = field_name.to_string();
+			let logical_name = ident_to_wire_name(field_name);
 			let field_type = &field.ty;
-			let method_name = syn::Ident::new(&format!("field_{}", field_name), field_name.span());
+			let method_name = syn::Ident::new(&format!("field_{logical_name}"), field_name.span());
 			let column_name = field
 				.config
 				.db_column
 				.clone()
-				.unwrap_or_else(|| field_name.to_string());
+				.unwrap_or_else(|| logical_name.clone());
 			let field_constructor = if storage_field_kind(&field.ty).is_some() {
 				let storage_alias = field.config.file_storage.as_deref().unwrap_or("default");
 				let max_length = file_field_max_length(&field.config)
@@ -4871,7 +4899,7 @@ fn generate_field_accessors(
 					StorageFieldKind::File => {
 						let cleanup = field.config.cleanup.unwrap_or(false);
 						let method_name =
-							syn::Ident::new(&format!("file_{}", field_name), field_name.span());
+							syn::Ident::new(&format!("file_{logical_name}"), field_name.span());
 						quote! {
 							/// Upload policy descriptor for this storage-backed file field.
 							pub const fn #method_name() -> #orm_crate::ModelFileField<Self> {
@@ -4891,7 +4919,7 @@ fn generate_field_accessors(
 					}
 					StorageFieldKind::Image => {
 						let method_name =
-							syn::Ident::new(&format!("image_{}", field_name), field_name.span());
+							syn::Ident::new(&format!("image_{logical_name}"), field_name.span());
 						let cleanup = field.config.cleanup.unwrap_or(false);
 						let max_width = field
 							.config
@@ -4948,7 +4976,7 @@ fn generate_field_accessors(
 	let declared_field_names: HashSet<_> = field_infos
 		.iter()
 		.filter(|field| !field.config.skip)
-		.map(|field| field.name.to_string())
+		.map(|field| ident_to_wire_name(&field.name))
 		.collect();
 	let relation_column_accessor_methods: Vec<_> = field_infos
 		.iter()
@@ -4965,7 +4993,7 @@ fn generate_field_accessors(
 			if declared_field_names.contains(column_name) {
 				return None;
 			}
-			let generated_id_field_name = format!("{}_id", field.name);
+			let generated_id_field_name = format!("{}_id", ident_to_wire_name(&field.name));
 			let field_type = &field_infos
 				.iter()
 				.find(|candidate| candidate.name == generated_id_field_name)?
@@ -5003,13 +5031,14 @@ fn generate_field_accessors(
 		.filter(|field| !is_many_to_many_field_type(&field.ty))
 		.map(|field| {
 			let field_name = &field.name;
+			let logical_name = ident_to_wire_name(field_name);
 			let method_name =
-				syn::Ident::new(&format!("ordering_{}", field_name), field_name.span());
+				syn::Ident::new(&format!("ordering_{logical_name}"), field_name.span());
 			let column_name = field
 				.config
 				.db_column
 				.clone()
-				.unwrap_or_else(|| field_name.to_string());
+				.unwrap_or_else(|| logical_name.clone());
 
 			quote! {
 				/// Ordering proof for a persisted scalar model field.
@@ -5023,22 +5052,23 @@ fn generate_field_accessors(
 	let unique_fields: Vec<_> = field_infos
 		.iter()
 		.filter(|field| !field.config.skip)
-		.filter(|field| unique_field_names.contains(&field.name.to_string()))
+		.filter(|field| unique_field_names.contains(&ident_to_wire_name(&field.name)))
 		.collect();
 	let unique_accessor_methods: Vec<_> = unique_fields
 		.iter()
 		.map(|field| {
 			let field_name = &field.name;
-			let logical_name = field_name.to_string();
+			let logical_name = ident_to_wire_name(field_name);
 			let (is_option, lookup_type) = extract_option_type(&field.ty);
 			let field_name_str = field
 				.config
 				.db_column
 				.clone()
-				.unwrap_or_else(|| field_name.to_string());
-			let method_name = syn::Ident::new(&format!("unique_{}", field_name), field_name.span());
+				.unwrap_or_else(|| logical_name.clone());
+			let method_name =
+				syn::Ident::new(&format!("unique_{logical_name}"), field_name.span());
 			let getter_name = syn::Ident::new(
-				&format!("__reinhardt_unique_get_{}", field_name),
+				&format!("__reinhardt_unique_get_{logical_name}"),
 				field_name.span(),
 			);
 			let getter_body = if is_option {
@@ -5145,14 +5175,14 @@ fn generate_relation_traversal_accessors(
 		.filter(|field| !is_many_to_many_field_type(&field.ty))
 		.map(|field| {
 			let field_name = &field.name;
-			let logical_name = field_name.to_string();
+			let logical_name = ident_to_wire_name(field_name);
 			let column_name = field
 				.config
 				.db_column
 				.clone()
 				.unwrap_or_else(|| logical_name.clone());
 			let field_type = &field.ty;
-			let method_name = syn::Ident::new(&format!("field_{}", field_name), field_name.span());
+			let method_name = syn::Ident::new(&format!("field_{logical_name}"), field_name.span());
 			let doc_comment =
 				format!("Reference the `{logical_name}` field through this relation path.");
 
@@ -5200,8 +5230,8 @@ fn generate_relation_traversal_accessors(
 		.filter_map(|field| {
 			let rel = field.rel.as_ref()?;
 			let field_name = &field.name;
-			let field_name_str = field_name.to_string();
-			let method_name = syn::Ident::new(&format!("rel_{}", field_name), field_name.span());
+			let field_name_str = ident_to_wire_name(field_name);
+			let method_name = syn::Ident::new(&format!("rel_{field_name_str}"), field_name.span());
 			let relation_type_name = crate::pascal_case::to_pascal_case_with_suffix(
 				&field_name_str,
 				"RelationDescriptor",
@@ -5223,6 +5253,7 @@ fn generate_relation_traversal_accessors(
 					let target_column = rel.to_field.as_ref().map_or_else(
 						|| quote! { <#target_ty as #orm_crate::Model>::primary_key_column() },
 						|field| {
+							let target_field_name = field.clone();
 							quote! {
 								<#target_ty as #orm_crate::Model>::field_metadata()
 									.into_iter()
@@ -5233,7 +5264,7 @@ fn generate_relation_traversal_accessors(
 											None
 										}
 									})
-									.unwrap_or_else(|| #field.to_string())
+									.unwrap_or_else(|| #target_field_name.to_string())
 							}
 						},
 					);
@@ -5265,6 +5296,7 @@ fn generate_relation_traversal_accessors(
 					let source_column = rel.to_field.as_ref().map_or_else(
 						|| quote! { <#struct_name as #orm_crate::Model>::primary_key_column() },
 						|field| {
+							let target_field_name = field.clone();
 							quote! {
 								<#struct_name as #orm_crate::Model>::field_metadata()
 									.into_iter()
@@ -5275,7 +5307,7 @@ fn generate_relation_traversal_accessors(
 											None
 										}
 									})
-									.unwrap_or_else(|| #field.to_string())
+									.unwrap_or_else(|| #target_field_name.to_string())
 							}
 						},
 					);
@@ -5551,11 +5583,11 @@ fn generate_m2m_accessor_methods(
 		.filter(|field| is_many_to_many_field_type(&field.ty))
 		.filter_map(|field| {
 			let field_name = &field.name;
-			let field_name_str = field_name.to_string();
+			let field_name_str = ident_to_wire_name(field_name);
 
 			// Method name: {field_name}_accessor
 			let method_name = syn::Ident::new(
-				&format!("{}_accessor", field_name),
+				&format!("{field_name_str}_accessor"),
 				field_name.span()
 			);
 
@@ -5616,11 +5648,11 @@ fn generate_fk_accessor_methods(
 		})
 		.map(|field| {
 			let field_name = &field.name;
-			let field_name_str = field_name.to_string();
+			let field_name_str = ident_to_wire_name(field_name);
 
 			// FK _id field name (e.g., user → user_id)
 			let fk_id_field_name = syn::Ident::new(
-				&format!("{}_id", field_name),
+				&format!("{}_id", ident_to_wire_name(field_name)),
 				field_name.span()
 			);
 
@@ -5635,6 +5667,7 @@ fn generate_fk_accessor_methods(
 				.is_some_and(|candidate| extract_option_type(&candidate.ty).0);
 			let target_column = field.rel.as_ref().and_then(|relation| {
 				relation.to_field.as_ref().map(|target_field| {
+					let target_field_name = target_field.clone();
 					quote! {
 						<#target_ty as #orm_crate::Model>::field_metadata()
 							.into_iter()
@@ -5645,7 +5678,7 @@ fn generate_fk_accessor_methods(
 									None
 								}
 							})
-							.unwrap_or_else(|| #target_field.to_string())
+							.unwrap_or_else(|| #target_field_name.to_string())
 					}
 				})
 			});
@@ -5753,7 +5786,7 @@ fn generate_fk_static_accessor_methods(
 		})
 		.map(|field| {
 			let field_name = &field.name;
-			let field_name_str = field_name.to_string();
+			let field_name_str = ident_to_wire_name(field_name);
 
 			let db_column = field
 				.rel
@@ -5763,7 +5796,7 @@ fn generate_fk_static_accessor_methods(
 
 			// Method name: {field_name}_accessor
 			let method_name =
-				syn::Ident::new(&format!("{}_accessor", field_name), field_name.span());
+				syn::Ident::new(&format!("{field_name_str}_accessor"), field_name.span());
 
 			// Extract Target from ForeignKeyField<Target> or OneToOneField<Target>
 			let target_ty = extract_foreign_key_target_type(&field.ty);
@@ -5864,6 +5897,7 @@ where
 		})
 		.map(|field| {
 			let field_name = &field.name;
+			let field_name_wire = ident_to_wire_name(field_name);
 			let field_type = &field.ty;
 			let method_name = field_name;
 
@@ -5871,21 +5905,21 @@ where
 			// them by value so native and WASM callers share the same API.
 			if field.is_fk_id_field {
 				quote! {
-					#[doc = concat!("Get ", stringify!(#field_name))]
+					#[doc = concat!("Get ", #field_name_wire)]
 					pub fn #method_name(&self) -> #field_type {
 						self.#field_name.clone()
 					}
 				}
 			} else if is_copy_type(field_type) {
 				quote! {
-					#[doc = concat!("Get ", stringify!(#field_name))]
+					#[doc = concat!("Get ", #field_name_wire)]
 					pub fn #method_name(&self) -> #field_type {
 						self.#field_name
 					}
 				}
 			} else {
 				quote! {
-					#[doc = concat!("Get reference to ", stringify!(#field_name))]
+					#[doc = concat!("Get reference to ", #field_name_wire)]
 					pub fn #method_name(&self) -> &#field_type {
 						&self.#field_name
 					}
@@ -5908,11 +5942,15 @@ fn generate_setter_methods(struct_name: &syn::Ident, field_infos: &[FieldInfo]) 
 		.filter(|f| !is_auto_generated_field(f) && !f.config.skip_getter)
 		.map(|field| {
 			let field_name = &field.name;
+			let field_name_wire = ident_to_wire_name(field_name);
 			let field_type = &field.ty;
-			let setter_name = syn::Ident::new(&format!("set_{}", field_name), field_name.span());
+			let setter_name = syn::Ident::new(
+				&format!("set_{}", ident_to_wire_name(field_name)),
+				field_name.span(),
+			);
 
 			quote! {
-				#[doc = concat!("Set ", stringify!(#field_name))]
+				#[doc = concat!("Set ", #field_name_wire)]
 				pub fn #setter_name(&mut self, value: #field_type) {
 					self.#field_name = value;
 				}
@@ -6028,7 +6066,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 				let id_column_name = rel_attr
 					.db_column
 					.clone()
-					.unwrap_or_else(|| format!("{}_id", field_info.name));
+					.unwrap_or_else(|| format!("{}_id", ident_to_wire_name(&field_info.name)));
 
 				fk_field_infos.push(ForeignKeyFieldInfo {
 					field_name: field_info.name.clone(),
@@ -6073,7 +6111,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 						.config
 						.db_column
 						.clone()
-						.unwrap_or_else(|| field.name.to_string())
+						.unwrap_or_else(|| ident_to_wire_name(&field.name))
 				});
 			(column, field.config.index_condition.clone())
 		})
@@ -6099,7 +6137,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 				.config
 				.db_column
 				.clone()
-				.unwrap_or_else(|| field.name.to_string());
+				.unwrap_or_else(|| ident_to_wire_name(&field.name));
 			let opclass = &config.opclass;
 			let index_type = match config.method {
 				StructuredIndexMethod::Hnsw => {
@@ -6142,7 +6180,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			f.config
 				.check
 				.as_ref()
-				.map(|expr| (f.name.to_string(), expr.clone()))
+				.map(|expr| (ident_to_wire_name(&f.name), expr.clone()))
 		})
 		.collect();
 
@@ -6162,7 +6200,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			.iter()
 			.find(|field| field.name == field_name)
 			.and_then(|field| field.config.db_column.clone())
-			.unwrap_or_else(|| field_name.to_string())
+			.unwrap_or_else(|| field_name.to_owned())
 	};
 	let unique_constraints: Vec<UniqueConstraintMetadata> = model_config
 		.constraints
@@ -6270,7 +6308,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 		.config
 		.db_column
 		.clone()
-		.unwrap_or_else(|| pk_fields[0].name.to_string());
+		.unwrap_or_else(|| ident_to_wire_name(&pk_fields[0].name));
 	let primary_key_uses_zero_sentinel = !is_composite_pk
 		&& !pk_is_option
 		&& is_integer_primary_key_type(&pk_fields[0].ty)
@@ -6509,7 +6547,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	};
 	let primary_key_field_names = pk_fields
 		.iter()
-		.map(|field| LitStr::new(&field.name.to_string(), field.name.span()));
+		.map(|field| LitStr::new(&ident_to_wire_name(&field.name), field.name.span()));
 	let model_form_primary_key_fields_impl = quote! {
 		impl #info_impl_generics #core_crate::model_form::ModelFormPrimaryKeyFields for #struct_name #info_ty_generics #info_where_clause {
 			fn primary_key_fields() -> &'static [&'static str] {
@@ -6580,17 +6618,19 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 		}
 
 		let field_name = &field.name;
+		let field_name_wire = ident_to_wire_name(field_name);
 		Some(quote! {
-			stringify!(#field_name) => self.#field_name.is_none(),
+			#field_name_wire => self.#field_name.is_none(),
 		})
 	});
 	let generated_field_names: Vec<_> = field_infos
 		.iter()
 		.filter(|field| field.config.generated.is_some() || field.config.generated_sql.is_some())
 		.flat_map(|field| {
-			let rust_name = LitStr::new(&field.name.to_string(), field.name.span());
+			let rust_name = LitStr::new(&ident_to_wire_name(&field.name), field.name.span());
 			let column_name = field.config.db_column.as_ref().and_then(|name| {
-				(name != &field.name.to_string()).then(|| LitStr::new(name, field.name.span()))
+				(name != &ident_to_wire_name(&field.name))
+					.then(|| LitStr::new(name, field.name.span()))
 			});
 			std::iter::once(rust_name).chain(column_name)
 		})
@@ -6602,11 +6642,12 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	let encode_database_fields = database_codec_fields.iter().map(|field| {
 		let field_name = &field.name;
 		let field_ty = &field.ty;
+		let logical_name = ident_to_wire_name(field_name);
 		let column_name = field
 			.config
 			.db_column
 			.clone()
-			.unwrap_or_else(|| field_name.to_string());
+			.unwrap_or_else(|| logical_name.clone());
 		let context_metadata = if storage_field_kind(&field.ty).is_some() {
 			let storage_alias = field.config.file_storage.as_deref().unwrap_or("default");
 			let max_length = file_field_max_length(&field.config)
@@ -6619,7 +6660,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 		quote! {
 			let context = #orm_crate::FieldCodecContext::new(
 				stringify!(#struct_name),
-				stringify!(#field_name),
+				#logical_name,
 				#column_name,
 			)#context_metadata;
 			<#field_ty as #orm_crate::DatabaseField>::validate_database_context(
@@ -6627,7 +6668,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 				&context,
 			)?;
 			fields.insert(
-				stringify!(#field_name).to_string(),
+				#logical_name.to_string(),
 				<<#field_ty as #orm_crate::DatabaseField>::Storage as #orm_crate::DatabaseScalar>::into_database_value(
 					<#field_ty as #orm_crate::DatabaseField>::encode_database(&self.#field_name)?
 				),
@@ -6653,11 +6694,12 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	let decode_database_fields = database_codec_fields.iter().map(|field| {
 		let field_name = &field.name;
 		let field_ty = &field.ty;
+		let logical_name = ident_to_wire_name(field_name);
 		let column_name = field
 			.config
 			.db_column
 			.clone()
-			.unwrap_or_else(|| field_name.to_string());
+			.unwrap_or_else(|| logical_name.clone());
 		let context_metadata = if storage_field_kind(&field.ty).is_some() {
 			let storage_alias = field.config.file_storage.as_deref().unwrap_or("default");
 			let max_length = file_field_max_length(&field.config)
@@ -6668,11 +6710,11 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			quote! {}
 		};
 		quote! {
-			stringify!(#field_name) => {
+			#logical_name => {
 				let storage = <<#field_ty as #orm_crate::DatabaseField>::Storage as #orm_crate::DatabaseScalar>::from_database_value(value)?;
 				let context = #orm_crate::FieldCodecContext::new(
 					stringify!(#struct_name),
-					stringify!(#field_name),
+					#logical_name,
 					#column_name,
 				)#context_metadata;
 				let decoded = <#field_ty as #orm_crate::DatabaseField>::decode_database(storage, &context)?;
@@ -7019,6 +7061,7 @@ fn generate_fixture_validation(
 		}
 
 		let field_name = &field.name;
+		let field_name_wire = ident_to_wire_name(field_name);
 		let field_type = &field.ty;
 		let is_database_generated = is_fixture_generated_field(field);
 		let has_sql_default = field
@@ -7029,7 +7072,7 @@ fn generate_fixture_validation(
 			.is_some();
 		if storage_field_kind(field_type).is_some() {
 			let validator_name = Ident::new(
-				&format!("__reinhardt_validate_fixture_file_field_{field_name}"),
+				&format!("__reinhardt_validate_fixture_file_field_{field_name_wire}"),
 				field_name.span(),
 			);
 			let validator = LitStr::new(&validator_name.to_string(), field_name.span());
@@ -7044,7 +7087,7 @@ fn generate_fixture_validation(
 				.expect("validated FileField max_length must fit in u32")
 				.to_string();
 			let model_name = struct_name.to_string();
-			let logical_name = field_name.to_string();
+			let logical_name = field_name_wire.clone();
 			let column_name = field
 				.config
 				.db_column
@@ -7115,11 +7158,11 @@ fn generate_fixture_validation(
 			};
 			let validator = if let Some(deserializer) = custom_deserializer {
 				let validator_name = Ident::new(
-					&format!("__reinhardt_validate_defaulted_fixture_field_{field_name}"),
+					&format!("__reinhardt_validate_defaulted_fixture_field_{field_name_wire}"),
 					field_name.span(),
 				);
 				let null_error_message = LitStr::new(
-					&format!("fixture field '{field_name}' cannot be null"),
+					&format!("fixture field '{field_name_wire}' cannot be null"),
 					field_name.span(),
 				);
 				let validation = if is_option && field.config.null == Some(false) {
@@ -7187,12 +7230,12 @@ fn generate_fixture_validation(
 						|| (field.config.primary_key && !is_fixture_generated_field(field))));
 			if let Some(deserializer) = custom_deserializer.filter(|_| type_is_rewritten) {
 				let validator_name = Ident::new(
-					&format!("__reinhardt_validate_fixture_field_{field_name}"),
+					&format!("__reinhardt_validate_fixture_field_{field_name_wire}"),
 					field_name.span(),
 				);
 				let validator = LitStr::new(&validator_name.to_string(), field_name.span());
 				let null_error_message = LitStr::new(
-					&format!("fixture field '{field_name}' cannot be null"),
+					&format!("fixture field '{field_name_wire}' cannot be null"),
 					field_name.span(),
 				);
 				let rejects_null = is_option
@@ -7427,7 +7470,7 @@ fn generate_field_metadata(
 	}
 
 	for field_info in regular_fields {
-		let name = field_info.name.to_string();
+		let name = ident_to_wire_name(&field_info.name);
 		let field_type_path = field_type_to_metadata_string(&field_info.ty, &field_info.config)?;
 		let _field_type = map_type_to_field_type(&field_info.ty, &field_info.config)?;
 		let config = &field_info.config;
@@ -7981,7 +8024,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 	// Generate field registration code for regular fields
 	let mut field_registrations = Vec::new();
 	for field_info in &regular_fields {
-		let field_name = field_info.name.to_string();
+		let field_name = ident_to_wire_name(&field_info.name);
 		let field_ty = &field_info.ty;
 		let field_type = map_type_to_field_type(&field_info.ty, &field_info.config)?;
 		let config = &field_info.config;
@@ -8207,7 +8250,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 	// Generate ManyToMany field registration code
 	let mut m2m_registrations = Vec::new();
 	for field_info in &m2m_fields {
-		let field_name = field_info.name.to_string();
+		let field_name = ident_to_wire_name(&field_info.name);
 		let target_ty = extract_m2m_target_type(&field_info.ty)
 			.cloned()
 			.or_else(|| {
@@ -8274,7 +8317,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 	let mut fk_id_registrations = Vec::new();
 	for fk_info in fk_field_infos {
 		let id_column_name = &fk_info.id_column_name;
-		let rust_field_name = fk_info.field_name.to_string();
+		let rust_field_name = ident_to_wire_name(&fk_info.field_name);
 		let nullable = fk_info.rel_attr.null.unwrap_or(false);
 		let unique = fk_info.is_one_to_one; // OneToOne fields have UNIQUE constraint
 		let db_index = fk_info.rel_attr.db_index.unwrap_or(true); // FK fields are indexed by default
@@ -8494,7 +8537,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 				.config
 				.db_column
 				.clone()
-				.unwrap_or_else(|| field.name.to_string());
+				.unwrap_or_else(|| ident_to_wire_name(&field.name));
 			let opclass = &config.opclass;
 			let index_type = match config.method {
 				StructuredIndexMethod::Hnsw => {
@@ -8542,7 +8585,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 						.config
 						.db_column
 						.clone()
-						.unwrap_or_else(|| field.name.to_string())
+						.unwrap_or_else(|| ident_to_wire_name(&field.name))
 				});
 			let name = format!("idx_{}_{}", table_name, column);
 			let condition = match &field.config.index_condition {
@@ -8635,7 +8678,7 @@ fn generate_relationship_registrations(
 	// Process ForeignKey and OneToOne fields
 	for fk_info in fk_field_infos {
 		let field_name = &fk_info.field_name;
-		let field_name_str = field_name.to_string();
+		let field_name_str = ident_to_wire_name(field_name);
 		let is_one_to_one = fk_info.is_one_to_one;
 
 		// Extract target model name from Type
@@ -8748,7 +8791,7 @@ fn generate_relationship_registrations(
 		}
 
 		let field_name = &field_info.name;
-		let field_name_str = field_name.to_string();
+		let field_name_str = ident_to_wire_name(field_name);
 
 		// Extract target model name from ManyToManyField<Source, Target>
 		let target_model_name = if let Some(target_ty) = extract_m2m_target_type(&field_info.ty) {
@@ -8855,7 +8898,10 @@ fn generate_relationship_registrations(
 fn generate_composite_pk_impl(pk_fields: &[&FieldInfo]) -> TokenStream {
 	let orm_crate = get_reinhardt_orm_crate();
 
-	let field_name_strings: Vec<String> = pk_fields.iter().map(|f| f.name.to_string()).collect();
+	let field_name_strings: Vec<String> = pk_fields
+		.iter()
+		.map(|f| ident_to_wire_name(&f.name))
+		.collect();
 
 	quote! {
 		fn composite_primary_key() -> Option<#orm_crate::composite_pk::CompositePrimaryKey> {
@@ -8914,9 +8960,10 @@ fn generate_composite_pk_type(struct_name: &syn::Ident, pk_fields: &[&FieldInfo]
 	let pk_value_conversions: Vec<_> = field_names
 		.iter()
 		.map(|name| {
+			let name_wire = ident_to_wire_name(name);
 			quote! {
 				values.insert(
-					stringify!(#name).to_string(),
+					#name_wire.to_string(),
 					#orm_crate::composite_pk::PkValue::from(&self.#name)
 				);
 			}
@@ -9023,17 +9070,17 @@ fn generate_relationship_metadata(
 
 	let foreign_keys: HashMap<String, &ForeignKeyFieldInfo> = fk_field_infos
 		.iter()
-		.map(|field| (field.field_name.to_string(), field))
+		.map(|field| (ident_to_wire_name(&field.field_name), field))
 		.collect();
 	let fields: HashMap<String, &FieldInfo> = field_infos
 		.iter()
-		.map(|field| (field.name.to_string(), field))
+		.map(|field| (ident_to_wire_name(&field.name), field))
 		.collect();
 
 	let relation_info_items: Vec<TokenStream> = rel_fields
 		.iter()
 		.map(|(field_name, rel)| {
-			let field_name_str = field_name.to_string();
+			let field_name_str = ident_to_wire_name(field_name);
 			let foreign_key_info = foreign_keys.get(&field_name_str);
 			let field_info = fields.get(&field_name_str);
 
@@ -9572,7 +9619,7 @@ fn generate_new_alias(
 	let fk_id_to_fk_field: HashMap<String, String> = fk_id_field_names
 		.iter()
 		.filter_map(|id_name| {
-			let id_str = id_name.to_string();
+			let id_str = ident_to_wire_name(id_name);
 			if id_str.ends_with("_id") {
 				let fk_name = id_str.trim_end_matches("_id").to_string();
 				Some((id_str, fk_name))
@@ -9587,12 +9634,12 @@ fn generate_new_alias(
 
 	let slot_count = user_fields
 		.iter()
-		.filter(|f| !fk_field_names.contains(&f.name.to_string()))
+		.filter(|f| !fk_field_names.contains(&ident_to_wire_name(&f.name)))
 		.count()
 		+ fk_id_field_names
 			.iter()
 			.filter(|id_name| {
-				let id_str = id_name.to_string();
+				let id_str = ident_to_wire_name(id_name);
 				fk_id_to_fk_field.contains_key(&id_str)
 			})
 			.count();
@@ -9680,7 +9727,7 @@ fn generate_build_function(
 	let fk_id_to_fk_field: HashMap<String, String> = fk_id_field_names
 		.iter()
 		.filter_map(|id_name| {
-			let id_str = id_name.to_string();
+			let id_str = ident_to_wire_name(id_name);
 			if id_str.ends_with("_id") {
 				let fk_name = id_str.trim_end_matches("_id").to_string();
 				Some((id_str, fk_name))
@@ -9720,17 +9767,21 @@ fn generate_build_function(
 	let mut required: Vec<Required> =
 		Vec::with_capacity(user_fields.len() + fk_id_field_names.len());
 	for f in user_fields.iter() {
-		let name_str = f.name.to_string();
+		let name_str = ident_to_wire_name(&f.name);
 		if let Some(fk_field_name) = fk_id_to_fk_field.get(&name_str) {
 			// FK `*_id` field. Look up the related model type from the FK field.
-			let fk_field_info = field_infos.iter().find(|fi| fi.name == *fk_field_name);
+			let fk_field_info = field_infos
+				.iter()
+				.find(|fi| ident_to_wire_name(&fi.name) == *fk_field_name);
 			let related_type = match fk_field_info {
 				Some(info) => extract_foreign_key_target_type(&info.ty),
 				// Defensive fallback: keep the stored type. This branch is not
 				// expected because the builder mapping comes from the same field set.
 				None => f.ty.clone(),
 			};
-			let setter_name = syn::Ident::new(fk_field_name, f.name.span());
+			let setter_name = fk_field_info
+				.map(|info| info.name.clone())
+				.unwrap_or_else(|| syn::Ident::new_raw(fk_field_name, f.name.span()));
 			required.push(Required {
 				storage_name: f.name.clone(),
 				storage_ty: &f.ty,
@@ -9760,7 +9811,7 @@ fn generate_build_function(
 	// but they still need a user-facing setter on the builder so that callers
 	// can supply the related model / primary key.
 	for fk_id_name in fk_id_field_names.iter() {
-		let fk_id_str = fk_id_name.to_string();
+		let fk_id_str = ident_to_wire_name(fk_id_name);
 		// `fk_id_to_fk_field` only retains `*_id`-suffixed names (see its
 		// construction above); names that don't follow the convention have no
 		// implicit related-field name and are intentionally skipped.
@@ -9778,7 +9829,9 @@ fn generate_build_function(
 					fk_id_str
 				)
 			});
-		let fk_field_info = field_infos.iter().find(|fi| fi.name == *fk_field_name);
+		let fk_field_info = field_infos
+			.iter()
+			.find(|fi| ident_to_wire_name(&fi.name) == *fk_field_name);
 		let related_type = match fk_field_info {
 			Some(info) => extract_foreign_key_target_type(&info.ty),
 			// Defensive fallback: use the `*_id` storage type itself.
@@ -9798,9 +9851,7 @@ fn generate_build_function(
 		let setter_name = match fk_field_info {
 			Some(info) => info.name.clone(),
 			None => {
-				let bare = fk_field_name
-					.strip_prefix("r#")
-					.unwrap_or(fk_field_name.as_str());
+				let bare = fk_field_name.as_str();
 				if matches!(bare, "self" | "Self" | "super" | "crate") {
 					return syn::Error::new(
 						fk_id_name.span(),
@@ -10032,17 +10083,18 @@ fn generate_build_function(
 	let user_field_assignments: Vec<TokenStream> = user_fields
 		.iter()
 		.filter(|f| {
-			!fk_field_names.contains(&f.name.to_string())
-				&& !fk_id_field_names_set.contains(&f.name.to_string())
+			!fk_field_names.contains(&ident_to_wire_name(&f.name))
+				&& !fk_id_field_names_set.contains(&ident_to_wire_name(&f.name))
 		})
 		.map(|f| {
 			let name = &f.name;
+			let name_wire = ident_to_wire_name(name);
 			quote! {
 				#name: self
 					.#name
 					.expect(concat!(
 						"build() typestate guarantees ",
-						stringify!(#name),
+						#name_wire,
 						" is set before finish() is callable"
 					))
 			}
@@ -10055,12 +10107,13 @@ fn generate_build_function(
 		.iter()
 		.map(|fk_id_name| {
 			let name = fk_id_name.clone();
+			let name_wire = ident_to_wire_name(&name);
 			quote! {
 				#name: self
 					.#name
 					.expect(concat!(
 						"build() typestate guarantees ",
-						stringify!(#name),
+						#name_wire,
 						" is set before finish() is callable"
 					))
 			}
@@ -10071,7 +10124,13 @@ fn generate_build_function(
 	let fk_field_assignments: Vec<TokenStream> = fk_id_to_fk_field
 		.values()
 		.map(|fk_name_str| {
-			let fk_name = syn::Ident::new(fk_name_str, proc_macro2::Span::call_site());
+			let fk_name = field_infos
+				.iter()
+				.find(|field| ident_to_wire_name(&field.name) == *fk_name_str)
+				.map(|field| field.name.clone())
+				.unwrap_or_else(|| {
+					syn::Ident::new_raw(fk_name_str, proc_macro2::Span::call_site())
+				});
 			quote! { #fk_name: ::std::default::Default::default() }
 		})
 		.collect();
@@ -10081,8 +10140,8 @@ fn generate_build_function(
 	let auto_field_assignments: Vec<TokenStream> = auto_fields
 		.iter()
 		.filter(|f| {
-			!fk_field_names.contains(&f.name.to_string())
-				&& !fk_id_field_names_set.contains(&f.name.to_string())
+			!fk_field_names.contains(&ident_to_wire_name(&f.name))
+				&& !fk_id_field_names_set.contains(&ident_to_wire_name(&f.name))
 		})
 		.map(|f| {
 			let name = &f.name;
@@ -10282,11 +10341,8 @@ fn generate_field_selector_struct(
 		.iter()
 		.map(|field| {
 			let field_name = &field.name;
-			let field_name_str = field
-				.config
-				.db_column
-				.clone()
-				.unwrap_or_else(|| field_name.to_string());
+			let field_name_wire = ident_to_wire_name(field_name);
+			let field_name_str = field.config.db_column.clone().unwrap_or(field_name_wire);
 			quote! {
 				#field_name: #orm_crate::query_fields::Field::new(vec![#field_name_str])
 			}
@@ -10465,11 +10521,11 @@ fn generate_info_struct(
 
 	let fk_by_field_name: HashMap<String, &ForeignKeyFieldInfo> = fk_field_infos
 		.iter()
-		.map(|fk| (fk.field_name.to_string(), fk))
+		.map(|fk| (ident_to_wire_name(&fk.field_name), fk))
 		.collect();
 	let fk_id_to_field: HashMap<String, &ForeignKeyFieldInfo> = fk_field_infos
 		.iter()
-		.map(|fk| (format!("{}_id", fk.field_name), fk))
+		.map(|fk| (format!("{}_id", ident_to_wire_name(&fk.field_name)), fk))
 		.collect();
 
 	let mut info_fields = Vec::new();
@@ -10479,8 +10535,8 @@ fn generate_info_struct(
 		}
 
 		let name = f.name.clone();
-		if let Some(fk) = fk_by_field_name.get(&name.to_string()) {
-			let id_name = Ident::new(&format!("{}_id", name), name.span());
+		if let Some(fk) = fk_by_field_name.get(&ident_to_wire_name(&name)) {
+			let id_name = Ident::new(&format!("{}_id", ident_to_wire_name(&name)), name.span());
 			let target_ty = normalize_relation_ty(&fk.target_type);
 			let nullable = field_infos
 				.iter()
@@ -10621,7 +10677,7 @@ fn generate_info_struct(
 		.iter()
 		.map(|f| {
 			let name = &f.name;
-			let name_str = name.to_string();
+			let name_str = ident_to_wire_name(name);
 			if let Some(fk) = fk_id_to_field.get(&name_str)
 				&& info_fields.iter().any(|inf| inf.name == fk.field_name)
 			{
@@ -11811,7 +11867,7 @@ mod tests {
 			})
 			.collect::<Vec<_>>();
 
-		assert!(compact.contains("stringify!(owner_id).to_string()"));
+		assert!(compact.contains("\"owner_id\".to_string()"));
 		assert!(compact.contains("\"full_name\",\"display_name\""));
 		assert!(
 			compact
@@ -12119,6 +12175,10 @@ mod tests {
 	#[case(
 		quote!(app_label = "clusters", form(name = ClusterCreateForm, fields(name, name))),
 		"parse_args_with failed: named model form field `name` is specified more than once"
+	)]
+	#[case(
+		quote!(app_label = "clusters", form(name = ClusterCreateForm, fields(r#type, r#type))),
+		"parse_args_with failed: named model form field `type` is specified more than once"
 	)]
 	#[case(
 		quote!(app_label = "clusters", form(name = ClusterCreateForm, fields(name)), form(name = ClusterUpdateForm, fields(name))),

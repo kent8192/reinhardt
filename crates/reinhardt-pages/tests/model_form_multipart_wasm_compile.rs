@@ -64,14 +64,14 @@ mod generated_contract {
 	#[model(
 		app_label = "clusters",
 		table_name = "clusters",
-		form(name = PageClusterCreateForm, fields(name)),
+		form(name = PageClusterCreateForm, fields(r#type)),
 		info = false
 	)]
 	pub(crate) struct PageCluster {
 		#[field(primary_key = true)]
 		pub id: i64,
 		#[field(max_length = 100)]
-		pub name: String,
+		pub r#type: String,
 	}
 
 	#[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -95,6 +95,11 @@ mod generated_contract {
 			name: PageClusterForm,
 			model_form: PageClusterCreateForm,
 			server_fn: save_page_cluster,
+			overrides: {
+				r#type: {
+					widget: TextArea,
+				},
+			},
 		};
 		let _payload: PageClusterCreateFormData = form.data().expect("empty payload is valid");
 		let _typed_submit = async {

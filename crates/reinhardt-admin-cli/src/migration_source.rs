@@ -1,7 +1,7 @@
 //! Upgrade generated migration source files to the current source format.
 
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{Error, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -46,6 +46,7 @@ pub type Result<T> = std::result::Result<T, MigrationSourceError>;
 struct PlannedUpgrade {
 	path: PathBuf,
 	relative_path: PathBuf,
+	original_source: String,
 	source: String,
 }
 
@@ -117,6 +118,7 @@ pub fn run(args: UpgradeSourceArgs) -> Result<()> {
 			Ok(result) if result.changed => plans.push(PlannedUpgrade {
 				path,
 				relative_path,
+				original_source: source,
 				source: result.source,
 			}),
 			Ok(_) => {}
@@ -145,7 +147,10 @@ pub fn run(args: UpgradeSourceArgs) -> Result<()> {
 	}
 
 	for plan in &plans {
-		write_atomically(&plan.path, &plan.source)?;
+		current_metadata(&plan.path, &plan.original_source)?;
+	}
+	for plan in &plans {
+		write_atomically(&plan.path, &plan.original_source, &plan.source)?;
 		println!("upgraded: {}", plan.relative_path.display());
 	}
 	println!("{} migration source file(s) upgraded", plans.len());
@@ -221,14 +226,31 @@ fn defines_migration(file: &File) -> bool {
 		.any(|item| matches!(item, Item::Fn(function) if function.sig.ident == "migration"))
 }
 
-fn write_atomically(path: &Path, content: &str) -> Result<()> {
+fn current_metadata(path: &Path, expected_source: &str) -> Result<fs::Metadata> {
+	verify_current_source(path, expected_source)
+		.map_err(|error| MigrationSourceError::Write(format!("{}: {error}", path.display())))
+}
+
+fn verify_current_source(path: &Path, expected_source: &str) -> std::io::Result<fs::Metadata> {
 	let metadata = fs::symlink_metadata(path)?;
 	if metadata.file_type().is_symlink() {
-		return Err(MigrationSourceError::Write(format!(
-			"{}: destination became a symlink",
-			path.display()
-		)));
+		return Err(Error::new(
+			ErrorKind::InvalidInput,
+			"destination became a symlink",
+		));
 	}
+	let current_source = fs::read_to_string(path)?;
+	if current_source != expected_source {
+		return Err(Error::new(
+			ErrorKind::InvalidData,
+			"source changed after preflight",
+		));
+	}
+	Ok(metadata)
+}
+
+fn write_atomically(path: &Path, expected_source: &str, content: &str) -> Result<()> {
+	let mut metadata = current_metadata(path, expected_source)?;
 	let parent = path.parent().ok_or_else(|| {
 		MigrationSourceError::Write(format!("{}: destination has no parent", path.display()))
 	})?;
@@ -250,6 +272,7 @@ fn write_atomically(path: &Path, content: &str) -> Result<()> {
 		std::process::id(),
 		nonce
 	)));
+	let mut destination_was_readonly = false;
 	let write_result = (|| -> std::io::Result<()> {
 		let mut file = OpenOptions::new()
 			.write(true)
@@ -257,14 +280,27 @@ fn write_atomically(path: &Path, content: &str) -> Result<()> {
 			.open(&temporary.path)?;
 		file.write_all(content.as_bytes())?;
 		file.sync_all()?;
-		file.set_permissions(metadata.permissions())?;
-		file.sync_all()?;
+		if !metadata.permissions().readonly() {
+			file.set_permissions(metadata.permissions())?;
+			file.sync_all()?;
+		}
+		metadata = verify_current_source(path, expected_source)?;
+		destination_was_readonly = metadata.permissions().readonly();
+		if destination_was_readonly {
+			let mut writable_permissions = metadata.permissions();
+			writable_permissions.set_readonly(false);
+			fs::set_permissions(path, writable_permissions)?;
+		}
 		fs::rename(&temporary.path, path)?;
 		// The rename transferred ownership of the temporary path to the destination.
 		temporary.commit();
+		fs::set_permissions(path, metadata.permissions())?;
 		Ok(())
 	})();
 	if let Err(error) = write_result {
+		if destination_was_readonly {
+			let _ = fs::set_permissions(path, metadata.permissions());
+		}
 		return Err(MigrationSourceError::Write(format!(
 			"{}: {error}",
 			path.display()
@@ -309,6 +345,41 @@ mod tests {
 		assert!(!path.exists());
 	}
 
+	#[test]
+	fn atomic_upgrade_rejects_changed_destination() {
+		let directory = tempfile::tempdir().expect("temporary directory");
+		let path = directory.path().join("0001_initial.rs");
+		fs::write(&path, "newer").expect("write destination");
+
+		let error = write_atomically(&path, "preflight", "upgraded")
+			.expect_err("changed destination must abort replacement");
+
+		assert!(error.to_string().contains("source changed after preflight"));
+		assert_eq!(fs::read_to_string(path).expect("read destination"), "newer");
+	}
+
+	#[test]
+	fn atomic_upgrade_replaces_readonly_destinations() {
+		let directory = tempfile::tempdir().expect("temporary directory");
+		let path = directory.path().join("0001_initial.rs");
+		fs::write(&path, "old").expect("write destination");
+		let mut permissions = fs::metadata(&path)
+			.expect("read destination metadata")
+			.permissions();
+		permissions.set_readonly(true);
+		fs::set_permissions(&path, permissions).expect("set readonly permissions");
+
+		write_atomically(&path, "old", "new").expect("replace readonly destination");
+
+		assert_eq!(fs::read_to_string(&path).expect("read destination"), "new");
+		assert!(
+			fs::metadata(path)
+				.expect("read destination metadata")
+				.permissions()
+				.readonly()
+		);
+	}
+
 	#[cfg(unix)]
 	#[test]
 	fn atomic_upgrade_preserves_destination_permissions() {
@@ -319,7 +390,7 @@ mod tests {
 		fs::write(&path, "old").expect("write destination");
 		fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).expect("set permissions");
 
-		write_atomically(&path, "new").expect("replace destination");
+		write_atomically(&path, "old", "new").expect("replace destination");
 
 		let mode = fs::metadata(path)
 			.expect("read destination metadata")

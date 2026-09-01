@@ -16,7 +16,9 @@ async fn require_authenticated(
 	name = "dashboard",
 )]
 fn dashboard(outlet: Outlet) -> Page {
-	page!(|outlet: Outlet| { main { { outlet } } })(outlet)
+	page!(|outlet: Outlet| {
+		main { { outlet } }
+	})(outlet)
 }
 
 fn main() {

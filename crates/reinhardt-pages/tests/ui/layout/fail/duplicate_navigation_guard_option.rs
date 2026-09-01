@@ -20,7 +20,9 @@ async fn second(_context: NavigationContext) -> Result<NavigationDecision, Navig
 	navigation_guard = second,
 )]
 fn dashboard(outlet: Outlet) -> Page {
-	page!(|outlet: Outlet| { main { { outlet } } })(outlet)
+	page!(|outlet: Outlet| {
+		main { { outlet } }
+	})(outlet)
 }
 
 fn main() {}

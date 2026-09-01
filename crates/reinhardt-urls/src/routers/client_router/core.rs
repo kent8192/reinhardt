@@ -934,20 +934,17 @@ impl ClientRouter {
 		P: FromRequest + Send + Sync + 'static,
 	{
 		let index = self.routes.len();
-		let (loader_id, navigation_guard_id) = P::component_route_metadata().map_or_else(
-			|| {
-				let loader_id = inventory::iter::<ComponentMetadata>
-					.into_iter()
-					.find(|metadata| metadata.name == name && metadata.path == pattern)
-					.and_then(|metadata| metadata.loader_id);
-				let navigation_guard_id = inventory::iter::<ComponentNavigationGuardMetadata>
-					.into_iter()
-					.find(|metadata| metadata.name == name && metadata.path == pattern)
-					.map(|metadata| metadata.navigation_guard_id);
-				(loader_id, navigation_guard_id)
-			},
-			|metadata| metadata,
-		);
+		let (loader_id, navigation_guard_id) = P::component_route_metadata().unwrap_or_else(|| {
+			let loader_id = inventory::iter::<ComponentMetadata>
+				.into_iter()
+				.find(|metadata| metadata.name == name && metadata.path == pattern)
+				.and_then(|metadata| metadata.loader_id);
+			let navigation_guard_id = inventory::iter::<ComponentNavigationGuardMetadata>
+				.into_iter()
+				.find(|metadata| metadata.name == name && metadata.path == pattern)
+				.map(|metadata| metadata.navigation_guard_id);
+			(loader_id, navigation_guard_id)
+		});
 		let mut route = ClientRoute::from_route_handler(
 			Some(name.to_string()),
 			ClientPathPattern::new(pattern)

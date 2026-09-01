@@ -20,7 +20,9 @@ async fn second(_context: NavigationContext) -> Result<NavigationDecision, Navig
 	navigation_guard = second,
 )]
 fn account() -> Page {
-	page!(|| { p { "account" } })()
+	page!(|| {
+		p { "account" }
+	})()
 }
 
 fn main() {}

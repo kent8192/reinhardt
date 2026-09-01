@@ -10,7 +10,9 @@ mod not_a_navigation_guard {
 	navigation_guard = not_a_navigation_guard,
 )]
 fn account() -> Page {
-	page!(|| { p { "account" } })()
+	page!(|| {
+		p { "account" }
+	})()
 }
 
 fn main() {}

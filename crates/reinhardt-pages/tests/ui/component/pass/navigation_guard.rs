@@ -16,7 +16,9 @@ async fn require_authenticated(
 	name = "account",
 )]
 fn account() -> Page {
-	page!(|| { p { "account" } })()
+	page!(|| {
+		p { "account" }
+	})()
 }
 
 fn main() {

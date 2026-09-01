@@ -10,7 +10,9 @@ mod not_a_navigation_guard {
 	navigation_guard = not_a_navigation_guard,
 )]
 fn dashboard(outlet: Outlet) -> Page {
-	page!(|outlet: Outlet| { main { { outlet } } })(outlet)
+	page!(|outlet: Outlet| {
+		main { { outlet } }
+	})(outlet)
 }
 
 fn main() {}

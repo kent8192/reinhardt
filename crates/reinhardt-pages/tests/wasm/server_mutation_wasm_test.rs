@@ -134,9 +134,18 @@ impl FetchGuard {
 						message: 'Validation failed',
 						field_errors: [{ field: 'name', message: 'Name is already used' }],
 					});
-					const createEndpoint = globalThis.__reinhardtCreateClusterEndpoint;
-					const updateEndpoint = globalThis.__reinhardtUpdateClusterEndpoint;
-					const deleteEndpoint = globalThis.__reinhardtDeleteClusterEndpoint;
+					const createEndpoint = new URL(
+						globalThis.__reinhardtCreateClusterEndpoint,
+						window.location.href,
+					).pathname;
+					const updateEndpoint = new URL(
+						globalThis.__reinhardtUpdateClusterEndpoint,
+						window.location.href,
+					).pathname;
+					const deleteEndpoint = new URL(
+						globalThis.__reinhardtDeleteClusterEndpoint,
+						window.location.href,
+					).pathname;
 					if (path === createEndpoint) {
 						globalThis.__reinhardtCreateClusterRequests += 1;
 						if (globalThis.__reinhardtCreateClusterRequests === 1) {
@@ -314,19 +323,22 @@ fn hydration_preserves_the_existing_ready_marker_node() {
 	let scope = ReactiveScope::new();
 
 	scope.enter(|| {
-		root.element
-			.set_inner_html(&ClusterMutationComponent.render().render_to_string());
+		let id_counter = reinhardt_pages::reactive::hooks::id::id_counter_snapshot();
+		let ssr_html = ClusterMutationComponent.render().render_to_string();
+		root.element.set_inner_html(&ssr_html);
+		reinhardt_pages::reactive::hooks::id::restore_id_counter(id_counter);
 		let marker = root
 			.element
 			.query_selector("#cluster-mutations-ready")
 			.expect("query ready marker")
 			.expect("SSR marker exists");
+		let hydration_root = root
+			.element
+			.first_element_child()
+			.expect("SSR component root exists");
 
-		hydrate(
-			&ClusterMutationComponent,
-			&Element::new(root.element.clone()),
-		)
-		.expect("hydrate cluster mutation component");
+		hydrate(&ClusterMutationComponent, &Element::new(hydration_root))
+			.expect("hydrate cluster mutation component");
 
 		assert!(marker.is_connected());
 		assert!(

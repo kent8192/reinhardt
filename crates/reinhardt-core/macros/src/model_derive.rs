@@ -3233,6 +3233,8 @@ fn generate_model_form_support(
 		.zip(&field_types)
 		.map(|(field_name, field_ty)| {
 			quote! {
+				#[doc = "Returns the normalized value when this field was supplied."]
+				#[doc = "This P2 accessor has equivalent semantics on native and WASM targets."]
 				pub fn #field_name(&self) -> ::core::option::Option<&#field_ty> {
 					self.#field_name.as_ref()
 				}
@@ -3594,6 +3596,8 @@ fn generate_model_form_support(
 			quote! {
 				#native_form_cfg
 				impl #impl_generics #context_name<#(#source_states),*> {
+					#[doc = "Sets one server-owned value and advances the native context typestate."]
+					#[doc = "This is a P0 native-only API because server-owned values are unavailable on WASM clients."]
 					pub fn #field_name(self, value: #field_ty) -> #context_name<#(#target_states),*> {
 						#context_name {
 							#(#moved_fields,)*
@@ -3657,6 +3661,8 @@ fn generate_model_form_support(
 		quote! {
 			#native_form_cfg
 			impl<P: #core_crate::model_form::ModelFormPolicy> #cleaned_payload_name<P> {
+				#[doc = "Builds a new model from this cleaned create payload."]
+				#[doc = "This is a P0 native-only API because ORM model construction is unavailable on WASM clients."]
 				pub fn into_model(self) -> ::core::result::Result<#struct_name, #forms_crate::model_form::ModelFormError> {
 					<#struct_name as #forms_crate::model_form::FormModel>::build_from_cleaned_compat(
 						&self,
@@ -3664,6 +3670,8 @@ fn generate_model_form_support(
 					)
 				}
 
+				#[doc = "Applies supplied cleaned values to an existing model while preserving omissions."]
+				#[doc = "This is a P0 native-only API because ORM model mutation is unavailable on WASM clients."]
 				pub fn apply_to(self, mut existing: #struct_name) -> ::core::result::Result<#struct_name, #forms_crate::model_form::ModelFormError> {
 					<#struct_name as #forms_crate::model_form::FormModel>::apply_cleaned(&mut existing, &self)?;
 					::core::result::Result::Ok(existing)
@@ -3691,7 +3699,8 @@ fn generate_model_form_support(
 			#(#marker_definitions)*
 
 			#native_form_cfg
-			#[doc(hidden)]
+			#[doc = "Native typestate context for server-owned values required to construct a model."]
+			#[doc = "This is a P0 native-only API because server-owned values are unavailable on WASM clients."]
 			pub struct #context_name<#(#context_state_params = #context_missing_markers),*> {
 				#(#context_field_names: ::core::option::Option<#context_field_types>,)*
 				_state: ::core::marker::PhantomData<(#(#context_state_params,)*)>,
@@ -3699,6 +3708,8 @@ fn generate_model_form_support(
 
 			#native_form_cfg
 			impl #context_name<#(#context_missing_markers),*> {
+				#[doc = "Creates an empty native server context."]
+				#[doc = "Every generated setter must be called before the context can construct a model."]
 				pub fn new() -> Self {
 					Self {
 						#(#empty_context_fields,)*
@@ -3711,6 +3722,8 @@ fn generate_model_form_support(
 
 			#native_form_cfg
 			impl<P: #core_crate::model_form::ModelFormPolicy> #cleaned_payload_name<P> {
+				#[doc = "Builds a new model using a complete native server context."]
+				#[doc = "This is a P0 native-only API because ORM construction and server-owned values are unavailable on WASM clients."]
 				pub fn into_model(
 					self,
 					context: #context_name<#(#context_present_markers),*>,
@@ -3720,6 +3733,8 @@ fn generate_model_form_support(
 					})
 				}
 
+				#[doc = "Applies supplied cleaned values to an existing model while preserving omissions."]
+				#[doc = "This is a P0 native-only API because ORM model mutation is unavailable on WASM clients."]
 				pub fn apply_to(self, mut existing: #struct_name) -> ::core::result::Result<#struct_name, #forms_crate::model_form::ModelFormError> {
 					<#struct_name as #forms_crate::model_form::FormModel>::apply_cleaned(&mut existing, &self)?;
 					::core::result::Result::Ok(existing)
@@ -3815,6 +3830,8 @@ fn generate_model_form_support(
 		})
 		.collect();
 	let cleaned_payload_output = quote! {
+		#[doc = "A normalized generated model-form payload."]
+		#[doc = "This P2 type has equivalent payload semantics on native and WASM targets."]
 		#struct_vis struct #cleaned_payload_name<P: #core_crate::model_form::ModelFormPolicy> {
 			#(#field_names: ::core::option::Option<#field_types>,)*
 			forbidden_fields: ::std::vec::Vec<&'static str>,
@@ -3830,6 +3847,8 @@ fn generate_model_form_support(
 				}
 			}
 
+			#[doc = "Converts this normalized payload back into its generated raw payload."]
+			#[doc = "This P2 conversion is available on native and WASM targets."]
 			pub fn into_raw(self) -> #payload_name<P> {
 				#payload_name {
 					#(#field_names: self.#field_names,)*

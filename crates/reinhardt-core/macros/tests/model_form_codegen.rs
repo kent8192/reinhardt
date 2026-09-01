@@ -3,6 +3,7 @@
 #[allow(unexpected_cfgs)]
 use chrono::{DateTime, NaiveDate, Utc};
 use reinhardt_macros::model;
+use rstest::rstest;
 use serde::{Deserialize, Serialize};
 
 include!("ui/model/support.rs");
@@ -142,7 +143,7 @@ fn generated_payload_applies_policy_and_preserves_nullable_values() {
 	assert!(error.to_string().contains("unexpected"));
 }
 
-#[test]
+#[rstest]
 fn generated_payload_is_cloneable_and_exposes_an_opaque_cleaned_type() {
 	fn assert_clone<T: Clone>() {}
 

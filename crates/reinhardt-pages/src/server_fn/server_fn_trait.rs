@@ -534,7 +534,7 @@ mod tests {
 		assert_eq!(error.field_errors()[2].message(), "Email is invalid");
 	}
 
-	#[test]
+	#[rstest]
 	fn validation_errors_preserve_insertion_order() {
 		let mut validation = ValidationErrors::new();
 		validation.add("name", ValidationError::TooShort { length: 0, min: 1 });

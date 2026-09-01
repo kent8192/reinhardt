@@ -87,6 +87,7 @@ impl std::error::Error for ValidationErrors {}
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	#[test]
 	fn test_new_is_empty() {
@@ -126,7 +127,7 @@ mod tests {
 		assert_eq!(errors.field_errors().len(), 2);
 	}
 
-	#[test]
+	#[rstest]
 	fn ordered_field_errors_preserve_insertion_order_with_non_field_errors_last() {
 		let mut errors = ValidationErrors::new();
 		errors.add(

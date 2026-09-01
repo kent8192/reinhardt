@@ -105,6 +105,38 @@ fn late_use_form_subscriber_replays_generated_submit_errors_on_build() {
 }
 
 #[rstest]
+fn model_form_runtime_prunes_dropped_server_error_handlers() {
+	reinhardt_core::reactive::ReactiveScope::run(|| {
+		let form = form! {
+			name: QuestionHandlerLifecycleForm,
+			model: Question,
+			policy: QuestionPolicy,
+			fields: [title],
+			server_fn: save_question,
+		};
+		let runtime = use_form(&form).build();
+		let handler_counts = || {
+			let handlers = form.__server_error_handlers.borrow();
+			(
+				handlers.len(),
+				handlers
+					.iter()
+					.filter(|handler| handler.upgrade().is_some())
+					.count(),
+			)
+		};
+
+		assert_eq!(handler_counts(), (1, 1));
+		drop(runtime);
+		assert_eq!(handler_counts(), (1, 0));
+
+		let replacement = use_form(&form).build();
+		assert_eq!(handler_counts(), (1, 1));
+		drop(replacement);
+	});
+}
+
+#[rstest]
 fn model_form_routes_structured_server_errors_to_selected_fields() {
 	reinhardt_core::reactive::ReactiveScope::run(|| {
 		// Arrange

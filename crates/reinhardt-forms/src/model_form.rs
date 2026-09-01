@@ -691,7 +691,8 @@ mod tests {
 
 	use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
 	use reinhardt_core::model_form::{
-		ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPolicy, ModelFormValidatingPayload,
+		ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPolicy, ModelFormUpdatingPayload,
+		ModelFormValidatingPayload,
 	};
 	use reinhardt_db::orm::connection::{
 		DatabaseBackend, OrmExecutor, QueryResult, QueryValue, Row,
@@ -700,6 +701,7 @@ mod tests {
 	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 	use serde_json::json;
+	use serial_test::serial;
 
 	#[model(
 		app_label = "forms",
@@ -1189,7 +1191,14 @@ mod tests {
 		data
 	}
 
-	#[test]
+	fn ordered_validation_errors(errors: &ValidationErrors) -> Vec<(String, Vec<ValidationError>)> {
+		errors
+			.ordered_field_errors()
+			.map(|(field, errors)| (field.to_owned(), errors.to_vec()))
+			.collect()
+	}
+
+	#[rstest]
 	fn generated_payload_cleaner_normalizes_and_reports_field_errors() {
 		let mut data = question_payload("  cleaned title  ", 7);
 		clean_generated_payload::<QuestionFormSchema, QuestionPolicy, _>(&mut data)
@@ -1201,40 +1210,79 @@ mod tests {
 			&mut required_after_trim,
 		)
 		.expect_err("required text must be checked after trimming");
-		assert!(required_errors.field_errors().contains_key("title"));
+		assert_eq!(
+			ordered_validation_errors(&required_errors),
+			vec![(
+				"title".to_owned(),
+				vec![ValidationError::Custom(
+					"This field is required.".to_owned()
+				)],
+			)]
+		);
 
 		let mut too_short = CleaningRecordModelFormData::<AllEditableModelFields>::empty();
 		too_short
 			.set_name("  ab  ".to_owned())
 			.expect("permitted name should be accepted");
+		too_short
+			.set_website("https://example.com".to_owned())
+			.expect("permitted website should be accepted");
 		let minimum_errors =
 			clean_generated_payload::<CleaningRecordFormSchema, AllEditableModelFields, _>(
 				&mut too_short,
 			)
 			.expect_err("minimum length must use the normalized text");
-		assert!(minimum_errors.field_errors().contains_key("name"));
+		assert_eq!(
+			ordered_validation_errors(&minimum_errors),
+			vec![(
+				"name".to_owned(),
+				vec![ValidationError::Custom(
+					"Ensure this value has at least 3 characters (it has 2)".to_owned(),
+				)],
+			)]
+		);
 
 		let mut too_long = CleaningRecordModelFormData::<AllEditableModelFields>::empty();
 		too_long
 			.set_name("  too-long  ".to_owned())
 			.expect("permitted name should be accepted");
+		too_long
+			.set_website("https://example.com".to_owned())
+			.expect("permitted website should be accepted");
 		let maximum_errors =
 			clean_generated_payload::<CleaningRecordFormSchema, AllEditableModelFields, _>(
 				&mut too_long,
 			)
 			.expect_err("maximum length must use the normalized text");
-		assert!(maximum_errors.field_errors().contains_key("name"));
+		assert_eq!(
+			ordered_validation_errors(&maximum_errors),
+			vec![(
+				"name".to_owned(),
+				vec![ValidationError::Custom(
+					"Ensure this value has at most 5 characters (it has 8)".to_owned(),
+				)],
+			)]
+		);
 
 		let mut invalid_url = CleaningRecordModelFormData::<AllEditableModelFields>::empty();
 		invalid_url
 			.set_website("  not a URL  ".to_owned())
 			.expect("permitted URL should be accepted");
+		invalid_url
+			.set_name("valid".to_owned())
+			.expect("permitted name should be accepted");
 		let url_errors =
 			clean_generated_payload::<CleaningRecordFormSchema, AllEditableModelFields, _>(
 				&mut invalid_url,
 			)
 			.expect_err("URL validation must run after trimming");
-		assert!(url_errors.field_errors().contains_key("website"));
+		assert_eq!(
+			ordered_validation_errors(&url_errors),
+			vec![(
+				"website".to_owned(),
+				vec![ValidationError::Custom("Enter a valid URL".to_owned())],
+			)]
+		);
 
 		let mut forbidden: QuestionModelFormData<TitleOnly> = serde_json::from_value(json!({
 			"title": "Question",
@@ -1252,15 +1300,39 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn generated_payload_cleaner_rejects_nonnullable_null_and_preserves_nullable_clear() {
 		let mut nonnullable = ExplicitNullTitlePayload;
 		let nonnullable_errors =
 			clean_generated_payload::<QuestionFormSchema, QuestionPolicy, _>(&mut nonnullable)
 				.expect_err("explicit null must not bypass required non-null field validation");
-		assert!(nonnullable_errors.field_errors().contains_key("title"));
+		assert_eq!(
+			ordered_validation_errors(&nonnullable_errors),
+			vec![
+				(
+					"title".to_owned(),
+					vec![ValidationError::Custom(
+						"This field is required.".to_owned()
+					)],
+				),
+				(
+					"owner_id".to_owned(),
+					vec![ValidationError::Custom("owner_id".to_owned())],
+				)
+			]
+		);
 
 		let mut nullable = TemporalRecordModelFormData::<AllEditableModelFields>::empty();
+		let timestamp = NaiveDate::from_ymd_opt(2026, 9, 1)
+			.unwrap()
+			.and_hms_opt(12, 30, 0)
+			.unwrap();
+		nullable
+			.set_aware_at(timestamp.and_utc())
+			.expect("required aware datetime should be accepted");
+		nullable
+			.set_naive_at(timestamp)
+			.expect("required naive datetime should be accepted");
 		nullable
 			.set_json("nullable_naive_at", Value::Null)
 			.expect("nullable payload should accept an explicit clear");
@@ -1271,7 +1343,8 @@ mod tests {
 		assert_eq!(nullable.get_json("nullable_naive_at"), Some(Value::Null));
 	}
 
-	#[test]
+	#[rstest]
+	#[serial(model_form_validation_matrix)]
 	fn generated_validating_payload_matches_the_target_neutral_validation_matrix() {
 		fn valid_payload() -> ValidationMatrixRecordModelFormData<AllEditableModelFields> {
 			let mut payload =
@@ -1326,8 +1399,9 @@ mod tests {
 
 		fn error_tuples<P: ModelFormPolicy>(
 			payload: ValidationMatrixRecordModelFormData<P>,
+			existing: &ValidationMatrixRecord,
 		) -> Vec<(String, String)> {
-			match payload.clean_and_validate() {
+			match payload.clean_and_validate_for_update(existing) {
 				Ok(_) => panic!("payload should fail validation"),
 				Err(errors) => errors
 					.ordered_field_errors()
@@ -1344,6 +1418,11 @@ mod tests {
 			}
 		}
 
+		let existing = valid_payload()
+			.clean_and_validate()
+			.unwrap()
+			.into_model()
+			.unwrap();
 		VALIDATION_MATRIX_CALLS.store(0, Ordering::SeqCst);
 
 		let cleaned = valid_payload().clean_and_validate().unwrap();
@@ -1394,7 +1473,9 @@ mod tests {
 		explicit_null
 			.set_json("nullable_note", Value::Null)
 			.unwrap();
-		let cleaned = explicit_null.clean_and_validate().unwrap();
+		let cleaned = explicit_null
+			.clean_and_validate_for_update(&existing)
+			.unwrap();
 		assert_eq!(cleaned.nullable_note(), Some(&None));
 
 		let mut nullable_bool =
@@ -1402,13 +1483,18 @@ mod tests {
 		nullable_bool
 			.set_json("nullable_flag", Value::Null)
 			.unwrap();
-		let cleaned = nullable_bool.clean_and_validate().unwrap();
+		let cleaned = nullable_bool
+			.clean_and_validate_for_update(&existing)
+			.unwrap();
 		assert_eq!(cleaned.nullable_flag(), Some(&None));
 
 		let mut json_null = ValidationMatrixRecordModelFormData::<AllEditableModelFields>::empty();
 		json_null.set_config(Value::Null).unwrap();
 		assert_eq!(
-			json_null.clean_and_validate().unwrap().config(),
+			json_null
+				.clean_and_validate_for_update(&existing)
+				.unwrap()
+				.config(),
 			Some(&Value::Null)
 		);
 
@@ -1417,19 +1503,25 @@ mod tests {
 		numeric.set_ratio(11.0).unwrap();
 		numeric.set_amount(rust_decimal::Decimal::ZERO).unwrap();
 		assert_eq!(
-			error_tuples(numeric),
+			error_tuples(numeric, &existing),
 			expected_errors(PARITY_NUMERIC_ERRORS)
 		);
 		assert_eq!(VALIDATION_MATRIX_CALLS.load(Ordering::SeqCst), 4);
 
 		let mut email = ValidationMatrixRecordModelFormData::<AllEditableModelFields>::empty();
 		email.set_email("person@localhost".to_owned()).unwrap();
-		assert_eq!(error_tuples(email), expected_errors(PARITY_EMAIL_ERRORS));
+		assert_eq!(
+			error_tuples(email, &existing),
+			expected_errors(PARITY_EMAIL_ERRORS)
+		);
 
 		let mut url = ValidationMatrixRecordModelFormData::<AllEditableModelFields>::empty();
-		url.set_api_url("https://example.com?query=value".to_owned())
+		url.set_api_url("https://example.com:123456/".to_owned())
 			.unwrap();
-		assert_eq!(error_tuples(url), expected_errors(PARITY_URL_ERRORS));
+		assert_eq!(
+			error_tuples(url, &existing),
+			expected_errors(PARITY_URL_ERRORS)
+		);
 
 		let mut deep = Value::Null;
 		for _ in 0..66 {
@@ -1438,14 +1530,17 @@ mod tests {
 		let mut json_depth = ValidationMatrixRecordModelFormData::<AllEditableModelFields>::empty();
 		json_depth.set_config(deep).unwrap();
 		assert_eq!(
-			error_tuples(json_depth),
+			error_tuples(json_depth, &existing),
 			expected_errors(PARITY_JSON_DEPTH_ERRORS)
 		);
 
 		let mut date = ValidationMatrixRecordModelFormData::<AllEditableModelFields>::empty();
 		date.set_event_date(NaiveDate::from_ymd_opt(25, 1, 15).unwrap())
 			.unwrap();
-		assert_eq!(error_tuples(date), expected_errors(PARITY_DATE_ERRORS));
+		assert_eq!(
+			error_tuples(date, &existing),
+			expected_errors(PARITY_DATE_ERRORS)
+		);
 
 		let mut year = ValidationMatrixRecordModelFormData::<AllEditableModelFields>::empty();
 		year.set_aware_at(
@@ -1456,7 +1551,10 @@ mod tests {
 				.and_utc(),
 		)
 		.unwrap();
-		assert_eq!(error_tuples(year), expected_errors(PARITY_DATETIME_ERRORS));
+		assert_eq!(
+			error_tuples(year, &existing),
+			expected_errors(PARITY_DATETIME_ERRORS)
+		);
 
 		let mut document = ValidationMatrixRecordModelFormData::<AllEditableModelFields>::empty();
 		document
@@ -1465,7 +1563,10 @@ mod tests {
 					.unwrap(),
 			))
 			.unwrap();
-		assert_eq!(error_tuples(document), expected_errors(PARITY_FILE_ERRORS));
+		assert_eq!(
+			error_tuples(document, &existing),
+			expected_errors(PARITY_FILE_ERRORS)
+		);
 
 		let mut avatar = ValidationMatrixRecordModelFormData::<AllEditableModelFields>::empty();
 		avatar
@@ -1474,7 +1575,10 @@ mod tests {
 					.unwrap(),
 			))
 			.unwrap();
-		assert_eq!(error_tuples(avatar), expected_errors(PARITY_IMAGE_ERRORS));
+		assert_eq!(
+			error_tuples(avatar, &existing),
+			expected_errors(PARITY_IMAGE_ERRORS)
+		);
 
 		let calls_before_forbidden = VALIDATION_MATRIX_CALLS.load(Ordering::SeqCst);
 		let forbidden: ValidationMatrixRecordModelFormData<TitleOnly> =
@@ -1484,7 +1588,7 @@ mod tests {
 			}))
 			.unwrap();
 		assert_eq!(
-			error_tuples(forbidden),
+			error_tuples(forbidden, &existing),
 			expected_errors(PARITY_FORBIDDEN_ERRORS)
 		);
 		assert_eq!(
@@ -1495,7 +1599,7 @@ mod tests {
 		let mut blocked = ValidationMatrixRecordModelFormData::<AllEditableModelFields>::empty();
 		blocked.set_title("  blocked  ".to_owned()).unwrap();
 		assert_eq!(
-			error_tuples(blocked),
+			error_tuples(blocked, &existing),
 			expected_errors(PARITY_CROSS_FIELD_ERRORS)
 		);
 
@@ -1505,7 +1609,7 @@ mod tests {
 		field_error.set_title("blocked".to_owned()).unwrap();
 		field_error.set_quantity(0).unwrap();
 		assert_eq!(
-			error_tuples(field_error),
+			error_tuples(field_error, &existing),
 			expected_errors(&[(
 				"quantity",
 				"Ensure this value is greater than or equal to 1",
@@ -1517,7 +1621,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn generated_payload_cleaner_reports_forbidden_fields_in_schema_order() {
 		let mut payload = ReverseForbiddenPayload;
 		let errors = clean_generated_payload::<QuestionFormSchema, TitleOnly, _>(&mut payload)

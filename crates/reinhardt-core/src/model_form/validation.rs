@@ -3,29 +3,45 @@
 use crate::validators::ValidationErrors;
 
 /// A normalized model form payload that can recover its original raw payload.
+///
+/// This target-neutral P2 contract is available with equivalent payload
+/// semantics on native and WASM targets.
 pub trait ModelFormCleanedPayload: Sized {
 	/// The corresponding raw payload type.
 	type Raw;
 
 	/// Convert this normalized payload back into its raw representation.
+	///
+	/// **Parity: P2.** Available with equivalent payload semantics on native and WASM targets.
 	fn into_raw(self) -> Self::Raw;
 }
 
-/// A raw model form payload that can be normalized and validated.
+/// A raw model form payload that can be normalized and validated for creation.
+///
+/// This target-neutral P2 contract performs the same generated field and
+/// synchronous application validation on native and WASM targets.
 pub trait ModelFormValidatingPayload: Sized {
 	/// The normalized payload produced after successful validation.
 	type Cleaned: ModelFormCleanedPayload<Raw = Self>;
 
 	/// Normalize and validate this raw payload for model creation.
+	///
+	/// **Parity: P2.** Runs equivalent generated validation on native and WASM targets.
 	fn clean_and_validate(self) -> Result<Self::Cleaned, ValidationErrors>;
 }
 
 /// A raw model form payload that can validate a partial model update.
+///
+/// This target-neutral P2 contract merges omitted values from the existing
+/// model for synchronous validation on both native and WASM targets. The
+/// returned cleaned payload remains partial so applying it preserves omissions.
 pub trait ModelFormUpdatingPayload: ModelFormValidatingPayload {
 	/// The model type whose existing values complete an update candidate.
 	type Model;
 
 	/// Normalize a partial update and validate its post-merge model values.
+	///
+	/// **Parity: P2.** Merges and validates equivalent candidate values on native and WASM targets.
 	fn clean_and_validate_for_update(
 		self,
 		existing: &Self::Model,
@@ -35,6 +51,7 @@ pub trait ModelFormUpdatingPayload: ModelFormValidatingPayload {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	#[derive(Debug, PartialEq)]
 	struct Raw(String);
@@ -58,7 +75,7 @@ mod tests {
 		}
 	}
 
-	#[test]
+	#[rstest]
 	fn cleaned_payload_returns_its_raw_payload() {
 		let cleaned = Raw("name".to_string()).clean_and_validate().unwrap();
 

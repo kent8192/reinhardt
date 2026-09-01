@@ -334,6 +334,36 @@ mod tests {
 		}
 	}
 
+	fn valid_form_project() -> FormProject {
+		FormProject {
+			id: 1,
+			title: "existing".to_owned(),
+			api_url: "https://example.com".to_owned(),
+			email: "person@example.com".to_owned(),
+			quantity: 5,
+			ratio: 5.5,
+			amount: rust_decimal::Decimal::new(55, 1),
+			nullable_note: None,
+			nullable_flag: None,
+			config: serde_json::json!({"nested": [true]}),
+			published: false,
+			event_date: chrono::NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
+			event_time: chrono::NaiveTime::from_hms_opt(12, 30, 0).unwrap(),
+			aware_at: chrono::NaiveDate::from_ymd_opt(2026, 9, 1)
+				.unwrap()
+				.and_hms_opt(12, 30, 0)
+				.unwrap()
+				.and_utc(),
+			naive_at: chrono::NaiveDate::from_ymd_opt(2026, 9, 1)
+				.unwrap()
+				.and_hms_opt(12, 30, 0)
+				.unwrap(),
+			token: uuid::Uuid::nil(),
+			document: FileField::default(),
+			avatar: ImageField::default(),
+		}
+	}
+
 	#[wasm_bindgen_test]
 	fn generated_datetime_payload_round_trips_in_wasm_runtime() {
 		assert_eq!(
@@ -372,6 +402,7 @@ mod tests {
 	#[rstest]
 	#[wasm_bindgen_test]
 	fn generated_payload_cleans_and_validates_in_wasm_runtime() {
+		let existing = valid_form_project();
 		let mut payload = FormProjectModelFormData::<AllEditableModelFields>::empty();
 		payload
 			.set_title("  trimmed  ".to_owned())
@@ -419,7 +450,9 @@ mod tests {
 		payload
 			.set_token(uuid::Uuid::nil())
 			.expect("UUID should be editable");
-		let cleaned = payload.clean_and_validate().expect("valid payload");
+		let cleaned = payload
+			.clean_and_validate_for_update(&existing)
+			.expect("valid payload");
 		assert_eq!(cleaned.title(), Some(&"trimmed".to_owned()));
 		assert_eq!(
 			cleaned.api_url(),
@@ -460,27 +493,44 @@ mod tests {
 			Some(&"https://example.com/path?query=value".to_owned())
 		);
 
-		for (title, api_url, field) in [
-			("   ", "https://example.com", "title"),
-			("ab", "https://example.com", "title"),
+		for (title, api_url, expected) in [
+			(
+				"   ",
+				"https://example.com",
+				vec![("title".to_owned(), "This field is required.".to_owned())],
+			),
+			(
+				"ab",
+				"https://example.com",
+				vec![(
+					"title".to_owned(),
+					"Ensure this value has at least 3 characters (it has 2)".to_owned(),
+				)],
+			),
 			(
 				"this title is deliberately longer than one hundred and twenty characters so the generated maximum length check rejects it before cross-field validation runs",
 				"https://example.com",
-				"title",
+				vec![(
+					"title".to_owned(),
+					"Ensure this value has at most 120 characters (it has 156)".to_owned(),
+				)],
 			),
-			("valid", "not a URL", "api_url"),
+			(
+				"valid",
+				"not a URL",
+				vec![("api_url".to_owned(), "Enter a valid URL".to_owned())],
+			),
 		] {
 			let mut payload = FormProjectModelFormData::<AllEditableModelFields>::empty();
 			payload.set_title(title.to_owned()).expect("editable title");
 			payload
 				.set_api_url(api_url.to_owned())
 				.expect("editable URL");
-			let errors = match payload.clean_and_validate() {
+			let errors = match payload.clean_and_validate_for_update(&existing) {
 				Ok(_) => panic!("invalid field should fail generated validation"),
 				Err(errors) => errors,
 			};
-			assert!(errors.field_errors().contains_key(field));
-			assert!(!errors.field_errors().contains_key("_all"));
+			assert_eq!(error_tuples(&errors), expected);
 		}
 
 		let mut multiple = FormProjectModelFormData::<AllEditableModelFields>::empty();
@@ -490,7 +540,7 @@ mod tests {
 		multiple
 			.set_api_url("not a URL".to_owned())
 			.expect("editable URL");
-		let errors = match multiple.clean_and_validate() {
+		let errors = match multiple.clean_and_validate_for_update(&existing) {
 			Ok(_) => panic!("invalid fields should fail generated validation"),
 			Err(errors) => errors,
 		};
@@ -509,7 +559,7 @@ mod tests {
 			.expect("nullable value should accept an explicit clear");
 		assert_eq!(
 			explicit_null
-				.clean_and_validate()
+				.clean_and_validate_for_update(&existing)
 				.expect("nullable clear should validate")
 				.nullable_note(),
 			Some(&None)
@@ -521,7 +571,7 @@ mod tests {
 			.expect("nullable boolean should accept an explicit clear");
 		assert_eq!(
 			nullable_bool
-				.clean_and_validate()
+				.clean_and_validate_for_update(&existing)
 				.expect("nullable boolean clear should validate")
 				.nullable_flag(),
 			Some(&None)
@@ -533,7 +583,7 @@ mod tests {
 			.expect("JSON null should be editable");
 		assert_eq!(
 			json_null
-				.clean_and_validate()
+				.clean_and_validate_for_update(&existing)
 				.expect("JSON null matches native model JSON cleaning")
 				.config(),
 			Some(&serde_json::Value::Null)
@@ -545,7 +595,7 @@ mod tests {
 		numeric
 			.set_amount(rust_decimal::Decimal::ZERO)
 			.expect("editable decimal");
-		let errors = match numeric.clean_and_validate() {
+		let errors = match numeric.clean_and_validate_for_update(&existing) {
 			Ok(_) => panic!("numeric bounds should reject the payload"),
 			Err(errors) => errors,
 		};
@@ -558,7 +608,7 @@ mod tests {
 			("email", "person@localhost", PARITY_EMAIL_ERRORS),
 			(
 				"api_url",
-				"https://example.com?query=value",
+				"https://example.com:123456/",
 				PARITY_URL_ERRORS,
 			),
 		] {
@@ -566,7 +616,7 @@ mod tests {
 			payload
 				.set_json(field, serde_json::Value::String(value.to_owned()))
 				.expect("text field should be editable");
-			let errors = match payload.clean_and_validate() {
+			let errors = match payload.clean_and_validate_for_update(&existing) {
 				Ok(_) => panic!("canonical format validator should reject the boundary value"),
 				Err(errors) => errors,
 			};
@@ -579,7 +629,7 @@ mod tests {
 		}
 		let mut json_depth = FormProjectModelFormData::<AllEditableModelFields>::empty();
 		json_depth.set_config(deep).expect("JSON should be editable");
-		let errors = match json_depth.clean_and_validate() {
+		let errors = match json_depth.clean_and_validate_for_update(&existing) {
 			Ok(_) => panic!("deep JSON should match native rejection"),
 			Err(errors) => errors,
 		};
@@ -591,7 +641,7 @@ mod tests {
 		let mut date = FormProjectModelFormData::<AllEditableModelFields>::empty();
 		date.set_event_date(chrono::NaiveDate::from_ymd_opt(25, 1, 15).unwrap())
 			.expect("date should be editable");
-		let errors = match date.clean_and_validate() {
+		let errors = match date.clean_and_validate_for_update(&existing) {
 			Ok(_) => panic!("out-of-range date year should match native rejection"),
 			Err(errors) => errors,
 		};
@@ -606,7 +656,7 @@ mod tests {
 				.and_utc(),
 		)
 		.expect("datetime should be editable");
-		let errors = match year.clean_and_validate() {
+		let errors = match year.clean_and_validate_for_update(&existing) {
 			Ok(_) => panic!("out-of-range year should match native rejection"),
 			Err(errors) => errors,
 		};
@@ -622,7 +672,7 @@ mod tests {
 				storage_alias: "default".to_owned(),
 			})
 			.expect("stored reference should be editable");
-		let errors = match document.clean_and_validate() {
+		let errors = match document.clean_and_validate_for_update(&existing) {
 			Ok(_) => panic!("untrusted file reference should match native rejection"),
 			Err(errors) => errors,
 		};
@@ -635,7 +685,7 @@ mod tests {
 				storage_alias: "default".to_owned(),
 			})
 			.expect("stored image reference should be editable");
-		let errors = match avatar.clean_and_validate() {
+		let errors = match avatar.clean_and_validate_for_update(&existing) {
 			Ok(_) => panic!("untrusted image reference should match native rejection"),
 			Err(errors) => errors,
 		};
@@ -648,7 +698,7 @@ mod tests {
 		blocked
 			.set_api_url("https://example.com".to_owned())
 			.expect("editable URL");
-		let errors = match blocked.clean_and_validate() {
+		let errors = match blocked.clean_and_validate_for_update(&existing) {
 			Ok(_) => panic!("cross-field validator should reject blocked project"),
 			Err(errors) => errors,
 		};
@@ -665,7 +715,7 @@ mod tests {
 		field_before_cross
 			.set_quantity(0)
 			.expect("editable integer");
-		let errors = match field_before_cross.clean_and_validate() {
+		let errors = match field_before_cross.clean_and_validate_for_update(&existing) {
 			Ok(_) => panic!("field validation should reject before the callback"),
 			Err(errors) => errors,
 		};
@@ -807,7 +857,6 @@ mod tests {
 		] {
 			let errors = cluster_validation_errors(cluster_payload(name, api_url));
 			assert_eq!(error_tuples(&errors), expected);
-			assert!(!errors.field_errors().contains_key("_all"));
 		}
 
 		let errors = cluster_validation_errors(cluster_payload(

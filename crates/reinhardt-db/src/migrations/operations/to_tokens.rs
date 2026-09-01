@@ -1562,6 +1562,7 @@ impl ToTokens for super::BulkLoadOptions {
 mod tests {
 	use super::*;
 	use quote::ToTokens;
+	use rstest::rstest;
 
 	#[test]
 	fn drop_constraint_definition_tokens_preserve_typed_constraint() {
@@ -1674,6 +1675,23 @@ mod tests {
 				"tokens must preserve suffixed literal types: {tokens}"
 			);
 		}
+	}
+
+	#[rstest]
+	#[case::i8(SchemaExpr::Value(Value::TinyInt(Some(i8::MIN))))]
+	#[case::i16(SchemaExpr::Value(Value::SmallInt(Some(i16::MIN))))]
+	#[case::i32(SchemaExpr::Value(Value::Int(Some(i32::MIN))))]
+	#[case::i64(SchemaExpr::Value(Value::BigInt(Some(i64::MIN))))]
+	fn generated_schema_expr_tokens_reparse_minimum_signed_literals(
+		#[case] expression: SchemaExpr,
+	) {
+		let tokens = schema_expr_to_tokens(&expression).to_string();
+
+		assert_eq!(
+			crate::migrations::ast_parser::parse_schema_expr_tokens(&tokens),
+			Some(expression),
+			"tokens must preserve minimum signed literal: {tokens}"
+		);
 	}
 
 	#[test]

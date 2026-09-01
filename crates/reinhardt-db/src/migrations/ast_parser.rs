@@ -12,10 +12,11 @@ use syn::{Expr, File, Item, ItemFn, Stmt};
 pub fn extract_migration_metadata(ast: &File, app_label: &str, name: &str) -> Result<Migration> {
 	// Current generated sources use a builder chain. Reuse the strict parser so
 	// filesystem loading does not silently drop operations or metadata from it.
-	if let Some(expression) = ast.items.iter().find_map(migration_expression)
-		&& matches!(expression, Expr::Call(_) | Expr::MethodCall(_))
-	{
-		return extract_migration_metadata_strict(ast, app_label, name);
+	for function in migration_functions(ast) {
+		let expression = migration_expression(function)?;
+		if matches!(expression, Expr::Call(_) | Expr::MethodCall(_)) {
+			return extract_migration_metadata_strict(ast, app_label, name);
+		}
 	}
 
 	let dependencies = extract_dependencies(ast)?;
@@ -54,30 +55,31 @@ pub fn extract_migration_metadata_strict(
 	app_label: &str,
 	name: &str,
 ) -> Result<Migration> {
-	let mut expressions = ast.items.iter().filter_map(migration_expression);
-	let migration_expr = expressions.next().ok_or_else(|| {
+	let mut expressions = migration_functions(ast).map(migration_expression);
+	let migration_expr = expressions.next().transpose()?.ok_or_else(|| {
 		MigrationError::InvalidMigration("Missing migration() entrypoint".to_string())
 	})?;
 	let migration = extract_migration_expression_strict(ast, migration_expr, app_label, name)?;
 	for expression in expressions {
-		extract_migration_expression_strict(ast, expression, app_label, name)?;
+		extract_migration_expression_strict(ast, expression?, app_label, name)?;
 	}
 	Ok(migration)
 }
 
-fn migration_expression(item: &Item) -> Option<&Expr> {
-	let Item::Fn(function) = item else {
-		return None;
+fn migration_functions(ast: &File) -> impl Iterator<Item = &ItemFn> {
+	ast.items.iter().filter_map(|item| match item {
+		Item::Fn(function) if function.sig.ident == "migration" => Some(function),
+		_ => None,
+	})
+}
+
+fn migration_expression(function: &ItemFn) -> Result<&Expr> {
+	let Some(Stmt::Expr(expression, None)) = function.block.stmts.last() else {
+		return Err(MigrationError::InvalidMigration(
+			"migration() entrypoint must end with a Migration expression".to_string(),
+		));
 	};
-	(function.sig.ident == "migration")
-		.then(|| function.block.stmts.last())
-		.flatten()
-		.and_then(|statement| {
-			let Stmt::Expr(expression, _) = statement else {
-				return None;
-			};
-			Some(expression)
-		})
+	Ok(expression)
 }
 
 fn extract_migration_expression_strict(
@@ -3299,16 +3301,21 @@ fn parse_optional_generated_expression_strict(
 		return Ok(None);
 	}
 	let Expr::Call(call) = expression else {
-		return Err(strict_payload_error(context, "generated"));
+		return Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		)));
 	};
 	let Expr::Path(some) = &*call.func else {
-		return Err(strict_payload_error(context, "generated"));
+		return Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		)));
 	};
 	if !some.path.is_ident("Some") || call.args.len() != 1 {
-		return Err(strict_payload_error(context, "generated"));
+		return Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		)));
 	}
-	parse_generated_column_definition_strict(&call.args[0], &format!("{context}.generated"))
-		.map(Some)
+	parse_generated_column_definition_strict(&call.args[0], context).map(Some)
 }
 
 fn parse_optional_domain_field_strict(
@@ -4540,14 +4547,51 @@ fn parse_schema_value(expr: &Expr) -> Option<QueryValue> {
 			if !matches!(expr_unary.op, syn::UnOp::Neg(_)) {
 				return None;
 			}
+			if let Expr::Lit(expr_lit) = &*expr_unary.expr
+				&& let syn::Lit::Int(lit_int) = &expr_lit.lit
+			{
+				return parse_negative_integer_schema_value(lit_int);
+			}
 			match parse_schema_value(&expr_unary.expr)? {
-				QueryValue::Int(Some(value)) => Some(QueryValue::Int(Some(-value))),
-				QueryValue::BigInt(Some(value)) => Some(QueryValue::BigInt(Some(-value))),
+				QueryValue::TinyInt(Some(value)) => {
+					Some(QueryValue::TinyInt(Some(value.checked_neg()?)))
+				}
+				QueryValue::SmallInt(Some(value)) => {
+					Some(QueryValue::SmallInt(Some(value.checked_neg()?)))
+				}
+				QueryValue::Int(Some(value)) => Some(QueryValue::Int(Some(value.checked_neg()?))),
+				QueryValue::BigInt(Some(value)) => {
+					Some(QueryValue::BigInt(Some(value.checked_neg()?)))
+				}
 				QueryValue::Float(Some(value)) => Some(QueryValue::Float(Some(-value))),
 				QueryValue::Double(Some(value)) => Some(QueryValue::Double(Some(-value))),
 				_ => None,
 			}
 		}
+		_ => None,
+	}
+}
+
+fn parse_negative_integer_schema_value(lit_int: &syn::LitInt) -> Option<QueryValue> {
+	let magnitude = lit_int.base10_parse::<u64>().ok()?;
+	let value = -i128::from(magnitude);
+	match lit_int.suffix() {
+		"i8" => i8::try_from(value)
+			.map(|value| QueryValue::TinyInt(Some(value)))
+			.ok(),
+		"i16" => i16::try_from(value)
+			.map(|value| QueryValue::SmallInt(Some(value)))
+			.ok(),
+		"i32" => i32::try_from(value)
+			.map(|value| QueryValue::Int(Some(value)))
+			.ok(),
+		"i64" => i64::try_from(value)
+			.map(|value| QueryValue::BigInt(Some(value)))
+			.ok(),
+		"" => i32::try_from(value)
+			.map(|value| QueryValue::Int(Some(value)))
+			.or_else(|_| i64::try_from(value).map(|value| QueryValue::BigInt(Some(value))))
+			.ok(),
 		_ => None,
 	}
 }
@@ -4962,6 +5006,31 @@ mod parser_tests {
 
 		// Assert
 		assert_eq!(error.to_string(), expected);
+	}
+
+	#[test]
+	fn strict_metadata_rejects_cfg_entrypoint_without_tail_expression() {
+		let ast = syn::parse_file(
+			r#"
+			#[cfg(feature = "postgres")]
+			pub fn migration() -> Migration {
+				Migration::new("0001_backend", "blog")
+			}
+
+			#[cfg(feature = "sqlite")]
+			pub fn migration() -> Migration {
+				let migration = Migration::new("0001_backend", "blog");
+			}
+			"#,
+		)
+		.unwrap();
+
+		let error = extract_migration_metadata_strict(&ast, "blog", "0001_backend").unwrap_err();
+
+		assert_eq!(
+			error.to_string(),
+			"Invalid migration: migration() entrypoint must end with a Migration expression"
+		);
 	}
 
 	#[rstest]

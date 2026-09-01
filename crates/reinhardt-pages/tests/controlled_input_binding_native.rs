@@ -1164,6 +1164,7 @@ fn native_text_binding_applies_browser_value_sanitization(reactive_scope: Reacti
 #[case("month", "2026-02", "2026-00")]
 #[case("week", "2026-W53", "2026-W54")]
 #[case("time", "10:30:00", "10:30:00.1234")]
+#[case("date", "2026-01-01", "2026-\n08-31")]
 fn native_temporal_binding_sanitizes_invalid_values(
 	#[case] input_type: &str,
 	#[case] initial: &str,
@@ -1206,6 +1207,33 @@ fn native_datetime_local_normalizes_a_space_separator(reactive_scope: ReactiveSc
 	assert_eq!(
 		screen.get_by_label("Datetime target").value().as_deref(),
 		Some("2026-08-31T10:30")
+	);
+}
+
+#[rstest]
+#[case("2026-08-31 10:30:00", "2026-08-31T10:30")]
+#[case("2026-08-31 10:30:00.010", "2026-08-31T10:30:00.01")]
+fn native_datetime_local_uses_browser_shortest_serialization(
+	#[case] initial: &str,
+	#[case] expected: &str,
+	reactive_scope: ReactiveScope,
+) {
+	// Arrange
+	let value = signal_in_scope(&reactive_scope, initial.to_owned());
+
+	// Act
+	let screen = render(
+		PageElement::new("input")
+			.attr("aria-label", "Datetime target")
+			.attr("type", "datetime-local")
+			.control_binding(ControlBinding::text(value.clone())),
+	);
+
+	// Assert
+	assert_eq!(value.get(), expected);
+	assert_eq!(
+		screen.get_by_label("Datetime target").value().as_deref(),
+		Some(expected)
 	);
 }
 

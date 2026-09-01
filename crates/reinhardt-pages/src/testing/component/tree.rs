@@ -1289,7 +1289,11 @@ fn normalize_native_control_value(
 	}
 	if binding.kind() == ControlKind::Text && crate::control_binding::is_text_input_type(input_type)
 	{
-		let mut normalized = raw.replace(['\r', '\n'], "");
+		let mut normalized = if input_type_removes_line_breaks(input_type) {
+			raw.replace(['\r', '\n'], "")
+		} else {
+			raw
+		};
 		if ["url", "email"]
 			.iter()
 			.any(|known| input_type.eq_ignore_ascii_case(known))
@@ -1303,10 +1307,12 @@ fn normalize_native_control_value(
 		{
 			normalized = format!("{date}T{time}");
 		}
-		if is_temporal_input_type(input_type)
-			&& !is_valid_temporal_input_value(input_type, &normalized)
-		{
-			normalized.clear();
+		if is_temporal_input_type(input_type) {
+			if !is_valid_temporal_input_value(input_type, &normalized) {
+				normalized.clear();
+			} else if input_type.eq_ignore_ascii_case("datetime-local") {
+				normalized = normalize_datetime_local_value(&normalized);
+			}
 		}
 		return ControlValue::Text(normalized);
 	}
@@ -1372,6 +1378,33 @@ fn normalize_native_control_value(
 		ControlValue::Text(raw)
 	} else {
 		ControlValue::Text(normalized)
+	}
+}
+
+fn input_type_removes_line_breaks(input_type: &str) -> bool {
+	["text", "search", "tel", "url", "email", "password"]
+		.iter()
+		.any(|known| input_type.eq_ignore_ascii_case(known))
+}
+
+fn normalize_datetime_local_value(value: &str) -> String {
+	let Some((date, time)) = value.split_once('T').or_else(|| value.split_once(' ')) else {
+		return value.to_owned();
+	};
+	let Some((hour, minute_and_seconds)) = time.split_once(':') else {
+		return format!("{date}T{time}");
+	};
+	let Some((minute, seconds)) = minute_and_seconds.split_once(':') else {
+		return format!("{date}T{hour}:{minute_and_seconds}");
+	};
+	let (second, fraction) = seconds.split_once('.').unwrap_or((seconds, ""));
+	let fraction = fraction.trim_end_matches('0');
+	if second == "00" && fraction.is_empty() {
+		format!("{date}T{hour}:{minute}")
+	} else if fraction.is_empty() {
+		format!("{date}T{hour}:{minute}:{second}")
+	} else {
+		format!("{date}T{hour}:{minute}:{second}.{fraction}")
 	}
 }
 

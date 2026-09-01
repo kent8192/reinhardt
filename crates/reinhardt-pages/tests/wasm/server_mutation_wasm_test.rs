@@ -615,6 +615,44 @@ fn stale_mutation_dispatch_is_ignored() {
 }
 
 #[rstest]
+#[wasm_bindgen_test]
+#[serial(server_mutation_globals)]
+fn stale_generated_mutation_preserves_an_existing_form_submission() {
+	let form_scope = ReactiveScope::new();
+	let (form, runtime) = form_scope.enter(|| {
+		let form = UpdateClusterRequestClientForm::new().with_defaults(default_update_request());
+		let runtime = use_form(&form).build();
+		(form, runtime)
+	});
+	let mutation_scope = ReactiveScope::new();
+	let mutation = mutation_scope.enter(|| form.server_mutation(&runtime).build());
+	mutation_scope.dispose();
+	runtime.form_state().is_submitting.set(true);
+
+	assert_eq!(mutation.dispatch(), MutationDispatchOutcome::AlreadyPending);
+	assert!(runtime.form_state().is_submitting.get());
+	form_scope.dispose();
+}
+
+#[rstest]
+#[wasm_bindgen_test]
+#[serial(server_mutation_globals)]
+fn generated_mutation_pending_falls_back_after_form_scope_disposal() {
+	let form_scope = ReactiveScope::new();
+	let (form, runtime) = form_scope.enter(|| {
+		let form = UpdateClusterRequestClientForm::new().with_defaults(default_update_request());
+		let runtime = use_form(&form).build();
+		(form, runtime)
+	});
+	let mutation_scope = ReactiveScope::new();
+	let mutation = mutation_scope.enter(|| form.server_mutation(&runtime).build());
+	form_scope.dispose();
+
+	assert!(!mutation.is_pending());
+	mutation_scope.dispose();
+}
+
+#[rstest]
 #[serial(server_mutation_globals)]
 #[test_attr(wasm_bindgen_test)]
 async fn generated_dispatch_does_not_subscribe_the_calling_effect() {

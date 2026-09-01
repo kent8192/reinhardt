@@ -365,14 +365,13 @@ where
 		let action_fn = Rc::clone(&builder.action_fn);
 		let form_for_pending = form.clone();
 		builder.action_fn = Rc::new(move |input| {
-			let mut pending_guard = crate::form_state::SubmitPendingGuard::new(
+			let pending_guard = crate::form_state::SubmitPendingGuard::new(
 				form_for_pending.form_state().is_submitting,
 			);
 			let future = action_fn(input);
 			let future: ServerMutationFuture<Output> = Box::pin(async move {
-				let result = future.await;
-				pending_guard.disarm();
-				result
+				let _pending_guard = pending_guard;
+				future.await
 			});
 			future
 		});
@@ -511,8 +510,16 @@ where
 	}
 
 	/// Returns `true` while validation or the server request is pending.
+	///
+	/// A disposed form runtime is treated as unavailable, so the live mutation
+	/// action remains observable without accessing stale form signals.
 	pub fn is_pending(&self) -> bool {
-		self.form.form_state().is_submitting.get() || self.mutation.is_pending()
+		self.form
+			.form_state()
+			.is_submitting
+			.try_get_untracked()
+			.unwrap_or(false)
+			|| self.mutation.is_pending()
 	}
 
 	/// Returns `true` when the mutation completed successfully.
@@ -564,7 +571,10 @@ where
 						pending_guard.disarm();
 						return MutationDispatchOutcome::AlreadyPending;
 					}
-					None => return MutationDispatchOutcome::AlreadyPending,
+					None => {
+						pending_guard.disarm();
+						return MutationDispatchOutcome::AlreadyPending;
+					}
 				}
 				match self.form.begin_submit_lifecycle() {
 					crate::UseFormSubmitOutcome::AlreadyPending => {
@@ -727,6 +737,17 @@ mod tests {
 	#[cfg(native)]
 	struct DemoError;
 
+	#[derive(Debug)]
+	#[cfg(all(native, feature = "testing"))]
+	struct PanicOnClone;
+
+	#[cfg(all(native, feature = "testing"))]
+	impl Clone for PanicOnClone {
+		fn clone(&self) -> Self {
+			panic!("response clone failed")
+		}
+	}
+
 	#[cfg(native)]
 	impl From<DemoError> for ServerFnError {
 		fn from(_: DemoError) -> Self {
@@ -780,6 +801,41 @@ mod tests {
 			assert_eq!(validation_calls.get(), 0);
 			assert_eq!(prepare_calls.get(), 0);
 		});
+	}
+
+	#[cfg(all(native, feature = "testing"))]
+	#[rstest]
+	fn generated_form_pending_clears_when_response_clone_panics() {
+		let queued = Rc::new(RefCell::new(None));
+		let queued_for_sink = Rc::clone(&queued);
+		let _task_sink = crate::platform::install_task_sink(move |task| {
+			*queued_for_sink.borrow_mut() = Some(task);
+		});
+		let scope = ReactiveScope::new();
+		let (runtime, mutation) = scope.enter(|| {
+			let form = NameForm::new("Ada", Rc::new(Cell::new(0)));
+			let runtime = use_form(&form).build();
+			let mutation = use_server_mutation(|_: ()| async {
+				Ok::<PanicOnClone, ServerFnError>(PanicOnClone)
+			})
+			.with_generated_form(&runtime, |_| Ok(()))
+			.build();
+			(runtime, mutation)
+		});
+		runtime.form_state().is_submitting.set(true);
+		mutation.mutation.action.dispatch(());
+
+		let mut task = queued
+			.borrow_mut()
+			.take()
+			.expect("dispatch should queue a native task");
+		let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+		let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			task.as_mut().poll(&mut context)
+		}));
+
+		assert!(unwind.is_err());
+		assert!(!runtime.form_state().is_submitting.get());
 	}
 
 	#[rstest]

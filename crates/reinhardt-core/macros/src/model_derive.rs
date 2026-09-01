@@ -4357,9 +4357,11 @@ pub(crate) fn generate_named_model_form_contract(
 			"clone",
 			"clone_from",
 			"default",
+			"deserialize",
 			"eq",
 			"fmt",
 			"ne",
+			"serialize",
 			"supplied_fields",
 			"forbidden_fields",
 			"get_json",
@@ -13414,9 +13416,17 @@ mod tests {
 		}
 	}
 
-	#[test]
-	fn test_named_model_form_rejects_derived_trait_accessor_collisions() {
-		for field_name in ["clone", "clone_from", "eq", "ne", "fmt"] {
+	#[rstest]
+	fn test_named_model_form_rejects_trait_accessor_collisions() {
+		for field_name in [
+			"clone",
+			"clone_from",
+			"deserialize",
+			"eq",
+			"fmt",
+			"ne",
+			"serialize",
+		] {
 			let field = Ident::new(field_name, Span::call_site());
 			let args = quote! {
 				app_label = "fixture_tests",

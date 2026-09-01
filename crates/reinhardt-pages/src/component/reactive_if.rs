@@ -1195,6 +1195,13 @@ fn mount_before_marker(marker: &web_sys::Comment, view: Page) -> Vec<web_sys::No
 						let attribute = attribute.clone();
 						let element = element_wrapper.clone();
 						let binding = control_binding.clone();
+						let reconcile_on_attribute_change =
+							binding.as_ref().is_some_and(|binding| {
+								crate::component::into_page::controlled_attribute_affects_value(
+									binding,
+									attribute.name(),
+								)
+							});
 						let initializing = std::rc::Rc::clone(&initializing_reactive_attributes);
 						Effect::new(move || {
 							match attribute.value() {
@@ -1217,6 +1224,7 @@ fn mount_before_marker(marker: &web_sys::Comment, view: Page) -> Vec<web_sys::No
 								}
 							}
 							if !initializing.get()
+								&& reconcile_on_attribute_change
 								&& let Some(binding) = binding.as_ref()
 								&& let Err(error) =
 									crate::dom::control_binding::reconcile_control_binding(

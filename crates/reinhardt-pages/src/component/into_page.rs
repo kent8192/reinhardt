@@ -171,6 +171,18 @@ pub(crate) fn controlled_attribute_is_overridden(
 }
 
 #[cfg(wasm)]
+pub(crate) fn controlled_attribute_affects_value(binding: &ControlBinding, name: &str) -> bool {
+	match binding.kind() {
+		ControlKind::Text => name.eq_ignore_ascii_case("type"),
+		ControlKind::Number => ["type", "min", "max", "step"]
+			.iter()
+			.any(|attribute| name.eq_ignore_ascii_case(attribute)),
+		ControlKind::SelectOne | ControlKind::SelectMany => name.eq_ignore_ascii_case("multiple"),
+		ControlKind::Checkbox | ControlKind::Radio => false,
+	}
+}
+
+#[cfg(wasm)]
 pub(crate) fn initialize_control_default(element: &Element, binding: &ControlBinding) {
 	let value = crate::reactive::untracked(|| binding.read());
 	match (binding.kind(), value) {
@@ -308,6 +320,10 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 						let attribute = attribute.clone();
 						let element = element.clone();
 						let binding = control_binding.clone();
+						let reconcile_on_attribute_change =
+							binding.as_ref().is_some_and(|binding| {
+								controlled_attribute_affects_value(binding, attribute.name())
+							});
 						let initializing = std::rc::Rc::clone(&initializing_reactive_attributes);
 						crate::reactive::Effect::new(move || {
 							match attribute.value() {
@@ -330,6 +346,7 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 								}
 							}
 							if !initializing.get()
+								&& reconcile_on_attribute_change
 								&& let Some(binding) = binding.as_ref()
 								&& let Err(error) =
 									crate::dom::control_binding::reconcile_control_binding(

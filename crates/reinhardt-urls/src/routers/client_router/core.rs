@@ -24,7 +24,9 @@ use super::pattern::ClientPathPattern;
 use super::scope::{RegisteredRouteScope, RouteScope};
 use super::tree::{ClientRouteTreeMatch, ResolvedRouteMetadata, RouteNode};
 use reinhardt_core::page::{Head, Outlet, Page};
-use reinhardt_core::reactive::{ReactiveScope, Signal, scope::current_scope_id};
+use reinhardt_core::reactive::{
+	Effect, EffectTiming, ReactiveScope, Signal, scope::current_scope_id,
+};
 #[cfg(wasm)]
 use reinhardt_core::reactive::{ScopeId, scope::enter_scope};
 use std::collections::{HashMap, HashSet};
@@ -71,14 +73,7 @@ type NavigationSignals = (
 
 fn create_navigation_signals(initial_path: String) -> NavigationSignals {
 	if current_scope_id().is_some() {
-		return (
-			Signal::new(initial_path),
-			Signal::new(HashMap::new()),
-			Signal::new(None),
-			Signal::new(false),
-			Signal::new(None),
-			None,
-		);
+		return create_navigation_signals_in_scope(initial_path);
 	}
 
 	let scope = Rc::new(ReactiveScope::new());
@@ -88,15 +83,8 @@ fn create_navigation_signals(initial_path: String) -> NavigationSignals {
 		current_route_name,
 		current_match_is_unmatched,
 		current_navigation_guard_approval,
-	) = scope.enter(|| {
-		(
-			Signal::new(initial_path),
-			Signal::new(HashMap::new()),
-			Signal::new(None),
-			Signal::new(false),
-			Signal::new(None),
-		)
-	});
+		_,
+	) = scope.enter(|| create_navigation_signals_in_scope(initial_path));
 	(
 		current_path,
 		current_params,
@@ -104,6 +92,31 @@ fn create_navigation_signals(initial_path: String) -> NavigationSignals {
 		current_match_is_unmatched,
 		current_navigation_guard_approval,
 		Some(scope),
+	)
+}
+
+fn create_navigation_signals_in_scope(initial_path: String) -> NavigationSignals {
+	let current_path = Signal::new(initial_path);
+	let current_params = Signal::new(HashMap::new());
+	let current_route_name = Signal::new(None);
+	let current_match_is_unmatched = Signal::new(false);
+	let current_navigation_guard_approval = Signal::new(None);
+	let path_for_invalidation = current_path;
+	let approval_for_invalidation = current_navigation_guard_approval;
+	Effect::new_with_timing(
+		move || {
+			let _ = path_for_invalidation.get();
+			approval_for_invalidation.set(None);
+		},
+		EffectTiming::Layout,
+	);
+	(
+		current_path,
+		current_params,
+		current_route_name,
+		current_match_is_unmatched,
+		current_navigation_guard_approval,
+		None,
 	)
 }
 
@@ -2582,6 +2595,35 @@ mod tests {
 			router.current_path().set("/guard-only/".to_owned());
 
 			assert!(router.__match_current_for_render().is_none());
+		});
+	}
+
+	#[test]
+	fn public_current_path_mutation_cannot_reuse_guard_approval() {
+		ReactiveScope::run(|| {
+			let router = ClientRouter::new()
+				.route("home", "/", home_page)
+				.component(guard_only_page)
+				.not_found(not_found_page);
+			let matched = router
+				.match_tree("/guard-only/")
+				.expect("guarded route should match");
+
+			unsafe {
+				router
+					.__commit_match_after_navigation_guard(
+						"/guard-only/",
+						&matched,
+						NavigationType::Push,
+						1,
+					)
+					.expect("approved guarded route should commit");
+			}
+			assert_eq!(router.render_current().render_to_string(), "protected");
+
+			router.current_path().set("/".to_owned());
+			router.current_path().set("/guard-only/".to_owned());
+			assert_eq!(router.render_current().render_to_string(), "NotFound");
 		});
 	}
 

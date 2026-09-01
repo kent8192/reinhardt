@@ -74,6 +74,7 @@ fn expand_navigation_guard(input: ItemFn) -> syn::Result<proc_macro2::TokenStrea
 		#visibility mod #function_name {
 			use super::*;
 
+			// The marker intentionally shares the guard function path and therefore uses a lowercase type name.
 			#[allow(non_camel_case_types)]
 			pub struct marker;
 

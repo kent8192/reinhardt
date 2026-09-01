@@ -211,8 +211,10 @@ fn unsafe_redirects_return_error_without_setting_accessor(
 		let output = renderer.render_route_to_string(&router, path).await;
 
 		assert_eq!(output.status, 500);
-		assert!(output.html.contains(expected_message));
-		assert!(!output.html.contains("redirect route"));
+		assert_eq!(
+			output.html,
+			format!("<div data-route-error=\"navigation-guard\">{expected_message}</div>")
+		);
 		assert_eq!(renderer.route_redirect_location(), None);
 	});
 }

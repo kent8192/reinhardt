@@ -35,15 +35,16 @@ impl RedirectChain {
 		Ok(Self { visited })
 	}
 
-	fn redirect(&self, destination: &str) -> Result<Self, NavigationGuardError> {
+	fn redirect(&self, destination: &str) -> Result<(Self, String), NavigationGuardError> {
+		let normalized = Self::normalize(destination)?;
 		let mut chain = self.clone();
-		if !chain.visited.insert(Self::normalize(destination)?) {
+		if !chain.visited.insert(normalized.clone()) {
 			return Err(NavigationGuardError::with_status(
 				"navigation guard redirect loop detected",
 				500,
 			));
 		}
-		Ok(chain)
+		Ok((chain, normalized))
 	}
 
 	fn normalize(destination: &str) -> Result<String, NavigationGuardError> {
@@ -61,7 +62,12 @@ impl RedirectChain {
 			));
 		}
 		url.set_fragment(None);
-		Ok(url.into())
+		let mut normalized = url.path().to_owned();
+		if let Some(query) = url.query() {
+			normalized.push('?');
+			normalized.push_str(query);
+		}
+		Ok(normalized)
 	}
 }
 
@@ -240,6 +246,7 @@ impl NavigationCoordinator {
 	pub(crate) fn clear_for_authentication_change(&self) {
 		self.query_client.clear_for_authentication_change();
 		self.cancel_active_attempt();
+		self.cancel_prefetch_tasks();
 		self.pending.set(false);
 	}
 
@@ -556,8 +563,8 @@ impl NavigationCoordinator {
 				Ok(())
 			}
 			NavigationDecision::Redirect { location, replace } => {
-				let redirect_chain = match redirect_chain.redirect(&location) {
-					Ok(redirect_chain) => redirect_chain,
+				let (redirect_chain, location) = match redirect_chain.redirect(&location) {
+					Ok(result) => result,
 					Err(error) => {
 						self.finish_error(generation, error.into());
 						return Ok(());
@@ -639,6 +646,13 @@ impl NavigationCoordinator {
 		if let Some(attempt) = self.active_attempt.borrow_mut().take() {
 			attempt.cancellation.cancel();
 			// Dropping the attempt's task guard aborts any obsolete future.
+		}
+	}
+
+	fn cancel_prefetch_tasks(&self) {
+		let tasks = std::mem::take(&mut *self.prefetch_tasks.borrow_mut());
+		for (_, cancellation, _task) in tasks {
+			cancellation.cancel();
 		}
 	}
 
@@ -823,9 +837,10 @@ mod tests {
 	fn redirect_chain_normalizes_paths_without_collapsing_distinct_queries() {
 		let chain =
 			RedirectChain::new("/protected?next=one").expect("initial destination is valid");
-		let chain = chain
+		let (chain, normalized) = chain
 			.redirect("/protected?next=two")
 			.expect("different query destination remains distinct");
+		assert_eq!(normalized, "/protected?next=two");
 		assert!(chain.redirect("/protected?next=one").is_err());
 
 		let chain = RedirectChain::new("/protected/").expect("initial destination is valid");
@@ -1083,6 +1098,11 @@ mod tests {
 			Page::text("redirect b")
 		}
 
+		#[component("/login/", name = "coordinator-login")]
+		fn coordinator_login() -> Page {
+			Page::text("login")
+		}
+
 		#[loader]
 		async fn coordinator_layout_loader() -> Result<String, String> {
 			LAYOUT_LOADER_STARTS.with(|starts| starts.set(starts.get() + 1));
@@ -1211,6 +1231,7 @@ mod tests {
 				.component(coordinator_guarded_loaded)
 				.component(coordinator_redirect_a)
 				.component(coordinator_redirect_b)
+				.component(coordinator_login)
 				.component(coordinator_authentication_401)
 				.component(coordinator_error)
 				.routes(|routes| {
@@ -1501,7 +1522,7 @@ mod tests {
 							},
 						),
 						(
-							"/redirect-b/#two".to_owned(),
+							"/redirect-b/".to_owned(),
 							NavigationDecision::Redirect {
 								location: "/redirect-a/#three".to_owned(),
 								replace: false,
@@ -1521,6 +1542,39 @@ mod tests {
 					"fragment-varying alternating redirects must terminate as a loop"
 				);
 				assert!(!coordinator.pending().get());
+			});
+		}
+
+		#[test]
+		fn redirected_navigation_uses_the_normalized_destination() {
+			ReactiveScope::run(|| {
+				reset_test_state();
+				let _query_client = provide_test_query_client();
+				let tasks = Rc::new(RefCell::new(VecDeque::new()));
+				let tasks_for_sink = Rc::clone(&tasks);
+				let _sink = crate::platform::install_task_sink(move |task| {
+					tasks_for_sink.borrow_mut().push_back(task);
+				});
+				let router = Rc::new(router_with_loaded_routes());
+				let coordinator =
+					NavigationCoordinator::new(Rc::clone(&router)).expect("registry builds");
+				REDIRECTS.with(|redirects| {
+					redirects.borrow_mut().insert(
+						"/redirect-a/".to_owned(),
+						NavigationDecision::Redirect {
+							location: "/old/../login/".to_owned(),
+							replace: false,
+						},
+					);
+				});
+
+				coordinator
+					.navigate("/redirect-a/".to_owned(), NavigationIntent::Push)
+					.expect("redirect navigation starts");
+				poll_rounds(&tasks, 8);
+
+				assert_eq!(router.current_path().get(), "/login/");
+				assert_eq!(router.render_current().render_to_string(), "login");
 			});
 		}
 
@@ -2309,6 +2363,31 @@ mod tests {
 				assert_eq!(coordinator.prefetch_tasks.borrow().len(), 1);
 				poll_rounds(&tasks, 4);
 				assert_eq!(coordinator.prefetch_tasks.borrow().len(), 0);
+			});
+		}
+
+		#[test]
+		fn authentication_change_cancels_and_drains_prefetch_tasks() {
+			ReactiveScope::run(|| {
+				reset_test_state();
+				let _query_client = provide_test_query_client();
+				let tasks = Rc::new(RefCell::new(VecDeque::new()));
+				let tasks_for_sink = Rc::clone(&tasks);
+				let _sink = crate::platform::install_task_sink(move |task| {
+					tasks_for_sink.borrow_mut().push_back(task);
+				});
+				let router = Rc::new(router_with_loaded_routes());
+				let coordinator = NavigationCoordinator::new(router).expect("registry builds");
+
+				coordinator
+					.prefetch("/loaded/".to_owned())
+					.expect("prefetch starts for a matched loader route");
+				assert_eq!(coordinator.prefetch_tasks.borrow().len(), 1);
+
+				coordinator.clear_for_authentication_change();
+				assert!(coordinator.prefetch_tasks.borrow().is_empty());
+				poll_rounds(&tasks, 4);
+				assert!(coordinator.prefetch_tasks.borrow().is_empty());
 			});
 		}
 

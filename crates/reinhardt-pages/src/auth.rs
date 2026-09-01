@@ -102,6 +102,7 @@ pub fn invalidate_authentication() {
 #[doc(hidden)]
 pub fn observe_server_fn_status(status: u16) {
 	if status == 401 {
+		auth_state().logout();
 		invalidate_authentication();
 	}
 }
@@ -988,12 +989,18 @@ mod tests {
 		assert_eq!(query.data(), Some("authenticated".to_owned()));
 
 		let _client_guard = provide_query_client(client);
+		let state = auth_state();
+		state.login("1", "authenticated");
 		observe_server_fn_status(403);
 		assert_eq!(query.data(), Some("authenticated".to_owned()));
 		observe_server_fn_status(500);
 		assert_eq!(query.data(), Some("authenticated".to_owned()));
 		observe_server_fn_status(401);
 		assert_eq!(query.data(), None);
+		assert!(!state.is_authenticated());
+		assert_eq!(state.user_id(), None);
+		assert_eq!(state.username(), None);
+		state.logout();
 	}
 
 	#[cfg(native)]

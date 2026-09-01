@@ -77,6 +77,28 @@ struct ActionSlot<T: Clone + 'static, E: Clone + 'static> {
 	reset_on_success: Rc<Cell<bool>>,
 }
 
+struct ActionPendingGuard<T: Clone + 'static, E: Clone + 'static> {
+	state: Option<Signal<ActionPhase<T, E>>>,
+}
+
+impl<T: Clone + 'static, E: Clone + 'static> ActionPendingGuard<T, E> {
+	fn new(state: Signal<ActionPhase<T, E>>) -> Self {
+		Self { state: Some(state) }
+	}
+
+	fn disarm(&mut self) {
+		self.state = None;
+	}
+}
+
+impl<T: Clone + 'static, E: Clone + 'static> Drop for ActionPendingGuard<T, E> {
+	fn drop(&mut self) {
+		if let Some(state) = self.state {
+			let _ = state.try_set(ActionPhase::Idle);
+		}
+	}
+}
+
 /// Represents the current phase of an async action.
 ///
 /// An action progresses through phases: `Idle` -> `Pending` -> `Success`/`Error`.
@@ -611,13 +633,11 @@ where
 			if state.try_set(ActionPhase::Pending).is_err() {
 				return;
 			}
+			let pending_guard = ActionPendingGuard::new(state);
 
 			let fut = match enter_scope(scope, || action_fn(*payload)) {
 				Ok(fut) => fut,
-				Err(_) => {
-					let _ = state.try_set(ActionPhase::Idle);
-					return;
-				}
+				Err(_) => return,
 			};
 
 			#[cfg(wasm)]
@@ -627,6 +647,7 @@ where
 				let on_success = Rc::clone(&on_success_for_dispatch);
 				let reset_on_success = Rc::clone(&reset_on_success_for_dispatch);
 				let fut = scope_action_future(scope, fut);
+				let mut pending_guard = pending_guard;
 				spawn_task(async move {
 					let Some(result) = fut.await else {
 						return;
@@ -636,6 +657,7 @@ where
 							let _ = enter_scope(scope, || {
 								crate::reactive::batch(|| {
 									if state.try_set(ActionPhase::Success(val.clone())).is_ok() {
+										pending_guard.disarm();
 										let on_success = on_success.borrow().clone();
 										on_success(&val);
 										if reset_on_success.get() {
@@ -649,6 +671,7 @@ where
 							let _ = enter_scope(scope, || {
 								crate::reactive::batch(|| {
 									if state.try_set(ActionPhase::Error(err.clone())).is_ok() {
+										pending_guard.disarm();
 										let on_error = on_error.borrow().clone();
 										on_error(&err);
 									}
@@ -666,7 +689,8 @@ where
 				let on_success = Rc::clone(&on_success_for_dispatch);
 				let reset_on_success = Rc::clone(&reset_on_success_for_dispatch);
 				let fut = scope_action_future(scope, fut);
-				let spawned = crate::platform::try_spawn_task(async move {
+				let mut pending_guard = pending_guard;
+				crate::platform::try_spawn_task(async move {
 					let Some(result) = fut.await else {
 						return;
 					};
@@ -678,6 +702,7 @@ where
 										.try_set(ActionPhase::Success(val.clone()))
 										.is_ok()
 									{
+										pending_guard.disarm();
 										let on_success = on_success.borrow().clone();
 										on_success(&val);
 										if reset_on_success.get() {
@@ -691,6 +716,7 @@ where
 							let _ = enter_scope(scope, || {
 								crate::reactive::batch(|| {
 									if task_state.try_set(ActionPhase::Error(err.clone())).is_ok() {
+										pending_guard.disarm();
 										let on_error = on_error.borrow().clone();
 										on_error(&err);
 									}
@@ -699,9 +725,6 @@ where
 						}
 					}
 				});
-				if !spawned {
-					state.set(ActionPhase::Idle);
-				}
 			}
 		})
 	};
@@ -762,6 +785,24 @@ mod tests {
 			copied.dispatch(1);
 			assert_eq!(action.phase(), ActionPhase::Idle);
 		});
+	}
+
+	#[cfg(native)]
+	#[rstest]
+	fn synchronous_action_panic_restores_idle_phase() {
+		let scope = reinhardt_core::reactive::ReactiveScope::new();
+		let action = scope.enter(|| {
+			use_action(|_: ()| -> std::future::Ready<Result<(), String>> {
+				panic!("synchronous action panic")
+			})
+		});
+
+		let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			action.dispatch(());
+		}));
+
+		assert!(panic.is_err());
+		assert_eq!(action.phase(), ActionPhase::Idle);
 	}
 
 	#[rstest]

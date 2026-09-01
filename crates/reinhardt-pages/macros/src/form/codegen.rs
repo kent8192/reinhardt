@@ -2480,42 +2480,32 @@ fn generate_model_form(
 					let __form = self.clone();
 					let __form_for_success = __form.clone();
 					let __model_state = ::std::rc::Rc::clone(&self.__model_state);
-					let __submitted_state = ::std::rc::Rc::new(
-						::std::cell::RefCell::new(::core::option::Option::None),
-					);
-					let __submitted_state_for_prepare =
-						::std::rc::Rc::clone(&__submitted_state);
-					let __submitted_state_for_success =
-						::std::rc::Rc::clone(&__submitted_state);
-					#pages_crate::use_server_mutation(move |state| async move {
-						#pages_crate::server_mutation::execute_server_mutation_once(
-							state,
-							|state| async move {
-								<#server_fn::marker as #pages_crate::form::ModelFormServerFn<
-									#model_form_selection_type,
-									#schema_path,
-									#policy_ident,
-								>>::submit(&state)
-									.await
-							},
-						)
-						.await
-						})
-						.on_success(move |_| {
+					#pages_crate::use_server_mutation(move |state: #pages_crate::form::ModelFormState<#schema_path, #policy_ident>| {
+						let __form_for_success = __form_for_success.clone();
+						async move {
+							let __submitted_state = state.clone();
+							let __result = #pages_crate::server_mutation::execute_server_mutation_once(
+								state,
+								|state| async move {
+									<#server_fn::marker as #pages_crate::form::ModelFormServerFn<
+										#model_form_selection_type,
+										#schema_path,
+										#policy_ident,
+									>>::submit(&state)
+										.await
+								},
+							)
+							.await;
 							#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-							{
-								if let ::core::option::Option::Some(state) =
-									__submitted_state_for_success.borrow_mut().take()
-								{
-									__form_for_success.clear_selected_files_matching(&state);
-									__form_for_success.clear_mounted_file_inputs_matching(&state, None);
-								}
+							if __result.is_ok() {
+								__form_for_success.clear_selected_files_matching(&__submitted_state);
+								__form_for_success.clear_mounted_file_inputs_matching(&__submitted_state, None);
 							}
 							#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-							{
-								let _ = (&__form_for_success, &__submitted_state_for_success);
-							}
-						})
+							let _ = (&__form_for_success, &__submitted_state);
+							__result
+						}
+					})
 						.with_generated_form(runtime, move |_| {
 						let state = {
 							let state = __model_state.borrow();
@@ -2528,8 +2518,6 @@ fn generate_model_form(
 							#policy_ident,
 						>>::validate_input(&state)
 							.map_err(|error| __form.__server_mutation_validation_error(error))?;
-						*__submitted_state_for_prepare.borrow_mut() =
-							::core::option::Option::Some(state.clone());
 						::core::result::Result::Ok(state)
 					})
 				}

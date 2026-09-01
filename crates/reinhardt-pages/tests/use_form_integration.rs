@@ -6,6 +6,7 @@ use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
 use reinhardt_core::reactive::ReactiveScope;
+use reinhardt_core::validators::{ValidationError, ValidationErrors};
 use reinhardt_pages::reactive::Signal;
 use reinhardt_pages::server_fn::ServerFnErrorKind;
 use reinhardt_pages::ui::{FormActionButton, FormActionResultPanel};
@@ -1959,8 +1960,10 @@ async fn submit_server_fn_returns_submitted_outcome() {
 	);
 }
 
+#[rstest::rstest]
 #[tokio::test]
 async fn submit_server_fn_routes_typed_server_errors() {
+	// Arrange
 	let profile = form! {
 		name: TypedAsyncServerErrorForm,
 		action: "/profile",
@@ -1971,17 +1974,32 @@ async fn submit_server_fn_routes_typed_server_errors() {
 		}
 	};
 	let runtime = use_form(&profile).build();
+	let server_calls = Rc::new(Cell::new(0));
+	let server_calls_for_submit = Rc::clone(&server_calls);
 
+	// Act
 	let result = runtime
-		.submit_server_fn(|| async {
-			Err::<(), _>(ServerFnError::validation_with_message(
-				"Validation failed",
-				[("display_name", "Display name is already used")],
-			))
+		.submit_server_fn(move || async move {
+			let mut errors = ValidationErrors::new();
+			errors.add(
+				"display_name",
+				ValidationError::Custom("Display name is already used".to_owned()),
+			);
+			errors.add(
+				"_all",
+				ValidationError::Custom("Profile values conflict".to_owned()),
+			);
+			if !errors.is_empty() {
+				return Err(ServerFnError::from(errors));
+			}
+			server_calls_for_submit.set(server_calls_for_submit.get() + 1);
+			Ok(())
 		})
 		.await;
 
+	// Assert
 	assert!(matches!(result, Err(error) if error.kind() == ServerFnErrorKind::Validation));
+	assert_eq!(server_calls.get(), 0);
 	assert_eq!(
 		runtime
 			.get_field_state(profile.display_name_field())
@@ -1989,6 +2007,10 @@ async fn submit_server_fn_routes_typed_server_errors() {
 			.as_ref()
 			.map(FieldError::message),
 		Some("Display name is already used")
+	);
+	assert_eq!(
+		runtime.form_state().form_error.get(),
+		Some("Validation failed\n_all: Profile values conflict".to_owned())
 	);
 }
 

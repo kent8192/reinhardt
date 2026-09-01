@@ -2127,9 +2127,8 @@ fn generate_server_handler(
 	};
 	let model_form_payload_error = quote! {
 		.map_err(|error| {
-			#pages_crate::ServerFnError::validation_with_message(
-				error.to_string(),
-				::core::iter::empty::<(&str, &str)>(),
+			#pages_crate::ServerFnError::from(
+				state.payload_error_to_validation(error),
 			)
 		})?
 	};
@@ -3643,6 +3642,55 @@ mod tests {
 				&& generated.contains("{ data }"),
 			"the native fallback must bind and forward the declared parameter name: {generated}"
 		);
+	}
+
+	#[rstest::rstest]
+	fn model_form_submission_adapters_preserve_structured_payload_errors() {
+		use syn::parse_quote;
+
+		let multipart_func: ItemFn = parse_quote! {
+			async fn upload(title: String, document: UploadedFile) -> Result<(), ServerFnError> {
+				Ok(())
+			}
+		};
+		let multipart_info = ServerFnInfo {
+			func: multipart_func,
+			options: ServerFnOptions::default(),
+			codec_explicit: false,
+			metadata_name: None,
+			endpoint_tokens: None,
+			metadata_name_tokens: None,
+			detail: false,
+			transactional: false,
+			structured_error: false,
+		};
+		let payload_func: ItemFn = parse_quote! {
+			async fn save(data: QuestionModelFormData<AllEditableModelFields>) -> Result<(), ServerFnError> {
+				Ok(())
+			}
+		};
+		let payload_info = ServerFnInfo {
+			func: payload_func,
+			options: ServerFnOptions {
+				model_form: true,
+				..ServerFnOptions::default()
+			},
+			codec_explicit: false,
+			metadata_name: None,
+			endpoint_tokens: None,
+			metadata_name_tokens: None,
+			detail: false,
+			transactional: false,
+			structured_error: false,
+		};
+
+		let multipart = generate_server_fn(&multipart_info).to_string();
+		let payload = generate_server_fn(&payload_info).to_string();
+
+		for generated in [multipart, payload] {
+			assert!(generated.contains("state . payload_error_to_validation (error)"));
+			assert!(!generated.contains("validation_with_message (error . to_string"));
+		}
 	}
 
 	#[test]

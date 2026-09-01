@@ -2,9 +2,10 @@ use std::marker::PhantomData;
 
 use reinhardt_core::{
 	model_form::{
-		ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError,
-		ModelFormPolicy, ModelFormSchema,
+		ModelFormCleanedPayload, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload,
+		ModelFormPayloadError, ModelFormPolicy, ModelFormSchema, ModelFormValidatingPayload,
 	},
+	validators::ValidationErrors,
 };
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 
@@ -108,6 +109,24 @@ impl<P: ModelFormPolicy> ModelFormPayload<P> for UploadModelFormData<P> {
 		Err(ModelFormPayloadError::UnknownField {
 			field: field.to_owned(),
 		})
+	}
+}
+
+struct CleanedUploadModelFormData<P: ModelFormPolicy>(UploadModelFormData<P>);
+
+impl<P: ModelFormPolicy> ModelFormCleanedPayload for CleanedUploadModelFormData<P> {
+	type Raw = UploadModelFormData<P>;
+
+	fn into_raw(self) -> Self::Raw {
+		self.0
+	}
+}
+
+impl<P: ModelFormPolicy> ModelFormValidatingPayload for UploadModelFormData<P> {
+	type Cleaned = CleanedUploadModelFormData<P>;
+
+	fn clean_and_validate(self) -> Result<Self::Cleaned, ValidationErrors> {
+		Ok(CleanedUploadModelFormData(self))
 	}
 }
 

@@ -1,9 +1,11 @@
 use std::marker::PhantomData;
 
 use reinhardt_core::model_form::{
-	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError,
-	ModelFormPolicy, ModelFormSchema, NativeModelFormPayload,
+	ModelFormCleanedPayload, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload,
+	ModelFormPayloadError, ModelFormPolicy, ModelFormSchema, ModelFormValidatingPayload,
+	NativeModelFormPayload,
 };
+use reinhardt_core::validators::ValidationErrors;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 
 struct Question;
@@ -130,6 +132,24 @@ impl<P: ModelFormPolicy> ModelFormPayload<P> for QuestionModelFormData<P> {
 impl<P: ModelFormPolicy> NativeModelFormPayload for QuestionModelFormData<P> {
 	fn from_native_form_value(_value: serde_json::Value) -> Result<Self, serde_json::Error> {
 		Ok(Self::default())
+	}
+}
+
+struct CleanedQuestionModelFormData<P: ModelFormPolicy>(QuestionModelFormData<P>);
+
+impl<P: ModelFormPolicy> ModelFormCleanedPayload for CleanedQuestionModelFormData<P> {
+	type Raw = QuestionModelFormData<P>;
+
+	fn into_raw(self) -> Self::Raw {
+		self.0
+	}
+}
+
+impl<P: ModelFormPolicy> ModelFormValidatingPayload for QuestionModelFormData<P> {
+	type Cleaned = CleanedQuestionModelFormData<P>;
+
+	fn clean_and_validate(self) -> Result<Self::Cleaned, ValidationErrors> {
+		Ok(CleanedQuestionModelFormData(self))
 	}
 }
 

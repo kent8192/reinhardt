@@ -2511,6 +2511,39 @@ fn generate_model_form(
 					self.error.set(::core::option::Option::None);
 					self.success.set(false);
 					#model_form_policy_check
+					let normalized_payload = match state.build_validated_payload_for::<
+						#data_ident,
+						#policy_path,
+					>() {
+						::core::result::Result::Ok(payload) => payload,
+						::core::result::Result::Err(errors) => {
+							let error = #pages_crate::ServerFnError::from(errors);
+							self.loading.set(false);
+							self.error.set(::core::option::Option::Some(error.to_string()));
+							return ::core::result::Result::Err(error);
+						}
+					};
+					let mut state = state;
+					for descriptor in state.selected_descriptors() {
+						if ::core::matches!(
+							descriptor.kind,
+							#pages_crate::form::ModelFormFieldKind::File
+								| #pages_crate::form::ModelFormFieldKind::Image
+						) {
+							continue;
+						}
+						match <#data_ident as #pages_crate::form::ModelFormPayload<#policy_path>>::get_json(
+							&normalized_payload,
+							descriptor.name,
+						) {
+							::core::option::Option::Some(value) => state
+								.set_value(descriptor.name, value)
+								.expect("validated model-form payload must rehydrate its selected field"),
+							::core::option::Option::None => state
+								.clear_value(descriptor.name)
+								.expect("validated model-form payload must clear its selected field"),
+						}
+					}
 					let result = <#server_fn::marker as #pages_crate::form::ModelFormServerFn<
 						#model_form_selection_type,
 						#schema_path,
@@ -8723,6 +8756,34 @@ mod tests {
 		assert!(output.contains("const NAME : & 'static str = \"title\""));
 		assert!(!output.contains("save_upload :: __args :: title"));
 		assert!(output.contains("not permitted by its policy"));
+	}
+
+	#[rstest::rstest]
+	fn test_generate_model_form_validates_and_rehydrates_submission_snapshot() {
+		let input = quote! {
+			name: ClusterForm,
+			model: Cluster,
+			policy: ClusterPolicy,
+			fields: [name, api_url],
+			server_fn: save_cluster,
+		};
+
+		let output = parse_validate_generate(input).to_string();
+		let validation = output
+			.find("build_validated_payload_for")
+			.expect("generated submission must validate its snapshot");
+		let dispatch = output[validation..]
+			.find("submit (& state)")
+			.map(|offset| validation + offset)
+			.expect("generated submission must dispatch through the marker contract");
+
+		assert!(validation < dispatch);
+		assert!(
+			output.contains("ModelFormPayload < ClusterPolicy >> :: get_json"),
+			"generated submission must read normalized payload fields: {output}"
+		);
+		assert!(output.contains("validated model-form payload must rehydrate its selected field"));
+		assert!(!output.contains("client_validation"));
 	}
 
 	#[rstest::rstest]

@@ -2,7 +2,9 @@
 
 include!("ui/form/model_json_support.rs");
 
+use reinhardt_core::validators::ValidationError;
 use reinhardt_pages::{FieldError, form, server_fn::ServerFnErrorKind, use_form};
+use rstest::rstest;
 
 #[test]
 fn native_submit_maps_payload_errors_to_validation() {
@@ -34,9 +36,10 @@ fn native_submit_maps_payload_errors_to_validation() {
 	});
 }
 
-#[test]
+#[rstest]
 fn model_form_routes_structured_server_errors_to_selected_fields() {
 	reinhardt_core::reactive::ReactiveScope::run(|| {
+		// Arrange
 		let form = form! {
 			name: QuestionForm,
 			model: Question,
@@ -45,16 +48,21 @@ fn model_form_routes_structured_server_errors_to_selected_fields() {
 			server_fn: save_question,
 		};
 		let runtime = use_form(&form).build();
-		let error = reinhardt_pages::ServerFnError::validation_with_message(
-			"Please correct the submitted values",
-			[
-				("title", "Title is already used"),
-				("owner_id", "Owner is required"),
-			],
+		let mut errors = reinhardt_core::validators::ValidationErrors::new();
+		errors.add(
+			"title",
+			ValidationError::Custom("Title is already used".to_owned()),
 		);
+		errors.add(
+			"owner_id",
+			ValidationError::Custom("Owner is required".to_owned()),
+		);
+		let error = reinhardt_pages::ServerFnError::from(errors);
 
+		// Act
 		runtime.apply_server_error(&error);
 
+		// Assert
 		assert_eq!(
 			runtime
 				.get_field_state(form.title_field())
@@ -65,7 +73,7 @@ fn model_form_routes_structured_server_errors_to_selected_fields() {
 		);
 		assert_eq!(
 			runtime.form_state().form_error.get(),
-			Some("Please correct the submitted values\nowner_id: Owner is required".to_owned())
+			Some("Validation failed\nowner_id: Owner is required".to_owned())
 		);
 	});
 }

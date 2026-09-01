@@ -33,12 +33,12 @@ pub(crate) static EMAIL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 ///
 /// Supports:
 /// - Ports: :8080, :443, etc. (1-5 digits)
-/// - Query strings and fragments after a slash
+/// - Query strings and fragments
 /// - Paths: /path/to/resource
 /// - Domain labels cannot start or end with hyphens
 pub(crate) static URL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 	Regex::new(
-		r"^https?://(?:(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}|localhost|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?::\d{1,5})?(?:/[^\s]*)?$",
+		r"^https?://[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*(:[0-9]{1,5})?(/[^\s?#]*)?(\?[^\s#]*)?(#[^\s]*)?$",
 	)
 	.expect("URL_REGEX: Invalid regex pattern")
 });

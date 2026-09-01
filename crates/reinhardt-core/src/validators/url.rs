@@ -81,6 +81,7 @@ impl Validator<str> for UrlValidator {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	/// Tests based on Django validators/tests.py URL validation tests
 	#[test]
@@ -164,14 +165,10 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_url_validator_with_query_strings() {
 		let validator = UrlValidator::new();
-		assert!(
-			validator
-				.validate("http://example.com?query=value")
-				.is_err()
-		);
+		assert_eq!(validator.validate("http://example.com?query=value"), Ok(()));
 		assert!(
 			validator
 				.validate("http://example.com/?query=value")
@@ -184,10 +181,10 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_url_validator_with_fragments() {
 		let validator = UrlValidator::new();
-		assert!(validator.validate("http://example.com#section").is_err());
+		assert_eq!(validator.validate("http://example.com#section"), Ok(()));
 		assert!(validator.validate("http://example.com/#section").is_ok());
 		assert!(
 			validator

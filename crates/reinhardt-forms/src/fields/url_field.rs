@@ -1,5 +1,11 @@
 use crate::field::{FieldError, FieldResult, FormField, Widget};
-use reinhardt_core::validators::{UrlValidator, Validator};
+use regex::Regex;
+use std::sync::LazyLock;
+
+const URL_PATTERN: &str = r"^https?://(?:(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}|localhost|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?::\d+)?(?:/[^\s]*)?$";
+
+static URL_REGEX: LazyLock<Regex> =
+	LazyLock::new(|| Regex::new(URL_PATTERN).expect("URL regex pattern is valid"));
 
 /// URLField for URL input
 #[derive(Debug, Clone)]
@@ -20,8 +26,6 @@ pub struct URLField {
 	pub max_length: Option<usize>,
 	/// Minimum allowed character count for the URL.
 	pub min_length: Option<usize>,
-	/// Whether to strip leading and trailing whitespace before validation.
-	pub strip: bool,
 }
 
 impl URLField {
@@ -45,12 +49,11 @@ impl URLField {
 			initial: None,
 			max_length: Some(200),
 			min_length: None,
-			strip: true,
 		}
 	}
 
 	fn validate_url(url: &str) -> bool {
-		UrlValidator::new().validate(url).is_ok()
+		URL_REGEX.is_match(url)
 	}
 }
 
@@ -88,7 +91,7 @@ impl FormField for URLField {
 					.as_str()
 					.ok_or_else(|| FieldError::Invalid("Expected string".to_string()))?;
 
-				let s = if self.strip { s.trim() } else { s };
+				let s = s.trim();
 
 				if s.is_empty() {
 					if self.required {
@@ -131,6 +134,7 @@ impl FormField for URLField {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	#[test]
 	fn test_urlfield_valid() {
@@ -176,7 +180,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn direct_url_field_strips_by_default() {
 		let field = URLField::new("website".to_owned());
 
@@ -188,19 +192,22 @@ mod tests {
 		);
 	}
 
-	#[test]
-	fn url_field_uses_the_core_validator_language() {
+	#[rstest]
+	fn direct_url_field_preserves_its_legacy_boundary() {
 		let field = URLField::new("website".to_owned());
 
-		assert!(
+		assert_eq!(
 			field
 				.clean(Some(&serde_json::json!("https://example.com?query=value")))
-				.is_err()
+				.unwrap_err()
+				.to_string(),
+			"Enter a valid URL"
 		);
-		assert!(
+		assert_eq!(
 			field
-				.clean(Some(&serde_json::json!("https://example.com/?query=value")))
-				.is_ok()
+				.clean(Some(&serde_json::json!("https://example.com:123456/")))
+				.unwrap(),
+			serde_json::json!("https://example.com:123456/")
 		);
 	}
 }

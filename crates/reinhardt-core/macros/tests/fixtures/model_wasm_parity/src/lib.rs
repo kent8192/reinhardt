@@ -3,10 +3,11 @@
 use reinhardt::model;
 use reinhardt_core::model_form::{
 	AllEditableModelFields, ModelFormFieldKind, ModelFormPayload, ModelFormSchema,
-	ModelFormValidatingPayload,
+	ModelFormUpdatingPayload, ModelFormValidatingPayload,
 };
 use reinhardt_core::validators::{ValidationError, ValidationErrors};
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FileField {
@@ -124,6 +125,9 @@ fn validate_form_project<P: reinhardt_core::model_form::ModelFormPolicy>(
 fn validate_cluster<P: reinhardt_core::model_form::ModelFormPolicy>(
 	payload: &CleanedClusterModelFormData<P>,
 ) -> Result<(), ValidationErrors> {
+	if payload.name().is_none() || payload.api_url().is_none() {
+		MISSING_CLUSTER_VALIDATOR_CALLS.fetch_add(1, Ordering::SeqCst);
+	}
 	let mut errors = ValidationErrors::new();
 	if payload.name() == payload.api_url() {
 		errors.add(
@@ -170,6 +174,23 @@ impl reinhardt_core::model_form::ModelFormPolicy for ClusterNameOnlyPolicy {
 	fn allows(field: &str) -> bool {
 		matches!(field, "name" | "notes")
 	}
+}
+
+static MISSING_CLUSTER_VALIDATOR_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+#[model(
+	app_label = "email_records",
+	table_name = "email_records",
+	form = true,
+	info = false
+)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+struct EmailRecord {
+	#[field(primary_key = true)]
+	id: i64,
+	#[field(email = true, max_length = 200)]
+	#[form(trim)]
+	email: String,
 }
 
 pub fn retry_preserves_project(job: &Job, retry: &Job) -> bool {
@@ -228,6 +249,7 @@ pub fn model_form_datetime_payload_round_trips() -> bool {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 	use wasm_bindgen_test::wasm_bindgen_test;
 
 	const PARITY_NUMERIC_ERRORS: &[(&str, &str)] = &[
@@ -347,6 +369,7 @@ mod tests {
 		);
 	}
 
+	#[rstest]
 	#[wasm_bindgen_test]
 	fn generated_payload_cleans_and_validates_in_wasm_runtime() {
 		let mut payload = FormProjectModelFormData::<AllEditableModelFields>::empty();
@@ -677,6 +700,81 @@ mod tests {
 		);
 	}
 
+	#[rstest]
+	#[wasm_bindgen_test]
+	fn generated_required_email_uses_the_canonical_message_in_wasm_runtime() {
+		let missing = EmailRecordModelFormData::<AllEditableModelFields>::empty();
+		let missing_errors = match missing.clean_and_validate() {
+			Ok(_) => panic!("missing required email should fail"),
+			Err(errors) => errors,
+		};
+
+		assert_eq!(
+			error_tuples(&missing_errors),
+			vec![("email".to_owned(), "This field is required.".to_owned())]
+		);
+
+		let mut whitespace = EmailRecordModelFormData::<AllEditableModelFields>::empty();
+		whitespace
+			.set_email("   ".to_owned())
+			.expect("email should be editable");
+		let whitespace_errors = match whitespace.clean_and_validate() {
+			Ok(_) => panic!("trimmed empty required email should fail"),
+			Err(errors) => errors,
+		};
+		assert_eq!(
+			error_tuples(&whitespace_errors),
+			vec![("email".to_owned(), "This field is required.".to_owned())]
+		);
+	}
+
+	#[rstest]
+	#[wasm_bindgen_test]
+	fn generated_create_and_update_semantics_match_the_server_boundary_in_wasm_runtime() {
+		MISSING_CLUSTER_VALIDATOR_CALLS.store(0, Ordering::SeqCst);
+		let mut create = ClusterModelFormData::<ClusterPolicy>::empty();
+		create
+			.set_api_url("https://example.com".to_owned())
+			.expect("cluster API URL should be editable");
+		create
+			.set_notes("missing name".to_owned())
+			.expect("cluster notes should be editable");
+		let create_errors = match create.clean_and_validate() {
+			Ok(_) => panic!("missing required create input should fail"),
+			Err(errors) => errors,
+		};
+
+		assert_eq!(
+			error_tuples(&create_errors),
+			vec![("name".to_owned(), "This field is required.".to_owned())]
+		);
+		assert_eq!(MISSING_CLUSTER_VALIDATOR_CALLS.load(Ordering::SeqCst), 0);
+
+		let existing = Cluster {
+			id: Some(42),
+			organization_id: 19,
+			name: "original".to_owned(),
+			api_url: "https://same.example.com".to_owned(),
+			notes: "preserve me".to_owned(),
+		};
+		let mut update = ClusterModelFormData::<ClusterPolicy>::empty();
+		update
+			.set_name("https://same.example.com".to_owned())
+			.expect("cluster name should be editable");
+		let update_errors = match update.clean_and_validate_for_update(&existing) {
+			Ok(_) => panic!("post-merge cross-field validation should reject the update"),
+			Err(errors) => errors,
+		};
+		assert_eq!(
+			error_tuples(&update_errors),
+			vec![(
+				"_all".to_owned(),
+				"Name and API URL must differ".to_owned(),
+			)]
+		);
+	}
+
+	#[rstest]
 	#[wasm_bindgen_test]
 	fn generated_cluster_validation_matches_the_server_boundary_in_wasm_runtime() {
 		let cleaned = cluster_payload(

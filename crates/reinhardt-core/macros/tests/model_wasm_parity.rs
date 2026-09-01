@@ -39,6 +39,7 @@ rust_decimal = {{ version = "1.36", features = ["serde"] }}
 uuid = {{ version = "1.11", features = ["serde"] }}
 
 [dev-dependencies]
+rstest = "0.26"
 wasm-bindgen-test = "={}"
 "#,
 			repo_root.display(),
@@ -97,6 +98,17 @@ wasm-bindgen-test = "={}"
 	assert!(
 		runtime_output.contains("generated_payload_cleans_and_validates_in_wasm_runtime"),
 		"WASM model macro parity fixture must execute generated validation\n{runtime_output}",
+	);
+	assert!(
+		runtime_output
+			.contains("generated_required_email_uses_the_canonical_message_in_wasm_runtime"),
+		"WASM model macro parity fixture must execute required email parity\n{runtime_output}",
+	);
+	assert!(
+		runtime_output.contains(
+			"generated_create_and_update_semantics_match_the_server_boundary_in_wasm_runtime"
+		),
+		"WASM model macro parity fixture must execute create/update parity\n{runtime_output}",
 	);
 }
 

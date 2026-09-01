@@ -1,7 +1,13 @@
 //! Email field with validation
 
 use crate::field::{FieldError, FieldResult, FormField, Widget};
-use reinhardt_core::validators::{EmailValidator, Validator};
+use regex::Regex;
+use std::sync::LazyLock;
+
+const EMAIL_PATTERN: &str = r"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$";
+
+static EMAIL_REGEX: LazyLock<Regex> =
+	LazyLock::new(|| Regex::new(EMAIL_PATTERN).expect("Email regex pattern is valid"));
 
 /// Email field with format validation
 #[derive(Debug, Clone)]
@@ -22,8 +28,6 @@ pub struct EmailField {
 	pub max_length: Option<usize>,
 	/// Minimum required character count.
 	pub min_length: Option<usize>,
-	/// Whether to strip leading and trailing whitespace before validation.
-	pub strip: bool,
 }
 
 impl EmailField {
@@ -49,7 +53,6 @@ impl EmailField {
 			initial: None,
 			max_length: Some(320), // RFC standard: 64 (local) + @ + 255 (domain)
 			min_length: None,
-			strip: true,
 		}
 	}
 
@@ -145,7 +148,7 @@ impl EmailField {
 
 	/// Validate email format
 	fn validate_email(email: &str) -> bool {
-		EmailValidator::new().validate(email).is_ok()
+		EMAIL_REGEX.is_match(email)
 	}
 }
 
@@ -185,7 +188,7 @@ impl FormField for EmailField {
 					.as_str()
 					.ok_or_else(|| FieldError::Validation("Expected string".to_string()))?;
 
-				let s = if self.strip { s.trim() } else { s };
+				let s = s.trim();
 
 				// Return empty string if not required and empty
 				if s.is_empty() {
@@ -232,8 +235,9 @@ impl FormField for EmailField {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
-	#[test]
+	#[rstest]
 	fn direct_email_field_strips_by_default() {
 		let field = EmailField::new("email".to_owned());
 
@@ -245,14 +249,29 @@ mod tests {
 		);
 	}
 
-	#[test]
-	fn email_field_uses_the_core_validator_language() {
+	#[rstest]
+	fn direct_email_field_preserves_its_legacy_localhost_compatibility() {
 		let field = EmailField::new("email".to_owned());
 
-		assert!(
+		assert_eq!(
 			field
 				.clean(Some(&serde_json::json!("person@localhost")))
-				.is_err()
+				.unwrap(),
+			serde_json::json!("person@localhost")
+		);
+	}
+
+	#[rstest]
+	#[case(None)]
+	#[case(Some(serde_json::json!("   ")))]
+	fn required_email_field_preserves_the_legacy_field_name_message(
+		#[case] value: Option<serde_json::Value>,
+	) {
+		let field = EmailField::new("email".to_owned()).required();
+
+		assert_eq!(
+			field.clean(value.as_ref()).unwrap_err().to_string(),
+			"email"
 		);
 	}
 }

@@ -3,7 +3,8 @@
 use reinhardt_core::exception::{DatabaseErrorKind, Error};
 use reinhardt_core::macros::model;
 use reinhardt_core::model_form::{
-	ModelFormPayload, ModelFormPolicy, ModelFormUpdatingPayload, ModelFormValidatingPayload,
+	AllEditableModelFields, ModelFormPayload, ModelFormPolicy, ModelFormUpdatingPayload,
+	ModelFormValidatingPayload,
 };
 use reinhardt_core::validators::{ValidationError, ValidationErrors};
 use reinhardt_db::backends::DatabaseConnection as BackendsConnection;
@@ -80,6 +81,16 @@ impl ModelFormPolicy for ClusterPolicy {
 	fn allows(field: &str) -> bool {
 		matches!(field, "name" | "api_url" | "notes")
 	}
+}
+
+#[model(app_label = "forms_test", form = true)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct EmailRecord {
+	#[field(primary_key = true)]
+	id: Option<i64>,
+	#[field(email = true, max_length = 200)]
+	#[form(trim)]
+	email: String,
 }
 
 struct ClusterNameOnlyPolicy;
@@ -451,6 +462,33 @@ async fn direct_create_rejects_omitted_required_fields_before_callbacks() {
 	assert_eq!(
 		MISSING_CLUSTER_ASYNC_VALIDATOR_CALLS.load(Ordering::SeqCst),
 		0
+	);
+}
+
+#[rstest]
+fn generated_required_email_uses_the_canonical_message() {
+	let missing = EmailRecordModelFormData::<AllEditableModelFields>::empty();
+	let missing_errors = match missing.clean_and_validate() {
+		Ok(_) => panic!("missing required email should fail"),
+		Err(errors) => errors,
+	};
+
+	assert_eq!(
+		validation_error_tuples(&missing_errors),
+		vec![("email".to_owned(), "This field is required.".to_owned())]
+	);
+
+	let mut whitespace = EmailRecordModelFormData::<AllEditableModelFields>::empty();
+	whitespace
+		.set_email("   ".to_owned())
+		.expect("email should be editable");
+	let whitespace_errors = match whitespace.clean_and_validate() {
+		Ok(_) => panic!("trimmed empty required email should fail"),
+		Err(errors) => errors,
+	};
+	assert_eq!(
+		validation_error_tuples(&whitespace_errors),
+		vec![("email".to_owned(), "This field is required.".to_owned())]
 	);
 }
 

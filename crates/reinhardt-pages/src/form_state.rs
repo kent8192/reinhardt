@@ -1558,19 +1558,27 @@ where
 			return UseFormSubmitOutcome::AlreadyPending;
 		}
 
-		self.state.is_submitting.set(true);
-		self.state.is_submit_successful.set(false);
-		self.state.submit_error.set(None);
+		if self.state.is_submitting.try_set(true).is_err()
+			|| self.state.is_submit_successful.try_set(false).is_err()
+			|| self.state.submit_error.try_set(None).is_err()
+		{
+			return UseFormSubmitOutcome::AlreadyPending;
+		}
 		let _ = self.in_owner_scope(|| {
 			self.notify(FormEvent::SubmitStarted);
 			if let Some(callback) = &self.on_submit_start {
 				callback(self);
 			}
 		});
+		if self.state.is_submitting.try_get_untracked().is_err() {
+			return UseFormSubmitOutcome::AlreadyPending;
+		}
 
 		let validation_failed = enter_scope(self.scope, || self.trigger().is_err()).unwrap_or(true);
 		if validation_failed {
-			self.state.is_submitting.set(false);
+			if self.state.is_submitting.try_set(false).is_err() {
+				return UseFormSubmitOutcome::AlreadyPending;
+			}
 			let _ = self.in_owner_scope(|| {
 				if let Some(callback) = &self.on_submit_error {
 					callback(self);
@@ -2406,7 +2414,7 @@ where
 mod tests {
 	use super::{
 		CollectionItem, CollectionItemKey, CollectionState, FieldError, FieldPathState,
-		FormRuntimeSource, SubmitPendingGuard, use_form,
+		FormRuntimeSource, SubmitPendingGuard, UseFormSubmitOutcome, use_form,
 	};
 	use crate::reactive::Signal;
 	use reinhardt_core::reactive::ReactiveScope;
@@ -2551,6 +2559,25 @@ mod tests {
 		assert_eq!(
 			submit.as_mut().poll(&mut context),
 			Poll::Ready(Ok(super::UseFormAsyncSubmitOutcome::AlreadyPending))
+		);
+	}
+
+	#[test]
+	#[serial(reactive_runtime)]
+	fn submit_start_disposal_stops_before_post_callback_validation() {
+		let scope = Rc::new(ReactiveScope::new());
+		let form = scope.enter(|| RetainedScopeForm {
+			scope: Rc::clone(&scope),
+			value: Signal::new("initial".to_string()),
+		});
+		let callback_scope = Rc::clone(&scope);
+		let runtime = use_form(&form)
+			.on_submit_start(move |_| callback_scope.dispose())
+			.build();
+
+		assert_eq!(
+			runtime.begin_submit_lifecycle(),
+			UseFormSubmitOutcome::AlreadyPending
 		);
 	}
 

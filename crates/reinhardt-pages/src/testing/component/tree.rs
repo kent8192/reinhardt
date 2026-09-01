@@ -1302,6 +1302,11 @@ fn normalize_native_control_value(
 				.trim_matches(|character: char| character.is_ascii_whitespace())
 				.to_owned();
 		}
+		if input_type.eq_ignore_ascii_case("datetime-local")
+			&& let Some((date, time)) = normalized.split_once(' ')
+		{
+			normalized = format!("{date}T{time}");
+		}
 		if is_temporal_input_type(input_type)
 			&& !is_valid_temporal_input_value(input_type, &normalized)
 		{
@@ -1386,6 +1391,7 @@ fn is_valid_temporal_input_value(input_type: &str, value: &str) -> bool {
 	} else if input_type.eq_ignore_ascii_case("datetime-local") {
 		value
 			.split_once('T')
+			.or_else(|| value.split_once(' '))
 			.is_some_and(|(date, time)| is_valid_html_date(date) && is_valid_html_time(time))
 	} else if input_type.eq_ignore_ascii_case("month") {
 		is_valid_html_month(value)
@@ -1414,7 +1420,7 @@ fn is_valid_html_date(value: &str) -> bool {
 	let Some(day) = parse_fixed_decimal(day, 2) else {
 		return false;
 	};
-	month <= 12 && day > 0 && day <= days_in_month(year, month)
+	(1..=12).contains(&month) && day > 0 && day <= days_in_month(year, month)
 }
 
 fn is_valid_html_month(value: &str) -> bool {
@@ -1436,7 +1442,7 @@ fn is_valid_html_week(value: &str) -> bool {
 	let Some(week) = parse_fixed_decimal(week, 2) else {
 		return false;
 	};
-	week > 0 && (week < 53 || has_iso_week_53(year))
+	(1..=53).contains(&week) && (week < 53 || has_iso_week_53(year))
 }
 
 fn is_valid_html_time(value: &str) -> bool {
@@ -1468,7 +1474,7 @@ fn is_valid_html_time(value: &str) -> bool {
 	};
 	second <= 59
 		&& fraction.is_none_or(|fraction| {
-			!fraction.is_empty() && fraction.bytes().all(|byte| byte.is_ascii_digit())
+			(1..=3).contains(&fraction.len()) && fraction.bytes().all(|byte| byte.is_ascii_digit())
 		})
 }
 
@@ -1683,6 +1689,13 @@ mod case_normalization_tests {
 				ControlValue::Text("4".to_owned())
 			);
 		});
+	}
+
+	#[test]
+	fn native_temporal_validation_rejects_zero_month_extra_week_and_long_fraction() {
+		assert!(!is_valid_html_date("2026-00-01"));
+		assert!(!is_valid_html_week("2026-W54"));
+		assert!(!is_valid_html_time("10:30:00.1234"));
 	}
 
 	#[test]

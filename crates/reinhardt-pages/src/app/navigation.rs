@@ -48,7 +48,7 @@ impl RedirectChain {
 
 	fn normalize(destination: &str) -> Result<String, NavigationGuardError> {
 		let base = Url::parse(REDIRECT_NORMALIZATION_BASE).expect("fixed redirect base is valid");
-		let url = base.join(destination).map_err(|error| {
+		let mut url = base.join(destination).map_err(|error| {
 			NavigationGuardError::with_status(
 				format!("navigation guard redirect destination is invalid: {error}"),
 				500,
@@ -60,6 +60,7 @@ impl RedirectChain {
 				500,
 			));
 		}
+		url.set_fragment(None);
 		Ok(url.into())
 	}
 }
@@ -829,6 +830,9 @@ mod tests {
 
 		let chain = RedirectChain::new("/protected/").expect("initial destination is valid");
 		assert!(chain.redirect("/protected/./").is_err());
+
+		let chain = RedirectChain::new("/protected/#one").expect("initial destination is valid");
+		assert!(chain.redirect("/protected/#two").is_err());
 	}
 
 	#[cfg(native)]
@@ -1412,7 +1416,8 @@ mod tests {
 					tasks_for_sink.borrow_mut().push_back(task);
 				});
 				let router = Rc::new(router_with_loaded_routes());
-				let coordinator = NavigationCoordinator::new(router).expect("registry builds");
+				let coordinator =
+					NavigationCoordinator::new(Rc::clone(&router)).expect("registry builds");
 
 				REDIRECTS.with(|redirects| {
 					redirects.borrow_mut().insert(
@@ -1461,6 +1466,61 @@ mod tests {
 					coordinator.error().get().and_then(|error| error.status()),
 					Some(500)
 				);
+
+				reset_test_state();
+				REDIRECTS.with(|redirects| {
+					redirects.borrow_mut().insert(
+						"/redirect-a/#one".to_owned(),
+						NavigationDecision::Redirect {
+							location: "/redirect-a/#two".to_owned(),
+							replace: false,
+						},
+					);
+				});
+				coordinator
+					.navigate("/redirect-a/#one".to_owned(), NavigationIntent::Push)
+					.expect("fragment self redirect starts");
+				poll_rounds(&tasks, 12);
+				assert_eq!(router.current_path().get(), "/");
+				assert_eq!(coordinator.committed_index(), 0);
+				assert_eq!(
+					coordinator.error().get().and_then(|error| error.status()),
+					Some(500),
+					"fragment-only self redirects must terminate as a loop"
+				);
+				assert!(!coordinator.pending().get());
+
+				reset_test_state();
+				REDIRECTS.with(|redirects| {
+					redirects.borrow_mut().extend([
+						(
+							"/redirect-a/#one".to_owned(),
+							NavigationDecision::Redirect {
+								location: "/redirect-b/#two".to_owned(),
+								replace: false,
+							},
+						),
+						(
+							"/redirect-b/#two".to_owned(),
+							NavigationDecision::Redirect {
+								location: "/redirect-a/#three".to_owned(),
+								replace: false,
+							},
+						),
+					]);
+				});
+				coordinator
+					.navigate("/redirect-a/#one".to_owned(), NavigationIntent::Push)
+					.expect("fragment alternating redirect starts");
+				poll_rounds(&tasks, 12);
+				assert_eq!(router.current_path().get(), "/");
+				assert_eq!(coordinator.committed_index(), 0);
+				assert_eq!(
+					coordinator.error().get().and_then(|error| error.status()),
+					Some(500),
+					"fragment-varying alternating redirects must terminate as a loop"
+				);
+				assert!(!coordinator.pending().get());
 			});
 		}
 

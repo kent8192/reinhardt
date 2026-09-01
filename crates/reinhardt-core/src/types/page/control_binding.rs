@@ -5,6 +5,8 @@ use std::num::IntErrorKind;
 
 use crate::reactive::{Signal, runtime::NodeId};
 
+use super::is_boolean_attr_truthy;
+
 /// Identifies the form control represented by a binding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlKind {
@@ -33,6 +35,77 @@ impl fmt::Display for ControlKind {
 			Self::SelectMany => f.write_str("select-many"),
 		}
 	}
+}
+
+/// Returns whether a reactive attribute update preserves a controlled element's kind.
+#[doc(hidden)]
+pub fn controlled_attribute_update_is_supported(
+	tag: &str,
+	kind: ControlKind,
+	name: &str,
+	value: Option<&str>,
+) -> bool {
+	if tag.eq_ignore_ascii_case("input") && name.eq_ignore_ascii_case("type") {
+		return match kind {
+			ControlKind::Text => is_effective_text_input_type(value),
+			ControlKind::Number => value.is_some_and(is_number_input_type),
+			ControlKind::Checkbox => {
+				value.is_some_and(|value| value.eq_ignore_ascii_case("checkbox"))
+			}
+			ControlKind::Radio => value.is_some_and(|value| value.eq_ignore_ascii_case("radio")),
+			ControlKind::SelectOne | ControlKind::SelectMany => true,
+		};
+	}
+	if tag.eq_ignore_ascii_case("select") && name.eq_ignore_ascii_case("multiple") {
+		let multiple = value.is_some_and(is_boolean_attr_truthy);
+		return match kind {
+			ControlKind::SelectOne => !multiple,
+			ControlKind::SelectMany => multiple,
+			ControlKind::Text
+			| ControlKind::Number
+			| ControlKind::Checkbox
+			| ControlKind::Radio => true,
+		};
+	}
+	true
+}
+
+fn is_effective_text_input_type(input_type: Option<&str>) -> bool {
+	let Some(input_type) = input_type else {
+		return true;
+	};
+	is_text_input_type(input_type)
+		|| [
+			"button",
+			"checkbox",
+			"date",
+			"datetime-local",
+			"file",
+			"hidden",
+			"image",
+			"month",
+			"number",
+			"radio",
+			"range",
+			"reset",
+			"submit",
+			"time",
+			"week",
+		]
+		.iter()
+		.all(|known| !input_type.eq_ignore_ascii_case(known))
+}
+
+fn is_text_input_type(input_type: &str) -> bool {
+	["text", "search", "tel", "url", "email", "password", "color"]
+		.iter()
+		.any(|known| input_type.eq_ignore_ascii_case(known))
+}
+
+fn is_number_input_type(input_type: &str) -> bool {
+	["number", "range"]
+		.iter()
+		.any(|known| input_type.eq_ignore_ascii_case(known))
 }
 
 /// Cross-target value read from or written to a form control.

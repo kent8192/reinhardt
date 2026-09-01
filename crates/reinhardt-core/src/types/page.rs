@@ -1194,12 +1194,42 @@ impl Page {
 					.enumerate()
 					.rfind(|(_, attribute)| attribute.name().eq_ignore_ascii_case("type"))
 					.map(|(index, attribute)| (index, attribute.value()));
+				let reactive_input_type_is_supported =
+					reactive_input_type.as_ref().is_none_or(|(_, value)| {
+						binding.is_none_or(|binding| {
+							control_binding::controlled_attribute_update_is_supported(
+								el.tag_name(),
+								binding.kind(),
+								"type",
+								value.as_deref(),
+							)
+						})
+					});
+				let reactive_select_multiple = el
+					.reactive_attrs()
+					.iter()
+					.enumerate()
+					.rfind(|(_, attribute)| attribute.name().eq_ignore_ascii_case("multiple"))
+					.map(|(index, attribute)| (index, attribute.value()));
+				let reactive_select_multiple_is_supported =
+					reactive_select_multiple.as_ref().is_none_or(|(_, value)| {
+						binding.is_none_or(|binding| {
+							control_binding::controlled_attribute_update_is_supported(
+								el.tag_name(),
+								binding.kind(),
+								"multiple",
+								value.as_deref(),
+							)
+						})
+					});
 				let mut input_type_is_password = el
 					.attrs()
 					.iter()
 					.find(|(name, _)| name.eq_ignore_ascii_case("type"))
 					.is_some_and(|(_, value)| value.eq_ignore_ascii_case("password"));
-				if let Some((_, value)) = reactive_input_type.as_ref() {
+				if reactive_input_type_is_supported
+					&& let Some((_, value)) = reactive_input_type.as_ref()
+				{
 					input_type_is_password = value
 						.as_deref()
 						.is_some_and(|value| value.eq_ignore_ascii_case("password"));
@@ -1232,7 +1262,12 @@ impl Page {
 					let has_reactive_attribute = el
 						.reactive_attrs()
 						.iter()
-						.any(|attribute| attribute.name().eq_ignore_ascii_case(name));
+						.any(|attribute| attribute.name().eq_ignore_ascii_case(name))
+						&& (!(name.eq_ignore_ascii_case("type") && reactive_input_type.is_some())
+							|| reactive_input_type_is_supported)
+						&& (!(name.eq_ignore_ascii_case("multiple")
+							&& reactive_select_multiple.is_some())
+							|| reactive_select_multiple_is_supported);
 					// Skip boolean attributes with falsy values (empty, "false", "0")
 					let name_str: &str = name.as_ref();
 					if (name_str.eq_ignore_ascii_case("value")
@@ -1268,8 +1303,24 @@ impl Page {
 					}
 					let value = match reactive_input_type.as_ref() {
 						Some((type_index, value)) if *type_index == index => value.clone(),
-						_ => attribute.value(),
+						_ => match reactive_select_multiple.as_ref() {
+							Some((multiple_index, value)) if *multiple_index == index => {
+								value.clone()
+							}
+							_ => attribute.value(),
+						},
 					};
+					if (reactive_input_type
+						.as_ref()
+						.is_some_and(|(type_index, _)| *type_index == index)
+						&& !reactive_input_type_is_supported)
+						|| (reactive_select_multiple
+							.as_ref()
+							.is_some_and(|(multiple_index, _)| *multiple_index == index)
+							&& !reactive_select_multiple_is_supported)
+					{
+						continue;
+					}
 					if let Some(value) = value
 						&& is_safe_html_attribute(attribute.name(), &value)
 						&& (!is_boolean_attr(attribute.name()) || is_boolean_attr_truthy(&value))
@@ -2072,6 +2123,41 @@ mod tests {
 			assert_eq!(overridden_value_evaluations.get(), 0);
 			assert_eq!(superseded_class_evaluations.get(), 0);
 			assert_eq!(final_class_evaluations.get(), 1);
+		});
+	}
+
+	#[test]
+	fn render_to_string_rejects_a_binding_incompatible_reactive_input_type() {
+		ReactiveScope::run(|| {
+			// Arrange
+			let input = PageElement::new("input")
+				.attr("type", "text")
+				.reactive_attr("type", || Some("file".into()))
+				.control_binding(ControlBinding::text(Signal::new("secret".to_owned())))
+				.into_page();
+
+			// Act
+			let html = input.render_to_string();
+
+			// Assert
+			assert_eq!(html, "<input type=\"text\" value=\"secret\" />");
+		});
+	}
+
+	#[test]
+	fn render_to_string_rejects_a_binding_incompatible_reactive_select_cardinality() {
+		ReactiveScope::run(|| {
+			// Arrange
+			let select = PageElement::new("select")
+				.reactive_attr("multiple", || Some("multiple".into()))
+				.control_binding(ControlBinding::select_one(Signal::new("draft".to_owned())))
+				.into_page();
+
+			// Act
+			let html = select.render_to_string();
+
+			// Assert
+			assert_eq!(html, "<select></select>");
 		});
 	}
 

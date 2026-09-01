@@ -102,8 +102,9 @@ compressed-parsers = ["parsers", "dep:alloc-stdlib", "dep:brotli-decompressor", 
 pagination = ["serde"]
 reactive = []
 
-# Page types feature
-page = ["types"]
+# Page types feature. HTML attribute sanitization calls
+# `crate::security::xss::is_safe_url`, so `page` enables `security`.
+page = ["types", "security"]
 
 # External dependency features
 macros = ["dep:reinhardt-macros"]

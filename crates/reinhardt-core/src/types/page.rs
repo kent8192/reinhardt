@@ -1026,6 +1026,17 @@ mod tests {
 	}
 
 	#[test]
+	fn is_safe_html_attribute_rejects_javascript_and_data_urls() {
+		assert!(!is_safe_html_attribute("href", "javascript:alert(1)"));
+		assert!(!is_safe_html_attribute(
+			"src",
+			"data:text/html,<script>alert(1)</script>"
+		));
+		assert!(is_safe_html_attribute("href", "https://example.com"));
+		assert!(is_safe_html_attribute("class", "container"));
+	}
+
+	#[test]
 	fn render_omits_executable_elements() {
 		let view = PageElement::new("script").child("alert(1)").into_page();
 

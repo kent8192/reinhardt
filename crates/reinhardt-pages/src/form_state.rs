@@ -1279,6 +1279,12 @@ where
 	Form: FormRuntimeSource,
 	Deps: Clone + PartialEq + 'static,
 {
+	/// Returns the generated form source retained by this runtime.
+	#[doc(hidden)]
+	pub fn __reinhardt_form_source(&self) -> Form {
+		self.form.clone()
+	}
+
 	/// Returns a signal containing the current value struct.
 	pub fn watch(&self) -> Signal<Form::Values> {
 		self.values_signal

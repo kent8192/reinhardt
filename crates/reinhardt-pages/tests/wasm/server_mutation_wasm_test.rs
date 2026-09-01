@@ -118,6 +118,12 @@ impl FetchGuard {
 		}
 		Reflect::set(
 			global.as_ref(),
+			&JsValue::from_str("__reinhardtCreateClusterBodies"),
+			&js_sys::Array::new(),
+		)
+		.expect("install create request body array");
+		Reflect::set(
+			global.as_ref(),
 			&JsValue::from_str("__reinhardtDeleteClusterResolvers"),
 			&js_sys::Array::new(),
 		)
@@ -148,12 +154,16 @@ impl FetchGuard {
 					).pathname;
 					if (path === createEndpoint) {
 						globalThis.__reinhardtCreateClusterRequests += 1;
-						if (globalThis.__reinhardtCreateClusterRequests === 1) {
-							return Promise.resolve(new Response(validation, { status: 422 }));
-						}
-						return Promise.resolve(
-							new Response(JSON.stringify({ token: 'one-time-token' }), { status: 200 })
-						);
+						return request.clone().text().then((body) => {
+							globalThis.__reinhardtCreateClusterBodies.push(body);
+							if (globalThis.__reinhardtCreateClusterRequests === 1) {
+								return new Response(validation, { status: 422 });
+							}
+							return new Response(
+								JSON.stringify({ token: 'one-time-token' }),
+								{ status: 200 }
+							);
+						});
 					}
 					if (path === updateEndpoint) {
 						globalThis.__reinhardtUpdateClusterRequests += 1;
@@ -210,6 +220,19 @@ impl FetchGuard {
 
 	fn create_requests(&self) -> u32 {
 		self.counter("__reinhardtCreateClusterRequests")
+	}
+
+	fn create_bodies(&self) -> Vec<String> {
+		Reflect::get(
+			js_sys::global().as_ref(),
+			&JsValue::from_str("__reinhardtCreateClusterBodies"),
+		)
+		.expect("read create request bodies")
+		.dyn_into::<js_sys::Array>()
+		.expect("create request bodies array")
+		.iter()
+		.map(|value| value.as_string().expect("create request body is text"))
+		.collect()
 	}
 
 	fn update_requests(&self) -> u32 {
@@ -270,6 +293,7 @@ impl Drop for FetchGuard {
 			"__reinhardtUpdateClusterEndpoint",
 			"__reinhardtDeleteClusterEndpoint",
 			"__reinhardtCreateClusterRequests",
+			"__reinhardtCreateClusterBodies",
 			"__reinhardtUpdateClusterRequests",
 			"__reinhardtDeleteClusterRequests",
 			"__reinhardtDeleteClusterGateOpen",
@@ -442,6 +466,49 @@ async fn model_form_mutation_surfaces_field_errors_before_public_callbacks_and_t
 	assert_eq!(fetch.create_requests(), 2);
 	assert!(!runtime.get_field_state(form.name_field()).is_dirty);
 
+	scope.dispose();
+}
+
+#[wasm_bindgen_test(async)]
+#[serial(server_mutation_globals)]
+async fn model_form_mutation_prepares_payload_from_the_attached_runtime() {
+	let fetch = FetchGuard::install();
+	fetch.set_create_requests(1);
+	let scope = ReactiveScope::new();
+	let (runtime, mutation) = scope.enter(|| {
+		let make_form = || cluster_create_form!();
+		let receiver_form = make_form();
+		let runtime_form = make_form();
+		let runtime = use_form(&runtime_form).build();
+		receiver_form
+			.set_value(
+				"name",
+				serde_json::Value::String("receiver-value".to_owned()),
+			)
+			.expect("set receiver form value");
+		runtime.set_value(runtime_form.name_field(), "runtime-value".to_owned());
+		let mutation = receiver_form.server_mutation(&runtime).build();
+		(runtime, mutation)
+	});
+
+	assert_eq!(mutation.dispatch(), MutationDispatchOutcome::Dispatched);
+	wait_until(
+		&fetch,
+		"runtime-owned model form payload",
+		|| mutation.result().is_some(),
+		|| format!("{:?}", mutation.phase()),
+	)
+	.await;
+
+	let bodies = fetch.create_bodies();
+	assert_eq!(bodies.len(), 1);
+	let body: serde_json::Value =
+		serde_json::from_str(&bodies[0]).expect("create request body is valid JSON");
+	assert_eq!(
+		body,
+		serde_json::json!({"payload": {"name": "runtime-value"}})
+	);
+	assert!(runtime.form_state().is_submit_successful.get());
 	scope.dispose();
 }
 

@@ -2481,9 +2481,10 @@ fn generate_model_form(
 						#policy_ident,
 					>>::Error: ::core::convert::Into<#pages_crate::ServerFnError>,
 				{
-					let __form = self.clone();
+					let _ = self;
+					let __form = runtime.__reinhardt_form_source();
 					let __form_for_success = __form.clone();
-					let __model_state = ::std::rc::Rc::clone(&self.__model_state);
+					let __model_state = ::std::rc::Rc::clone(&__form.__model_state);
 					#pages_crate::use_server_mutation(move |state: #pages_crate::form::ModelFormState<#schema_path, #policy_ident>| {
 						let __form_for_success = __form_for_success.clone();
 						async move {
@@ -8904,6 +8905,9 @@ mod tests {
 		assert!(output.contains("ModelFormSelectionArgument < 0usize"));
 		assert!(output.contains("ModelFormSelectionArgument < 1usize"));
 		assert!(output.contains("const NAME : & 'static str = \"title\""));
+		assert!(output.contains("runtime . __reinhardt_form_source ()"));
+		assert!(output.contains("Rc :: clone (& __form . __model_state)"));
+		assert!(!output.contains("Rc :: clone (& self . __model_state)"));
 		assert!(!output.contains("save_upload :: __args :: title"));
 		assert!(output.contains("not permitted by its policy"));
 	}

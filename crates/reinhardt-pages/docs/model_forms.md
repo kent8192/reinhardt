@@ -220,7 +220,10 @@ continuing to render a success token or server-generated identifier.
 Model-form mutation construction does not require a separate named
 `ModelFormData` contract in the style of issue #6217. `form.server_mutation(&runtime)`
 binds the generated payload alias internally and constructs the builder from the
-same `form!` definition that drives submission.
+same `form!` definition that drives submission. The attached runtime is the
+authoritative form instance for validation, payload snapshots, and matching
+browser-file cleanup, including when multiple instances share one generated
+form type.
 
 ## Excluded fields
 

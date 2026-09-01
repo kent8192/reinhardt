@@ -774,6 +774,15 @@ impl AllPermissionsModelAdmin {
 		admin
 	}
 
+	pub fn list_select_related_to_field_target_model() -> Self {
+		let mut admin = Self::test_model("admin_list_select_related_to_field_targets_5992");
+		admin.model_name = "AdminListSelectRelatedToFieldTarget".to_string();
+		admin.list_display = vec!["id".to_string(), "slug".to_string()];
+		admin.list_filter.clear();
+		admin.search_fields.clear();
+		admin
+	}
+
 	/// Creates a standard model with `name` enabled for inline editing.
 	pub fn editable_test_model(table_name: &str) -> Self {
 		let mut admin = Self::test_model(table_name);

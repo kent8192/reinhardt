@@ -140,8 +140,7 @@ pub(crate) fn new_history_event(
 ///
 /// The lookup checks model view permission and filters the persistent history
 /// table by the canonical registered model name, table name, and exact object
-/// ID. It does not read the current object row, so deleted-object history
-/// remains available.
+/// ID. The current object must remain visible through the model admin queryset.
 #[server_fn]
 pub async fn get_history(
 	model_name: String,

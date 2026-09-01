@@ -1078,10 +1078,15 @@ impl MigrationRepository for FilesystemRepository {
 				continue;
 			}
 
-			// Extract name from filename
-			if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
-				migrations.push(self.get(app_label, name).await?);
+			let Some(name) = path.file_stem().and_then(|stem| stem.to_str()) else {
+				continue;
+			};
+			// Rust helper and module files share the extension but migration files
+			// always begin with their numeric sequence.
+			if !name.starts_with(|character: char| character.is_ascii_digit()) {
+				continue;
 			}
+			migrations.push(self.get(app_label, name).await?);
 		}
 
 		Ok(migrations)
@@ -1586,6 +1591,32 @@ mod tests {
 
 		// Assert
 		assert_eq!(migrations.len(), 2);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(filesystem_repository)]
+	async fn test_filesystem_repository_save_and_list_ignore_non_migration_rust_files() {
+		// Arrange
+		let temp_dir = TempDir::new().unwrap();
+		let app_dir = temp_dir.path().join("polls");
+		std::fs::create_dir_all(&app_dir).unwrap();
+		std::fs::write(app_dir.join("helpers.rs"), "pub fn shared_helper() {}\n").unwrap();
+		let mut repo = FilesystemRepository::new(temp_dir.path());
+		let migration = create_test_migration("polls", "0001_initial");
+
+		// Act
+		repo.save(&migration)
+			.await
+			.expect("non-migration Rust files must not block saving");
+		let migrations = repo
+			.list("polls")
+			.await
+			.expect("non-migration Rust files must not block listing");
+
+		// Assert
+		assert_eq!(migrations.len(), 1);
+		assert_eq!(migrations[0].name, "0001_initial");
 	}
 
 	#[rstest]

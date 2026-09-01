@@ -232,7 +232,9 @@ loader failure cannot leave content from the previous authentication state in
 the DOM.
 Repeated invalidations in one transition are coalesced. The revalidation is
 deferred until the triggering guard or request settles, so a guard-originated
-401 cannot recursively start nested navigation.
+401 cannot recursively start nested navigation. Coalescing remains active
+until the replacement route attempt settles, so another managed 401 from that
+attempt neither cancels it nor schedules a replacement loop.
 
 Managed server-function clients invoke the same invalidation path after HTTP
 401. HTTP 403 does not invalidate authentication: it normally means the user

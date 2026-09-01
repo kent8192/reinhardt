@@ -77,17 +77,20 @@ pub const SESSION_COOKIE_NAME: &str = "sessionid";
 pub fn invalidate_authentication() {
 	let coordinator = crate::app::try_with_navigation_coordinator(Rc::clone);
 	if let Some(coordinator) = coordinator {
-		coordinator.clear_for_authentication_change();
 		if AUTHENTICATION_INVALIDATION_SCHEDULED.with(|scheduled| scheduled.replace(true)) {
 			return;
 		}
 
+		coordinator.clear_for_authentication_change();
 		let schedule_guard = AuthenticationInvalidationScheduleGuard;
 		crate::platform::spawn_task(async move {
-			let _schedule_guard = schedule_guard;
 			crate::platform::defer_yield().await;
 			let path = coordinator.current_path();
-			let _ = coordinator.navigate(path, crate::app::NavigationIntent::Replace);
+			let _ = coordinator.navigate_with_completion_guard(
+				path,
+				crate::app::NavigationIntent::Replace,
+				schedule_guard,
+			);
 		});
 		return;
 	}

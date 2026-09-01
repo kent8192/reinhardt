@@ -77,6 +77,10 @@ async fn browser_navigation_guard(
 				replace: false,
 			})
 		}
+		7 => {
+			observe_server_fn_status(401);
+			Ok(NavigationDecision::Allow)
+		}
 		_ => Ok(NavigationDecision::Forbidden),
 	}
 }
@@ -565,6 +569,35 @@ async fn repeated_managed_401_responses_coalesce_to_one_revalidation() {
 		GUARD_EVALUATIONS.with(Cell::get),
 		evaluations_before + 1,
 		"duplicate 401 responses schedule one active-branch evaluation"
+	);
+}
+
+#[wasm_bindgen_test]
+async fn persistent_401_during_auth_revalidation_settles_once() {
+	let root = install_app_root_at("/protected/");
+	GUARD_MODE.with(|mode| mode.set(1));
+	GUARD_EVALUATIONS.with(|evaluations| evaluations.set(0));
+
+	ClientLauncher::new("#app")
+		.router_client(build_router)
+		.launch()
+		.expect("protected launch");
+	settle_navigation().await;
+	let evaluations_before = GUARD_EVALUATIONS.with(Cell::get);
+	GUARD_MODE.with(|mode| mode.set(7));
+
+	invalidate_authentication();
+	settle_navigation().await;
+
+	assert_eq!(current_location(), "/protected/");
+	assert_eq!(
+		root.inner_html(),
+		"<div id=\"guard-protected\">PROTECTED</div>"
+	);
+	assert_eq!(
+		GUARD_EVALUATIONS.with(Cell::get),
+		evaluations_before + 2,
+		"persistent 401 responses stay inside one two-pass revalidation"
 	);
 }
 

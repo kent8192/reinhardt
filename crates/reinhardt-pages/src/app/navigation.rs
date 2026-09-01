@@ -71,6 +71,19 @@ impl RedirectChain {
 	}
 }
 
+#[derive(Clone)]
+struct NavigationCompletionGuard {
+	_owner: Rc<dyn std::any::Any>,
+}
+
+impl NavigationCompletionGuard {
+	fn new<T: 'static>(owner: T) -> Self {
+		Self {
+			_owner: Rc::new(owner),
+		}
+	}
+}
+
 // Pop and initial intents are supplied by the browser launcher.
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -178,6 +191,7 @@ struct NavigationAttempt {
 	redirect_chain: RedirectChain,
 	cancellation: CancellationSource,
 	_task: AbortableTaskGuard,
+	_completion: Option<NavigationCompletionGuard>,
 }
 
 /// Coordinates asynchronous route-loader preparation with synchronous URL
@@ -343,17 +357,33 @@ impl NavigationCoordinator {
 		intent: NavigationIntent,
 	) -> Result<(), NavigateError> {
 		let query_client = self.query_client.clone();
-		with_query_client(&query_client, || self.navigate_in_context(path, intent))
+		with_query_client(&query_client, || {
+			self.navigate_in_context(path, intent, None)
+		})
+	}
+
+	pub(crate) fn navigate_with_completion_guard<T: 'static>(
+		self: &Rc<Self>,
+		path: String,
+		intent: NavigationIntent,
+		completion_guard: T,
+	) -> Result<(), NavigateError> {
+		let query_client = self.query_client.clone();
+		let completion = NavigationCompletionGuard::new(completion_guard);
+		with_query_client(&query_client, || {
+			self.navigate_in_context(path, intent, Some(completion))
+		})
 	}
 
 	fn navigate_in_context(
 		self: &Rc<Self>,
 		path: String,
 		intent: NavigationIntent,
+		completion: Option<NavigationCompletionGuard>,
 	) -> Result<(), NavigateError> {
 		let redirect_chain = RedirectChain::new(&path)
 			.map_err(|error| NavigateError::RouterRejected(error.to_string()))?;
-		self.navigate_with_redirect_chain_in_context(path, intent, redirect_chain)
+		self.navigate_with_redirect_chain_in_context(path, intent, redirect_chain, completion)
 	}
 
 	fn navigate_with_redirect_chain(
@@ -361,10 +391,11 @@ impl NavigationCoordinator {
 		path: String,
 		intent: NavigationIntent,
 		redirect_chain: RedirectChain,
+		completion: Option<NavigationCompletionGuard>,
 	) -> Result<(), NavigateError> {
 		let query_client = self.query_client.clone();
 		with_query_client(&query_client, || {
-			self.navigate_with_redirect_chain_in_context(path, intent, redirect_chain)
+			self.navigate_with_redirect_chain_in_context(path, intent, redirect_chain, completion)
 		})
 	}
 
@@ -373,6 +404,7 @@ impl NavigationCoordinator {
 		path: String,
 		intent: NavigationIntent,
 		redirect_chain: RedirectChain,
+		completion: Option<NavigationCompletionGuard>,
 	) -> Result<(), NavigateError> {
 		let pop_origin = intent.pop_origin(self.committed_index.get());
 		let matched = self.router.match_tree(&path);
@@ -409,6 +441,7 @@ impl NavigationCoordinator {
 		let path_for_task = path.clone();
 		let matched_for_task = matched.clone();
 		let redirect_chain_for_task = redirect_chain.clone();
+		let completion_for_task = completion.clone();
 		let task_cancellation = cancellation_handle.clone();
 		let task = crate::cancellation::spawn_abortable_task(async move {
 			let guard_context = NavigationContext::new(
@@ -446,6 +479,7 @@ impl NavigationCoordinator {
 					intent,
 					redirect_chain_for_task.clone(),
 					decision,
+					completion_for_task.clone(),
 				);
 				return;
 			}
@@ -512,6 +546,7 @@ impl NavigationCoordinator {
 					intent,
 					redirect_chain_for_task,
 					decision,
+					completion_for_task.clone(),
 				);
 				return;
 			}
@@ -534,6 +569,7 @@ impl NavigationCoordinator {
 			redirect_chain,
 			cancellation,
 			_task: task,
+			_completion: completion,
 		});
 		Ok(())
 	}
@@ -545,6 +581,7 @@ impl NavigationCoordinator {
 		intent: NavigationIntent,
 		redirect_chain: RedirectChain,
 		decision: NavigationDecision,
+		completion: Option<NavigationCompletionGuard>,
 	) -> Result<(), NavigateError> {
 		if !self.is_current_generation(generation) {
 			return Ok(());
@@ -576,7 +613,12 @@ impl NavigationCoordinator {
 					replace,
 					pop_origin: intent.pop_origin(self.committed_index.get()),
 				};
-				self.navigate_with_redirect_chain(location, redirect_intent, redirect_chain)
+				self.navigate_with_redirect_chain(
+					location,
+					redirect_intent,
+					redirect_chain,
+					completion,
+				)
 			}
 		}
 	}
@@ -890,7 +932,6 @@ mod tests {
 			static ROOT_GUARD_OPEN: Cell<bool> = const { Cell::new(false) };
 			static CHILD_GUARD_BLOCKED: Cell<bool> = const { Cell::new(false) };
 			static CHILD_GUARD_OPEN: Cell<bool> = const { Cell::new(false) };
-			static AUTHENTICATION_GUARD_401_SEEN: Cell<bool> = const { Cell::new(false) };
 			static AUTHENTICATION_GUARD_RUNS: Cell<usize> = const { Cell::new(0) };
 			static AUTHENTICATION_GUARD_TRIGGER_401: Cell<bool> = const { Cell::new(false) };
 			static REDIRECTS: RefCell<HashMap<String, NavigationDecision>> = RefCell::new(HashMap::new());
@@ -1000,9 +1041,7 @@ mod tests {
 			_context: NavigationContext,
 		) -> Result<NavigationDecision, NavigationGuardError> {
 			AUTHENTICATION_GUARD_RUNS.with(|runs| runs.set(runs.get() + 1));
-			if AUTHENTICATION_GUARD_TRIGGER_401.with(Cell::get)
-				&& !AUTHENTICATION_GUARD_401_SEEN.replace(true)
-			{
+			if AUTHENTICATION_GUARD_TRIGGER_401.with(Cell::get) {
 				crate::auth::observe_server_fn_status(401);
 			}
 			Ok(NavigationDecision::Allow)
@@ -1216,7 +1255,6 @@ mod tests {
 			ROOT_GUARD_OPEN.with(|open| open.set(false));
 			CHILD_GUARD_BLOCKED.with(|blocked| blocked.set(false));
 			CHILD_GUARD_OPEN.with(|open| open.set(false));
-			AUTHENTICATION_GUARD_401_SEEN.with(|seen| seen.set(false));
 			AUTHENTICATION_GUARD_RUNS.with(|runs| runs.set(0));
 			AUTHENTICATION_GUARD_TRIGGER_401.with(|trigger| trigger.set(false));
 			REDIRECTS.with(|redirects| redirects.borrow_mut().clear());
@@ -1361,7 +1399,7 @@ mod tests {
 		}
 
 		#[test]
-		fn authentication_401_inside_guard_does_not_reenter_in_stack() {
+		fn persistent_401_during_authentication_revalidation_does_not_reschedule() {
 			ReactiveScope::run(|| {
 				reset_test_state();
 				let _query_client = provide_test_query_client();
@@ -1387,9 +1425,14 @@ mod tests {
 
 				assert_eq!(
 					AUTHENTICATION_GUARD_RUNS.with(Cell::get),
-					runs_before + 3,
-					"a guard-originated 401 schedules a later replacement, not an in-stack evaluation"
+					runs_before + 2,
+					"persistent 401 responses stay inside one two-pass revalidation"
 				);
+				assert!(
+					tasks.borrow().is_empty(),
+					"persistent 401 responses must not leave replacement tasks scheduled"
+				);
+				assert!(!coordinator.pending().get());
 				assert_eq!(router.current_path().get(), "/authentication-401/");
 				crate::app::__clear_spa_router_for_test();
 			});

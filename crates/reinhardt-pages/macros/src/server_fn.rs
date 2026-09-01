@@ -2099,12 +2099,15 @@ fn generate_server_handler(
 	// `reinhardt-web/msw`) so that `MockableServerFn` is in scope.
 	let msw_enabled = cfg!(feature = "msw");
 
-	let result_types = extract_result_types(return_type);
 	let emits_public_metadata = info.emits_typed_response_metadata();
 	let emits_msw_metadata = emits_public_metadata && !uses_multipart;
-	let emits_typed_response_metadata = emits_public_metadata && result_types.is_some();
-	let (metadata_response_type, metadata_error_type) =
-		result_types.unwrap_or_else(|| (quote! {}, quote! {}));
+	let emits_typed_response_metadata = emits_public_metadata;
+	let metadata_response_type = quote! {
+		<#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Response
+	};
+	let metadata_error_type = quote! {
+		<#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Error
+	};
 	let response_metadata_type_aliases = if emits_typed_response_metadata {
 		quote! {
 			#[doc(hidden)]
@@ -3071,23 +3074,6 @@ fn generate_server_handler(
 		// optional MSW Args / MockableServerFn impl is gated inside.
 		#wasm_marker_tokens
 	}
-}
-
-/// Extracts both result types when the return type is a direct `Result<T, E>`.
-fn extract_result_types(
-	return_type: &syn::Type,
-) -> Option<(proc_macro2::TokenStream, proc_macro2::TokenStream)> {
-	if let syn::Type::Path(type_path) = return_type
-		&& let Some(segment) = type_path.path.segments.last()
-		&& segment.ident == "Result"
-		&& let syn::PathArguments::AngleBracketed(args) = &segment.arguments
-		&& let Some(syn::GenericArgument::Type(ok_type)) = args.args.first()
-		&& args.args.len() >= 2
-		&& let Some(syn::GenericArgument::Type(err_type)) = args.args.iter().nth(1)
-	{
-		return Some((quote! { #ok_type }, quote! { #err_type }));
-	}
-	None
 }
 
 #[cfg(test)]

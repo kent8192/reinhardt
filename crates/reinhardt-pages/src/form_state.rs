@@ -1473,20 +1473,22 @@ where
 
 	/// Resets all values to current defaults.
 	pub fn reset(&self) {
-		let defaults = self.default_values.borrow().clone();
-		let _guard = self.suppress_signal_sync();
-		self.form.runtime_apply_values(&defaults);
-		self.touched_fields.borrow_mut().clear();
-		self.touched_collections.borrow_mut().clear();
-		self.touched_paths.borrow_mut().clear();
-		self.state.is_touched.set(false);
-		self.state.is_dirty.set(false);
-		self.state.is_submitting.set(false);
-		self.state.is_submit_successful.set(false);
-		self.rebuild_path_default_values();
-		self.clear_errors();
-		self.values_signal.set(defaults);
-		self.sync_observed_values();
+		let _ = self.in_owner_scope(|| {
+			let defaults = self.default_values.borrow().clone();
+			let _guard = self.suppress_signal_sync();
+			self.form.runtime_apply_values(&defaults);
+			self.touched_fields.borrow_mut().clear();
+			self.touched_collections.borrow_mut().clear();
+			self.touched_paths.borrow_mut().clear();
+			self.state.is_touched.set(false);
+			self.state.is_dirty.set(false);
+			self.state.is_submitting.set(false);
+			self.state.is_submit_successful.set(false);
+			self.rebuild_path_default_values();
+			self.clear_errors();
+			self.values_signal.set(defaults);
+			self.sync_observed_values();
+		});
 	}
 
 	/// Syncs runtime state after a native form reset has restored field values.

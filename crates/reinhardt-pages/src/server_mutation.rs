@@ -423,6 +423,13 @@ where
 		self.last_success.set(None);
 	}
 
+	#[cfg(wasm)]
+	fn reset_action_preserving_result(&self) {
+		if !self.action.is_pending() {
+			self.action.reset();
+		}
+	}
+
 	#[cfg(test)]
 	pub(crate) fn force_success_for_test(&self, value: Output) {
 		self.action.force_success_for_test(value);
@@ -546,7 +553,7 @@ where
 				}
 				crate::UseFormSubmitOutcome::ValidationFailed => {
 					pending_guard.disarm();
-					self.mutation.reset();
+					self.mutation.reset_action_preserving_result();
 					return MutationDispatchOutcome::ValidationFailed;
 				}
 				crate::UseFormSubmitOutcome::Submitted => {}
@@ -556,7 +563,7 @@ where
 				Err(error) => {
 					self.form.complete_mutation_validation_error(error);
 					pending_guard.disarm();
-					self.mutation.reset();
+					self.mutation.reset_action_preserving_result();
 					return MutationDispatchOutcome::ValidationFailed;
 				}
 			};
@@ -996,12 +1003,14 @@ mod tests {
 						.set(public_server_errors_for_callback.get() + 1);
 				})
 				.build();
+			mutation.force_success_for_test("previous".to_owned());
 
 			assert_eq!(
 				mutation.dispatch(),
 				MutationDispatchOutcome::ValidationFailed
 			);
 			assert_eq!(mutation.phase(), ActionPhase::Idle);
+			assert_eq!(mutation.result().as_deref(), Some("previous"));
 			assert_eq!(form_failures.get(), 1);
 			assert_eq!(public_server_errors.get(), 0);
 		});

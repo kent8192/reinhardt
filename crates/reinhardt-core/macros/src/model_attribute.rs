@@ -89,22 +89,6 @@ pub(crate) fn model_attribute_impl(
 		syn::parse_quote! { #[model_config(#args #serde_flags)] }
 	};
 
-	if let Some(derive_model_idx) = derive_model_idx {
-		// Keep the existing #[derive(Model)] instead of injecting another one.
-		// The active attribute is removed before the derive runs, so forward it
-		// through the registered helper attribute.
-		input.attrs.insert(derive_model_idx + 1, config_attr);
-		return Ok(if let Some(contract) = named_contract_output {
-			quote! {
-				#contract
-				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-				#input
-			}
-		} else {
-			quote! { #input }
-		});
-	}
-
 	/// Check if a specific trait is already in `#[derive(...)]` attributes
 	fn has_derive_trait(attrs: &[Attribute], trait_name: &str) -> bool {
 		attrs.iter().any(|attr| {
@@ -304,6 +288,22 @@ pub(crate) fn model_attribute_impl(
 		for fk_field in fk_id_fields {
 			fields.named.push(fk_field);
 		}
+	}
+
+	if let Some(derive_model_idx) = derive_model_idx {
+		// Keep the existing #[derive(Model)] instead of injecting another one.
+		// The active attribute is removed before the derive runs, so forward it
+		// through the registered helper attribute after relation normalization.
+		input.attrs.insert(derive_model_idx + 1, config_attr);
+		return Ok(if let Some(contract) = named_contract_output {
+			quote! {
+				#contract
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				#input
+			}
+		} else {
+			quote! { #input }
+		});
 	}
 
 	// Build derive attribute with Model derive macro

@@ -1,5 +1,12 @@
 include!("../support.rs");
 
+#[reinhardt_macros::model(app_label = "documents")]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Owner {
+	#[field(primary_key = true)]
+	id: i64,
+}
+
 #[reinhardt_macros::model(
 	app_label = "documents",
 	form(name = DocumentCreateForm, fields(title, published))
@@ -11,8 +18,8 @@ pub struct Document {
 	#[field(max_length = 100)]
 	title: String,
 	published: bool,
-	#[field(editable = false)]
-	owner_id: i64,
+	#[rel(foreign_key)]
+	owner: db::associations::ForeignKeyField<Owner>,
 }
 
 fn main() {

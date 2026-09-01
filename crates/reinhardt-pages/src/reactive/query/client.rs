@@ -636,7 +636,7 @@ impl QueryClient {
 	pub(crate) fn hydration_is_blocked(&self) -> bool {
 		#[cfg(any(wasm, test))]
 		{
-			return self.inner.hydration_blocked.get();
+			self.inner.hydration_blocked.get()
 		}
 		#[cfg(not(any(wasm, test)))]
 		false

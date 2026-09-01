@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Args;
-use reinhardt_db::migrations::upgrade_source;
+use reinhardt_db::migrations::{source_format::has_source_format_marker, upgrade_source};
 use syn::{File, Item};
 use thiserror::Error;
 use walkdir::WalkDir;
@@ -139,7 +139,14 @@ pub fn run(args: UpgradeSourceArgs) -> Result<()> {
 				continue;
 			}
 		};
-		if !defines_migration(&file) {
+		let has_source_marker = match has_source_format_marker(&source) {
+			Ok(has_source_marker) => has_source_marker,
+			Err(error) => {
+				diagnostics.push(format!("{}: {error}", relative_path.display()));
+				continue;
+			}
+		};
+		if !has_source_marker && !defines_migration(&file) {
 			continue;
 		}
 		match upgrade_source(&source) {
@@ -342,6 +349,7 @@ fn write_atomically(path: &Path, expected_source: &str, content: &str) -> Result
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	#[test]
 	fn check_reports_drift_without_writing() {
@@ -358,6 +366,33 @@ mod tests {
 
 		assert!(error.to_string().contains("require upgrade"));
 		assert_eq!(fs::read_to_string(path).expect("read fixture"), original);
+	}
+
+	#[rstest]
+	#[case::current_format(
+		"// reinhardt-migration-source: 1\nfn renamed_migration() -> Migration { Migration::new(\"0001\", \"app\") }\n",
+		"missing migration() entrypoint"
+	)]
+	#[case::future_format(
+		"// reinhardt-migration-source: 2\nfn renamed_migration() -> Migration { Migration::new(\"0001\", \"app\") }\n",
+		"requires a newer Reinhardt tool"
+	)]
+	fn check_rejects_marked_sources_without_migration_entrypoints(
+		#[case] source: &str,
+		#[case] expected: &str,
+	) {
+		let directory = tempfile::tempdir().expect("temporary directory");
+		let path = directory.path().join("0001_initial.rs");
+		fs::write(&path, source).expect("write fixture");
+
+		let error = run(UpgradeSourceArgs {
+			path: directory.path().to_path_buf(),
+			check: true,
+		})
+		.expect_err("marked sources must be validated");
+
+		assert!(error.to_string().contains(expected));
+		assert_eq!(fs::read_to_string(path).expect("read fixture"), source);
 	}
 
 	#[test]

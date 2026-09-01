@@ -160,6 +160,15 @@ fn parse_marker(source: &str) -> Result<Option<u32>> {
 	Ok(Some(value))
 }
 
+/// Return whether the leading Rust trivia contains a migration source marker.
+///
+/// This distinguishes marked migration sources from ordinary Rust helper files
+/// without mistaking marker-like text inside strings or later comments.
+pub fn has_source_format_marker(source: &str) -> Result<bool> {
+	let syntax_offset = first_syntax_offset(source)?;
+	Ok(!leading_marker_lines(source, syntax_offset).is_empty())
+}
+
 pub(crate) fn validate_source_version(source: &str) -> Result<()> {
 	if let Some(version) = parse_marker(source)?
 		&& version > CURRENT_SOURCE_FORMAT_VERSION

@@ -16,8 +16,20 @@ pub trait ModelFormValidatingPayload: Sized {
 	/// The normalized payload produced after successful validation.
 	type Cleaned: ModelFormCleanedPayload<Raw = Self>;
 
-	/// Normalize and validate this raw payload.
+	/// Normalize and validate this raw payload for model creation.
 	fn clean_and_validate(self) -> Result<Self::Cleaned, ValidationErrors>;
+}
+
+/// A raw model form payload that can validate a partial model update.
+pub trait ModelFormUpdatingPayload: ModelFormValidatingPayload {
+	/// The model type whose existing values complete an update candidate.
+	type Model;
+
+	/// Normalize a partial update and validate its post-merge model values.
+	fn clean_and_validate_for_update(
+		self,
+		existing: &Self::Model,
+	) -> Result<Self::Cleaned, ValidationErrors>;
 }
 
 #[cfg(test)]

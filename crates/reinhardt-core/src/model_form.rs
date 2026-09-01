@@ -14,4 +14,6 @@ pub use schema::{
 	ModelFormSchema, ModelFormTableName,
 };
 #[cfg(feature = "validators")]
-pub use validation::{ModelFormCleanedPayload, ModelFormValidatingPayload};
+pub use validation::{
+	ModelFormCleanedPayload, ModelFormUpdatingPayload, ModelFormValidatingPayload,
+};

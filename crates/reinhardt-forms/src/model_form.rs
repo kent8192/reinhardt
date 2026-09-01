@@ -13,7 +13,7 @@ use crate::form::ALL_FIELDS_KEY;
 use reinhardt_core::model_form::{
 	AllEditableModelFields, ModelFormCleanedPayload, ModelFormFieldKind, ModelFormPayload,
 	ModelFormPayloadError, ModelFormPolicy, ModelFormPrimaryKeyFields, ModelFormSchema,
-	ModelFormValidatingPayload,
+	ModelFormUpdatingPayload, ModelFormValidatingPayload,
 };
 use reinhardt_core::validators::{ValidationError, ValidationErrors};
 use reinhardt_db::orm::transaction::AtomicTransactionOutcome;
@@ -40,6 +40,7 @@ pub trait FormModel: Model + ModelFormPrimaryKeyFields + Clone + Send + Sync {
 	/// Generated typed payload under the active field policy.
 	type Data<P: ModelFormPolicy>: ModelFormPayload<P>
 		+ ModelFormValidatingPayload<Cleaned = Self::CleanedData<P>>
+		+ ModelFormUpdatingPayload<Model = Self>
 		+ Clone;
 	/// Generated cleaned payload under the active field policy.
 	type CleanedData<P: ModelFormPolicy>: ModelFormCleanedPayload<Raw = Self::Data<P>>;
@@ -147,12 +148,23 @@ where
 	P: ModelFormPolicy,
 	D: ModelFormPayload<P>,
 {
-	clean_generated_payload_with_trusted_values::<S, P, D>(data, None)
+	clean_generated_payload_with_trusted_values::<S, P, D>(data, None, true)
+}
+
+#[doc(hidden)]
+pub fn clean_generated_partial_payload<S, P, D>(data: &mut D) -> Result<(), ValidationErrors>
+where
+	S: ModelFormSchema,
+	P: ModelFormPolicy,
+	D: ModelFormPayload<P>,
+{
+	clean_generated_payload_with_trusted_values::<S, P, D>(data, None, false)
 }
 
 fn clean_generated_payload_with_trusted_values<S, P, D>(
 	data: &mut D,
 	trusted_values: Option<&Value>,
+	require_all: bool,
 ) -> Result<(), ValidationErrors>
 where
 	S: ModelFormSchema,
@@ -165,7 +177,7 @@ where
 	for descriptor in S::fields() {
 		if descriptor.editable
 			&& P::allows(descriptor.name)
-			&& supplied.contains(&descriptor.name)
+			&& (supplied.contains(&descriptor.name) || (require_all && descriptor.required))
 			&& !data
 				.get_json(descriptor.name)
 				.is_some_and(|value| descriptor.nullable && value.is_null())
@@ -363,6 +375,7 @@ where
 		clean_generated_payload_with_trusted_values::<T::Schema, P, _>(
 			&mut self.data,
 			instance_values.as_ref(),
+			self.persistence_mode == ModelFormPersistenceMode::Create,
 		)
 		.map_err(model_form_error_from_validation_errors)?;
 
@@ -390,11 +403,11 @@ where
 			})?;
 		}
 
-		let cleaned = self
-			.data
-			.clone()
-			.clean_and_validate()
-			.map_err(model_form_error_from_validation_errors)?;
+		let cleaned = match self.instance.as_ref() {
+			Some(existing) => self.data.clone().clean_and_validate_for_update(existing),
+			None => self.data.clone().clean_and_validate(),
+		}
+		.map_err(model_form_error_from_validation_errors)?;
 		self.cleaned_data = Some(cleaned);
 		Ok(())
 	}

@@ -2,7 +2,9 @@
 
 use reinhardt_core::exception::{DatabaseErrorKind, Error};
 use reinhardt_core::macros::model;
-use reinhardt_core::model_form::{ModelFormPayload, ModelFormPolicy, ModelFormValidatingPayload};
+use reinhardt_core::model_form::{
+	ModelFormPayload, ModelFormPolicy, ModelFormUpdatingPayload, ModelFormValidatingPayload,
+};
 use reinhardt_core::validators::{ValidationError, ValidationErrors};
 use reinhardt_db::backends::DatabaseConnection as BackendsConnection;
 use reinhardt_db::orm::{DatabaseConnection, DatabaseConnectionLease, Model};
@@ -12,9 +14,13 @@ use reinhardt_pages::server_fn::{ServerFnError, ServerFnErrorKind};
 use rstest::rstest;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use serial_test::serial;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::TempDir;
 
 const DEFAULT_AUDIT_TOKEN: &str = "model-form-created";
+static MISSING_CLUSTER_SYNC_VALIDATOR_CALLS: AtomicUsize = AtomicUsize::new(0);
+static MISSING_CLUSTER_ASYNC_VALIDATOR_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 #[model(app_label = "forms_test", form = true)]
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -33,6 +39,9 @@ struct Article {
 fn validate_cluster<P: ModelFormPolicy>(
 	payload: &CleanedClusterModelFormData<P>,
 ) -> Result<(), ValidationErrors> {
+	if payload.name().is_none() || payload.api_url().is_none() {
+		MISSING_CLUSTER_SYNC_VALIDATOR_CALLS.fetch_add(1, Ordering::SeqCst);
+	}
 	let mut errors = ValidationErrors::new();
 	if payload.name() == payload.api_url() {
 		errors.add(
@@ -179,6 +188,9 @@ fn cluster_validation_errors<P: ModelFormPolicy>(
 async fn ensure_cluster_name_available<P: ModelFormPolicy>(
 	payload: &CleanedClusterModelFormData<P>,
 ) -> Result<(), ValidationErrors> {
+	if payload.name().is_none() || payload.api_url().is_none() {
+		MISSING_CLUSTER_ASYNC_VALIDATOR_CALLS.fetch_add(1, Ordering::SeqCst);
+	}
 	let mut errors = ValidationErrors::new();
 	if payload.name().is_some_and(|name| name == "taken") {
 		errors.add(
@@ -200,6 +212,17 @@ async fn create_cluster(
 	ensure_cluster_name_available(&cleaned).await?;
 	cleaned
 		.into_model(ClusterModelFormServerContext::new().organization_id(7))
+		.map_err(|error| ServerFnError::application(error.to_string()))
+}
+
+async fn update_cluster(
+	payload: ClusterModelFormData<ClusterPolicy>,
+	existing: Cluster,
+) -> Result<Cluster, ServerFnError> {
+	let cleaned = payload.clean_and_validate_for_update(&existing)?;
+	ensure_cluster_name_available(&cleaned).await?;
+	cleaned
+		.apply_to(existing)
 		.map_err(|error| ServerFnError::application(error.to_string()))
 }
 
@@ -393,6 +416,74 @@ async fn direct_cluster_handler_revalidates_hostile_payloads(
 	assert_eq!(error.field_errors().len(), 1);
 	assert_eq!(error.field_errors()[0].field(), field);
 	assert_eq!(error.field_errors()[0].message(), message);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(model_form_missing_cluster_callbacks)]
+async fn direct_create_rejects_omitted_required_fields_before_callbacks() {
+	// Arrange
+	MISSING_CLUSTER_SYNC_VALIDATOR_CALLS.store(0, Ordering::SeqCst);
+	MISSING_CLUSTER_ASYNC_VALIDATOR_CALLS.store(0, Ordering::SeqCst);
+	let mut payload = ClusterModelFormData::<ClusterPolicy>::empty();
+	payload
+		.set_api_url("https://example.com".to_owned())
+		.expect("cluster API URL should be editable");
+	payload
+		.set_notes("missing name".to_owned())
+		.expect("cluster notes should be editable");
+
+	// Act
+	let error = create_cluster(payload)
+		.await
+		.expect_err("missing required create input should fail at field validation");
+
+	// Assert
+	assert_eq!(error.kind(), ServerFnErrorKind::Validation);
+	assert_eq!(error.status(), Some(422));
+	assert_eq!(error.field_errors().len(), 1);
+	assert_eq!(error.field_errors()[0].field(), "name");
+	assert_eq!(error.field_errors()[0].message(), "This field is required.");
+	assert_eq!(
+		MISSING_CLUSTER_SYNC_VALIDATOR_CALLS.load(Ordering::SeqCst),
+		0
+	);
+	assert_eq!(
+		MISSING_CLUSTER_ASYNC_VALIDATOR_CALLS.load(Ordering::SeqCst),
+		0
+	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn direct_partial_update_validates_the_post_merge_candidate() {
+	// Arrange
+	let mut payload = ClusterModelFormData::<ClusterPolicy>::empty();
+	payload
+		.set_name("https://same.example.com".to_owned())
+		.expect("cluster name should be editable");
+	let existing = Cluster {
+		id: Some(42),
+		organization_id: 19,
+		name: "original".to_owned(),
+		api_url: "https://same.example.com".to_owned(),
+		notes: "preserve me".to_owned(),
+	};
+
+	// Act
+	let error = update_cluster(payload, existing)
+		.await
+		.expect_err("post-merge cross-field validation should reject the update");
+
+	// Assert
+	assert_eq!(error.kind(), ServerFnErrorKind::Validation);
+	assert_eq!(error.status(), Some(422));
+	assert_eq!(error.field_errors().len(), 1);
+	assert_eq!(error.field_errors()[0].field(), "_all");
+	assert_eq!(
+		error.field_errors()[0].message(),
+		"Name and API URL must differ"
+	);
 }
 
 #[rstest]

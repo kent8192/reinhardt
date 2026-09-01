@@ -311,13 +311,12 @@ where
 				ValidationError::Custom("This field is required.".to_owned()),
 			);
 		}
-		if !form_is_valid {
-			if let Some(messages) = form.errors().get(descriptor.name) {
+		if !form_is_valid
+			&& let Some(messages) = form.errors().get(descriptor.name) {
 				for message in messages {
 					errors.add(descriptor.name, ValidationError::Custom(message.clone()));
 				}
 			}
-		}
 	}
 	if !errors.is_empty() {
 		return Err(errors);

@@ -3812,11 +3812,10 @@ fn generate_model_form_support(
 			let Type::Path(type_path) = ty else {
 				return None;
 			};
-			if !type_path
+			if type_path
 				.path
 				.segments
-				.last()
-				.is_some_and(|segment| segment.ident == "Decimal")
+				.last().is_none_or(|segment| segment.ident != "Decimal")
 			{
 				return None;
 			}

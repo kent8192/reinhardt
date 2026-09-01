@@ -13,7 +13,7 @@ use reinhardt_admin::types::{
 };
 use reinhardt_db::orm::{OrmExecutor, QueryValue};
 use reinhardt_di::KeyedDepends;
-use reinhardt_pages::server_fn::ServerFnError;
+use reinhardt_pages::server_fn::{ServerFnError, ServerFnErrorKind};
 use rstest::rstest;
 use serde_json::json;
 use serial_test::serial;
@@ -75,7 +75,11 @@ async fn update_name(
 	.await
 }
 
-async fn query_history(context: &ServerFnContext, object_id: &str, page: u64) -> HistoryResponse {
+async fn query_history_result(
+	context: &ServerFnContext,
+	object_id: &str,
+	page: u64,
+) -> Result<HistoryResponse, ServerFnError> {
 	let (site, db, _) = context;
 	get_history(
 		"testmodel".to_string(),
@@ -87,10 +91,18 @@ async fn query_history(context: &ServerFnContext, object_id: &str, page: u64) ->
 		make_auth_user(),
 	)
 	.await
-	.expect("authorized history query must succeed")
 }
 
-async fn query_string_pk_history(context: &StringPkContext, object_id: &str) -> HistoryResponse {
+async fn query_history(context: &ServerFnContext, object_id: &str, page: u64) -> HistoryResponse {
+	query_history_result(context, object_id, page)
+		.await
+		.expect("authorized history query must succeed")
+}
+
+async fn query_string_pk_history_result(
+	context: &StringPkContext,
+	object_id: &str,
+) -> Result<HistoryResponse, ServerFnError> {
 	let (site, db, _, _, _) = context;
 	get_history(
 		"stringpkmodel".to_string(),
@@ -102,7 +114,18 @@ async fn query_string_pk_history(context: &StringPkContext, object_id: &str) -> 
 		make_auth_user(),
 	)
 	.await
-	.expect("authorized string primary key history query must succeed")
+}
+
+async fn query_string_pk_history(context: &StringPkContext, object_id: &str) -> HistoryResponse {
+	query_string_pk_history_result(context, object_id)
+		.await
+		.expect("authorized string primary key history query must succeed")
+}
+
+fn assert_object_not_found(error: ServerFnError) {
+	assert_eq!(error.kind(), ServerFnErrorKind::Server);
+	assert_eq!(error.status(), Some(404));
+	assert_eq!(error.user_message(), "Object not found");
 }
 
 async fn insert_poison_history(
@@ -159,7 +182,9 @@ async fn exact_history_ids(context: &ServerFnContext, object_id: &str) -> Vec<i6
 
 #[rstest]
 #[tokio::test]
-async fn crud_history_remains_queryable_after_delete(#[future] server_fn_context: ServerFnContext) {
+async fn crud_history_rejects_deleted_objects_without_dropping_history(
+	#[future] server_fn_context: ServerFnContext,
+) {
 	// Arrange
 	let context = server_fn_context.await;
 	let (site, db, _connection_lease) = &context;
@@ -198,43 +223,14 @@ async fn crud_history_remains_queryable_after_delete(#[future] server_fn_context
 	.expect("delete must succeed");
 
 	// Act
-	let response = query_history(&context, &format!("0{object_id}"), 1).await;
-	let serialized = serde_json::to_string(&response).expect("history must serialize");
+	let history_result = query_history_result(&context, &format!("0{object_id}"), 1).await;
+	let persisted_history = exact_history_ids(&context, &object_id).await;
 
 	// Assert
-	assert_eq!(response.count, 3);
-	assert_eq!(response.page, 1);
-	assert_eq!(response.page_size, 25);
-	assert_eq!(response.total_pages, 1);
-	assert_eq!(
-		response
-			.results
-			.iter()
-			.map(|entry| entry.action_name.as_str())
-			.collect::<Vec<_>>(),
-		["DELETE", "UPDATE", "CREATE"]
+	assert_object_not_found(
+		history_result.expect_err("deleted object history must be outside the active scope"),
 	);
-	assert!(response.results.iter().all(|entry| {
-		entry.actor == "test_staff"
-			&& entry.model_name == "TestModel"
-			&& entry.object_id == object_id
-			&& entry.object_repr == format!("TestModel ({object_id})")
-			&& entry.affected_count == 1
-			&& entry.success
-	}));
-	assert_eq!(response.results[0].changed_fields, Vec::<String>::new());
-	assert_eq!(response.results[1].changed_fields, ["name"]);
-	assert_eq!(
-		response.results[2].changed_fields,
-		["description", "name", "status"]
-	);
-	for raw_value in [
-		"create-secret-name",
-		"create-secret-description",
-		"update-secret-name",
-	] {
-		assert!(!serialized.contains(raw_value));
-	}
+	assert_eq!(persisted_history.len(), 3);
 }
 
 #[rstest]
@@ -293,7 +289,7 @@ async fn numeric_looking_string_primary_keys_remain_distinct_across_crud_and_his
 	)
 	.await
 	.expect("leading-zero primary key delete must succeed");
-	let leading_zero_history = query_string_pk_history(&context, "01").await;
+	let leading_zero_history = query_string_pk_history_result(&context, "01").await;
 	let plain_history = query_string_pk_history(&context, "1").await;
 	let deleted = db
 		.get::<AdminRecord>("string_pk_test_models", "id", "01")
@@ -306,18 +302,12 @@ async fn numeric_looking_string_primary_keys_remain_distinct_across_crud_and_his
 		.expect("plain primary key record must remain");
 
 	// Assert
+	assert_object_not_found(
+		leading_zero_history.expect_err("deleted string primary key history must be scoped out"),
+	);
 	assert!(deleted.is_none());
 	assert_eq!(remaining.get("name"), Some(&json!("updated-plain-one")));
-	assert_eq!(leading_zero_history.count, 3);
 	assert_eq!(plain_history.count, 2);
-	assert_eq!(
-		leading_zero_history
-			.results
-			.iter()
-			.map(|entry| (entry.object_id.as_str(), entry.action_name.as_str()))
-			.collect::<Vec<_>>(),
-		[("01", "DELETE"), ("01", "UPDATE"), ("01", "CREATE")]
-	);
 	assert_eq!(
 		plain_history
 			.results
@@ -330,9 +320,7 @@ async fn numeric_looking_string_primary_keys_remain_distinct_across_crud_and_his
 
 #[rstest]
 #[tokio::test]
-async fn bulk_delete_writes_only_per_deleted_object_history(
-	#[future] server_fn_context: ServerFnContext,
-) {
+async fn bulk_delete_hides_deleted_object_history(#[future] server_fn_context: ServerFnContext) {
 	// Arrange
 	let context = server_fn_context.await;
 	let first_id = seed_record(&context, "bulk-first").await;
@@ -359,20 +347,19 @@ async fn bulk_delete_writes_only_per_deleted_object_history(
 	)
 	.await
 	.expect("bulk delete must succeed");
-	let first_history = query_history(&context, &first_id, 1).await;
-	let second_history = query_history(&context, &second_id, 1).await;
-	let missing_history = query_history(&context, &missing_id, 1).await;
+	let first_history = query_history_result(&context, &first_id, 1).await;
+	let second_history = query_history_result(&context, &second_id, 1).await;
+	let missing_history = query_history_result(&context, &missing_id, 1).await;
+	let first_persisted_history = exact_history_ids(&context, &first_id).await;
+	let second_persisted_history = exact_history_ids(&context, &second_id).await;
 
 	// Assert
 	assert_eq!(response.deleted, 2);
-	for history in [first_history, second_history] {
-		assert_eq!(history.count, 1);
-		assert_eq!(history.results.len(), 1);
-		assert_eq!(history.results[0].action_name, "BULK_DELETE");
-		assert_eq!(history.results[0].affected_count, 1);
-	}
-	assert_eq!(missing_history.count, 0);
-	assert!(missing_history.results.is_empty());
+	assert_object_not_found(first_history.expect_err("deleted object history must be scoped out"));
+	assert_object_not_found(second_history.expect_err("deleted object history must be scoped out"));
+	assert_object_not_found(missing_history.expect_err("missing object history must be rejected"));
+	assert_eq!(first_persisted_history.len(), 1);
+	assert_eq!(second_persisted_history.len(), 1);
 }
 
 #[rstest]

@@ -138,10 +138,10 @@ pub(crate) fn new_history_event(
 
 /// Get a stable, paginated history for one admin object.
 ///
-/// The lookup checks model view permission and filters the persistent history
-/// table by the canonical registered model name, table name, and exact object
-/// ID. It does not read the current object row, so deleted-object history
-/// remains available.
+/// The lookup checks model view permission and the request-aware object scope
+/// before filtering the persistent history table by the canonical registered
+/// model name, table name, and exact object ID. History remains persisted after
+/// deletion, but deleted objects are no longer available through this endpoint.
 #[server_fn]
 pub async fn get_history(
 	model_name: String,

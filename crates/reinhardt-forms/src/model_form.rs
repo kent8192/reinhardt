@@ -329,6 +329,11 @@ where
 		};
 		candidate.apply_payload(&self.data)?;
 		for (field, value) in &self.trusted_field_values {
+			if self.persistence_mode == ModelFormPersistenceMode::Update
+				&& T::primary_key_fields().contains(&field.as_str())
+			{
+				continue;
+			}
 			T::set_trusted_field_json(&mut candidate, field, value.clone())?;
 		}
 
@@ -1040,24 +1045,24 @@ mod tests {
 	}
 
 	#[test]
-	fn generated_model_form_reuses_trusted_create_primary_key_after_save() {
+	fn generated_model_form_preserves_database_primary_key_after_trusted_create() {
 		let data = question_payload("Created", 41);
 		let mut form = ModelForm::<Question, QuestionPolicy>::from_payload(data);
 		form.set_trusted_field_value("id", json!(23))
 			.expect("create intent should accept a trusted assigned primary key");
-		let mut executor = RetryExecutor::new([Ok(question_row(23, "Created", 41, true))]);
+		let mut executor = RetryExecutor::new([Ok(question_row(24, "Created", 41, true))]);
 
 		let saved = tokio_test::block_on(form.save(&mut executor))
-			.expect("the trusted primary key should persist on create");
-		assert_eq!(saved.id, Some(23));
+			.expect("create should persist with the trusted input");
+		assert_eq!(saved.id, Some(24));
 
 		form.set_field_value("title", json!("Updated"))
 			.expect("the saved form should remain editable");
 		let built = form
 			.build_instance()
-			.expect("the original trusted identity should remain valid after create");
+			.expect("the database identity should remain valid after create");
 
-		assert_eq!(built.id, Some(23));
+		assert_eq!(built.id, Some(24));
 		assert_eq!(built.title, "Updated");
 	}
 

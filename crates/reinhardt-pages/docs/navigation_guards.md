@@ -145,11 +145,13 @@ attempt is rejected or cancelled.
 ## Query reuse, hydration, and prefetch
 
 `NavigationContext::query` acquires the descriptor through the existing
-`QueryClient`. It follows normal freshness, retry, garbage-collection, and
-in-flight deduplication rules. The pre-loader and pre-commit checks therefore
-reuse one fresh session query, and sibling navigation can reuse the same
-settled entry. There is no separate navigation-guard result cache, timestamp,
-or dependency tracker.
+`QueryClient`. It follows normal freshness, garbage-collection, and in-flight
+deduplication rules. Navigation and prefetch consumers do not automatically
+retry failed fetches, even when a retry policy is configured; a failed guard
+query is returned as a `NavigationGuardError`. The pre-loader and pre-commit
+checks therefore reuse one fresh session query, and sibling navigation can
+reuse the same settled entry. There is no separate navigation-guard result
+cache, timestamp, or dependency tracker.
 
 On SSR, guard queries are serialized through the normal query state. Browser
 hydration reads that existing state and reruns the pure guard decision; it

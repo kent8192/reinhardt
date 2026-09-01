@@ -29,7 +29,7 @@ const REDIRECT_NORMALIZATION_BASE: &str = "http://reinhardt.invalid/";
 pub struct SsrRouteOutput {
 	/// Rendered HTML document or error body.
 	pub html: String,
-	/// Status selected by route matching or loader failure.
+	/// Status selected by route matching or route-preparation failure.
 	pub status: u16,
 }
 
@@ -103,7 +103,7 @@ impl SsrRenderer {
 			Ok(Err(RouteAttemptError::Loader(error))) => {
 				return route_loader_error_output(error);
 			}
-			Err(_) => return route_timeout_output(),
+			Err(_) => return route_preparation_timeout_output(),
 		};
 
 		let (store, serialized_loaders) = match attempt {
@@ -248,11 +248,11 @@ fn route_loader_error_output(error: RouteLoaderError) -> SsrRouteOutput {
 	}
 }
 
-fn route_timeout_output() -> SsrRouteOutput {
+fn route_preparation_timeout_output() -> SsrRouteOutput {
 	SsrRouteOutput {
 		html: PageElement::new("div")
-			.attr("data-route-error", "loader-timeout")
-			.child("route loader timed out")
+			.attr("data-route-error", "route-preparation-timeout")
+			.child("route preparation timed out")
 			.into_page()
 			.render_to_string(),
 		status: 504,

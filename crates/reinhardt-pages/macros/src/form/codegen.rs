@@ -8826,16 +8826,83 @@ mod tests {
 			server_fn: save_upload,
 		};
 
-		let output = parse_validate_generate(input).to_string();
+		let output = parse_validate_generate(input);
+		let block: syn::Block =
+			syn::parse2(output).expect("generated model form expansion must parse as a Rust block");
+		let server_mutation = block
+			.stmts
+			.iter()
+			.filter_map(|statement| match statement {
+				syn::Stmt::Item(syn::Item::Impl(implementation)) => Some(implementation),
+				_ => None,
+			})
+			.flat_map(|implementation| implementation.items.iter())
+			.find_map(|item| match item {
+				syn::ImplItem::Fn(method) if method.sig.ident == "server_mutation" => Some(method),
+				_ => None,
+			})
+			.expect("generated model form must define server_mutation");
+		let syn::ReturnType::Type(_, return_type) = &server_mutation.sig.output else {
+			panic!("generated server_mutation must declare its builder return type");
+		};
+		let syn::Type::Path(return_type) = return_type.as_ref() else {
+			panic!("generated server_mutation must return a path type");
+		};
+		assert_eq!(
+			return_type
+				.path
+				.segments
+				.last()
+				.expect("generated server_mutation return path must be non-empty")
+				.ident,
+			"FormServerMutationBuilder"
+		);
 
-		assert!(output.contains("ModelFormServerFn"));
-		assert!(output.contains(":: Response"));
-		assert!(output.contains("validate_input"));
+		let Some(syn::Stmt::Expr(syn::Expr::MethodCall(preparation), None)) =
+			server_mutation.block.stmts.last()
+		else {
+			panic!("generated server_mutation must end with mutation preparation");
+		};
+		assert_eq!(preparation.method, "with_generated_form");
+		let Some(syn::Expr::Closure(prepare_state)) = preparation.args.iter().nth(1) else {
+			panic!("generated mutation preparation must receive the state callback");
+		};
+		let syn::Expr::Block(prepare_state) = prepare_state.body.as_ref() else {
+			panic!("generated mutation preparation callback must have a block body");
+		};
+		let validation_and_state = prepare_state
+			.block
+			.stmts
+			.iter()
+			.rev()
+			.take(2)
+			.rev()
+			.map(ToTokens::to_token_stream)
+			.collect::<TokenStream>();
+		let expected_validation_and_state: syn::Block = syn::parse2(quote! {{
+			<save_upload::marker as ::reinhardt_pages::form::ModelFormServerFn<
+				__ReinhardtModelFormSelection,
+				UploadDocumentFormSchema,
+				UploadFormSelectionPolicy,
+			>>::validate_input(&state)
+				.map_err(|error| __form.__server_mutation_validation_error(error))?;
+			::core::result::Result::Ok(state)
+		}})
+		.expect("expected model form mutation preparation must parse");
+		assert_eq!(
+			validation_and_state.to_string(),
+			expected_validation_and_state
+				.stmts
+				.into_iter()
+				.map(|statement| statement.to_token_stream())
+				.collect::<TokenStream>()
+				.to_string()
+		);
+
+		let output = block.to_token_stream().to_string();
 		assert!(output.contains("ModelFormSelectionCount < 2usize >"));
 		assert!(output.contains("ModelFormSelectionArgument < 0usize"));
 		assert!(output.contains("ModelFormSelectionArgument < 1usize"));
-		assert!(output.contains("pub fn server_mutation"));
-		assert!(output.contains("FormServerMutationBuilder"));
 		assert!(output.contains("const NAME : & 'static str = \"title\""));
 		assert!(!output.contains("save_upload :: __args :: title"));
 		assert!(output.contains("not permitted by its policy"));

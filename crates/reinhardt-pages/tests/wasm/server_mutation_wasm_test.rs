@@ -14,6 +14,7 @@ use reinhardt_pages::hydration::hydrate;
 use reinhardt_pages::prelude::defer_yield;
 use reinhardt_pages::reactive::query::{QueryClient, QueryDefaults, QueryOptions};
 use reinhardt_pages::reactive::{Effect, ReactiveScope};
+use rstest::rstest;
 use serial_test::serial;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::*;
@@ -586,6 +587,7 @@ async fn delete_mutation_suppresses_duplicate_dispatches_while_pending() {
 	scope.dispose();
 }
 
+#[rstest]
 #[wasm_bindgen_test]
 #[serial(server_mutation_globals)]
 fn stale_mutation_dispatch_is_ignored() {
@@ -600,8 +602,9 @@ fn stale_mutation_dispatch_is_ignored() {
 	);
 }
 
-#[wasm_bindgen_test(async)]
+#[rstest]
 #[serial(server_mutation_globals)]
+#[test_attr(wasm_bindgen_test)]
 async fn generated_dispatch_does_not_subscribe_the_calling_effect() {
 	let fetch = FetchGuard::install();
 	let scope = ReactiveScope::new();
@@ -647,8 +650,9 @@ async fn generated_dispatch_does_not_subscribe_the_calling_effect() {
 	scope.dispose();
 }
 
-#[wasm_bindgen_test(async)]
+#[rstest]
 #[serial(server_mutation_globals)]
+#[test_attr(wasm_bindgen_test)]
 async fn disposing_mutation_scope_clears_parent_form_pending() {
 	let _fetch = FetchGuard::install();
 	let parent_scope = ReactiveScope::new();

@@ -2186,16 +2186,28 @@ fn generate_server_handler(
 				}
 			})
 			.collect();
-		let model_form_argument_validation = model_form_arguments.clone();
+		let model_form_argument_validation: Vec<_> = wire_params
+			.iter()
+			.zip(regular_param_types.iter())
+			.map(|(parameter, parameter_type)| {
+				let field_name = parameter.name.to_string();
+				match parameter.kind {
+					WireParamKind::Json => quote! {
+						let _: #parameter_type = state.json_argument(#field_name)?;
+					},
+					WireParamKind::File => quote! {
+						let _ = state.required_file_argument(#field_name)?;
+					},
+					WireParamKind::OptionalFile => quote! {
+						let _ = state.optional_file_argument(#field_name)?;
+					},
+				}
+			})
+			.collect();
 		let model_form_argument_names: Vec<_> = wire_params
 			.iter()
 			.map(|parameter| &parameter.name)
 			.collect();
-		let model_form_argument_discards = model_form_argument_names.iter().map(|parameter_name| {
-			quote! {
-				let _ = #parameter_name;
-			}
-		});
 		let argument_count = wire_params.len();
 		quote! {
 			impl<__ReinhardtSelection, __ReinhardtSchema, __ReinhardtPolicy>
@@ -2236,7 +2248,6 @@ fn generate_server_handler(
 					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 					{
 						#(#model_form_argument_validation)*
-						#(#model_form_argument_discards)*
 						::core::result::Result::Ok(())
 					}
 					#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -2356,22 +2367,20 @@ fn generate_server_handler(
 	} else {
 		quote! {}
 	};
-	let request_metadata_type_aliases =
-		if !uses_multipart && emits_typed_response_metadata && is_json_codec {
-			let request_type = match regular_param_types.as_slice() {
-				[] => quote! { () },
-				[request_type] => quote! { #request_type },
-				_ => quote! { (#(#regular_param_types),*) },
-			};
-			quote! {
-				#[doc(hidden)]
-				#vis type #request_alias = #request_type;
-			}
-		} else {
-			quote! {}
+	let request_metadata_type_aliases = if !uses_multipart && emits_typed_response_metadata {
+		let request_type = match regular_param_types.as_slice() {
+			[] => quote! { () },
+			[request_type] => quote! { #request_type },
+			_ => quote! { (#(#regular_param_types),*) },
 		};
-	let request_metadata_impl = if !uses_multipart && emits_typed_response_metadata && is_json_codec
-	{
+		quote! {
+			#[doc(hidden)]
+			#vis type #request_alias = #request_type;
+		}
+	} else {
+		quote! {}
+	};
+	let request_metadata_impl = if !uses_multipart && emits_typed_response_metadata {
 		quote! {
 			impl #pages_crate::server_fn::ServerFnRequestMetadata for marker {
 				type Request = super::#request_alias;
@@ -2393,34 +2402,33 @@ fn generate_server_handler(
 			super::#name(#(#regular_param_names),*).await
 		},
 	};
-	let mutation_helper_tokens =
-		if !uses_multipart && emits_typed_response_metadata && is_json_codec {
-			quote! {
-				/// Returns a target-neutral mutation callable for this server function.
-				pub fn mutation() -> impl Fn(
-					<marker as #pages_crate::server_fn::ServerFnRequestMetadata>::Request,
-				) -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<
-					Output = ::std::result::Result<
-						<marker as #pages_crate::server_fn::ServerFnResponseMetadata>::Response,
-						<marker as #pages_crate::server_fn::ServerFnResponseMetadata>::Error,
-					>,
-				>>> {
-					|request| {
-						#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-						{
-							::std::boxed::Box::pin(async move { #mutation_call })
-						}
-						#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-						{
-							drop(request);
-							::std::boxed::Box::pin(async move { ::core::unreachable!() })
-						}
+	let mutation_helper_tokens = if !uses_multipart && emits_typed_response_metadata {
+		quote! {
+			/// Returns a target-neutral mutation callable for this server function.
+			pub fn mutation() -> impl Fn(
+				<marker as #pages_crate::server_fn::ServerFnRequestMetadata>::Request,
+			) -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<
+				Output = ::std::result::Result<
+					<marker as #pages_crate::server_fn::ServerFnResponseMetadata>::Response,
+					<marker as #pages_crate::server_fn::ServerFnResponseMetadata>::Error,
+				>,
+			>>> {
+				|request| {
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					{
+						::std::boxed::Box::pin(async move { #mutation_call })
+					}
+					#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+					{
+						drop(request);
+						::std::boxed::Box::pin(async move { ::core::unreachable!() })
 					}
 				}
 			}
-		} else {
-			quote! {}
-		};
+		}
+	} else {
+		quote! {}
+	};
 
 	// Convert inject param names to string literals for INJECTED_PARAMS const
 	let inject_param_name_strs: Vec<String> = inject_params

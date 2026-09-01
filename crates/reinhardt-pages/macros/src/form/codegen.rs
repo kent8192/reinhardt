@@ -2471,7 +2471,6 @@ fn generate_model_form(
 				>
 				where
 					Deps: ::core::clone::Clone + ::core::cmp::PartialEq + 'static,
-					#model_form_response_type: ::core::clone::Clone,
 					<#server_fn::marker as #pages_crate::form::ModelFormServerFn<
 						#model_form_selection_type,
 						#schema_path,
@@ -2479,7 +2478,15 @@ fn generate_model_form(
 					>>::Error: ::core::convert::Into<#pages_crate::ServerFnError>,
 				{
 					let __form = self.clone();
+					let __form_for_success = __form.clone();
 					let __model_state = ::std::rc::Rc::clone(&self.__model_state);
+					let __submitted_state = ::std::rc::Rc::new(
+						::std::cell::RefCell::new(::core::option::Option::None),
+					);
+					let __submitted_state_for_prepare =
+						::std::rc::Rc::clone(&__submitted_state);
+					let __submitted_state_for_success =
+						::std::rc::Rc::clone(&__submitted_state);
 					#pages_crate::use_server_mutation(move |state| async move {
 						#pages_crate::server_mutation::execute_server_mutation_once(
 							state,
@@ -2493,8 +2500,23 @@ fn generate_model_form(
 							},
 						)
 						.await
-					})
-					.with_generated_form(runtime, move |_| {
+						})
+						.on_success(move |_| {
+							#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+							{
+								if let ::core::option::Option::Some(state) =
+									__submitted_state_for_success.borrow_mut().take()
+								{
+									__form_for_success.clear_selected_files_matching(&state);
+									__form_for_success.clear_mounted_file_inputs_matching(&state, None);
+								}
+							}
+							#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+							{
+								let _ = (&__form_for_success, &__submitted_state_for_success);
+							}
+						})
+						.with_generated_form(runtime, move |_| {
 						let state = {
 							let state = __model_state.borrow();
 							(*state).clone()
@@ -2506,6 +2528,8 @@ fn generate_model_form(
 							#policy_ident,
 						>>::validate_input(&state)
 							.map_err(|error| __form.__server_mutation_validation_error(error))?;
+						*__submitted_state_for_prepare.borrow_mut() =
+							::core::option::Option::Some(state.clone());
 						::core::result::Result::Ok(state)
 					})
 				}

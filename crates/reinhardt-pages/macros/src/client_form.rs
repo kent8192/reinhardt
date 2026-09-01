@@ -619,8 +619,6 @@ fn generate_submit_method(
 		>
 		where
 			Deps: ::core::clone::Clone + ::core::cmp::PartialEq + 'static,
-			<#server_fn::marker as #pages_crate::server_fn::ServerFnResponseMetadata>::Response:
-				::core::clone::Clone,
 			<#server_fn::marker as #pages_crate::server_fn::ServerFnResponseMetadata>::Error:
 				::core::convert::Into<#pages_crate::ServerFnError>,
 		{

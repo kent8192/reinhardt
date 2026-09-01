@@ -181,7 +181,7 @@ pub trait ServerFnResponseMetadata: ServerFnMetadata {
 
 /// Exposes the client-visible request argument type of a `#[server_fn]` marker.
 ///
-/// This is implemented by the `#[server_fn]` macro for JSON server functions.
+/// This is implemented by the `#[server_fn]` macro for non-multipart server functions.
 /// The generated request shape is `()` for no client-visible arguments, the
 /// argument type for one client-visible argument, and a tuple for two or more
 /// client-visible arguments. Parameters resolved by `#[inject]` or `FromRequest`

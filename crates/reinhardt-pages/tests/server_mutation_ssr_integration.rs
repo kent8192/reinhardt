@@ -13,7 +13,12 @@ fn component_renders_shared_ready_marker_on_native() {
 	ReactiveScope::run(|| {
 		let html = ClusterMutationComponent.render().render_to_string();
 
-		assert!(html.contains("id=\"cluster-mutations-ready\""), "{html}");
+		assert_eq!(
+			html.matches(r#"<div id="cluster-mutations-ready">ready</div>"#)
+				.count(),
+			1,
+			"{html}"
+		);
 	});
 }
 

@@ -165,6 +165,8 @@ setter to supply an excluded editable value from a trusted source.
     and persistence; supplied or forbidden input marks an extra as submitted
   - Inline parent persistence uses explicit `InlineFormSet::for_create` or
     `InlineFormSet::for_update` intent
+  - Child preflight defers the generated parent key together with any trusted
+    server-owned fields already registered on the child form
 
 ### Advanced Features
 

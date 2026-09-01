@@ -816,6 +816,8 @@ mod tests {
 		id: Option<i64>,
 		#[rel(foreign_key, related_name = "required_child_models")]
 		parent: ForeignKeyField<TestModel>,
+		#[field(max_length = 100, editable = false)]
+		tenant_key: String,
 		#[field(max_length = 1_000)]
 		content: String,
 	}
@@ -981,6 +983,15 @@ mod tests {
 		row
 	}
 
+	fn required_child_model_row(id: i64, parent_id: i64, content: &str) -> Row {
+		let mut row = child_model_row(id, parent_id, content);
+		row.insert(
+			"tenant_key".to_owned(),
+			QueryValue::String("tenant-a".to_owned()),
+		);
+		row
+	}
+
 	fn uuid_parent_row(id: uuid::Uuid, name: &str) -> Row {
 		let mut row = Row::new();
 		row.insert("id".to_owned(), QueryValue::Uuid(id));
@@ -1121,18 +1132,21 @@ mod tests {
 		let mut data = RequiredChildModelModelFormData::<AllEditableModelFields>::empty();
 		data.set_content("invalid child".to_owned())
 			.expect("child content should be accepted");
-		formset.add_child_form(
-			ModelForm::<RequiredChildModel>::from_payload(data).with_model_validator(|candidate| {
+		let mut child_form = ModelForm::<RequiredChildModel>::from_payload(data)
+			.with_model_validator(|candidate| {
 				if candidate.parent_id > 0 {
 					Ok(())
 				} else {
 					Err(vec!["parent key must be assigned".to_owned()])
 				}
-			}),
-		);
+			});
+		child_form
+			.set_trusted_field_value("tenant_key", json!("tenant-a"))
+			.expect("a trusted child field should participate in deferred validation");
+		formset.add_child_form(child_form);
 		let mut executor = FormsetExecutor::new([
 			Ok(test_model_row(1, "parent")),
-			Ok(child_model_row(2, 1, "invalid child")),
+			Ok(required_child_model_row(2, 1, "invalid child")),
 		]);
 
 		tokio_test::block_on(formset.save(&mut executor))

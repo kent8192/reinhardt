@@ -320,11 +320,7 @@ where
 			Some(instance) => instance.clone(),
 			None if self.trusted_field_values.is_empty() => T::build_from_payload(&self.data)?,
 			None => {
-				let deferred_fields = self
-					.trusted_field_values
-					.keys()
-					.map(String::as_str)
-					.collect::<Vec<_>>();
+				let deferred_fields = self.deferred_required_fields(None);
 				T::build_from_payload_with_deferred_required_fields(&self.data, &deferred_fields)?
 			}
 		};
@@ -344,6 +340,14 @@ where
 
 		self.validated_candidate = Some(candidate.clone());
 		Ok(candidate)
+	}
+
+	fn deferred_required_fields<'a>(&'a self, additional_field: Option<&'a str>) -> Vec<&'a str> {
+		self.trusted_field_values
+			.keys()
+			.map(String::as_str)
+			.chain(additional_field)
+			.collect()
 	}
 
 	/// Returns whether the current payload can produce a valid model candidate.
@@ -579,6 +583,8 @@ where
 
 	/// Performs structural validation before an inline formset assigns a generated parent key.
 	///
+	/// Trusted child fields remain deferred alongside the generated parent key.
+	///
 	/// Model-level validation intentionally runs only after the real key is installed, so
 	/// validators may safely depend on that relationship.
 	pub(crate) fn is_valid_with_deferred_required_field(&mut self, deferred_field: &str) -> bool {
@@ -605,9 +611,10 @@ where
 		let mut candidate = match &self.instance {
 			Some(instance) => instance.clone(),
 			None => {
+				let deferred_fields = self.deferred_required_fields(Some(deferred_field));
 				match T::build_from_payload_with_deferred_required_fields(
 					&self.data,
-					&[deferred_field],
+					&deferred_fields,
 				) {
 					Ok(candidate) => candidate,
 					Err(error) => {

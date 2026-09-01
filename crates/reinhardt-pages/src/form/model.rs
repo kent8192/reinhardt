@@ -272,6 +272,23 @@ where
 	where
 		T: Any + 'static,
 	{
+		let descriptor = S::fields()
+			.iter()
+			.find(|descriptor| descriptor.name == field)
+			.ok_or_else(|| ModelFormPayloadError::UnknownField {
+				field: field.to_owned(),
+			})?;
+		if !P::allows(field) {
+			return Err(ModelFormPayloadError::ForbiddenField {
+				field: field.to_owned(),
+			});
+		}
+		if is_file_kind(descriptor.kind) {
+			return Err(invalid_value(
+				field,
+				"file fields must be set with set_file",
+			));
+		}
 		let value = any_value_to_json(value).ok_or_else(|| {
 			invalid_value(
 				field,
@@ -281,7 +298,10 @@ where
 				),
 			)
 		})?;
-		self.set_value(field, value)
+		match convert_snapshot_value(descriptor, value)? {
+			Some(value) => self.set_value(field, value),
+			None => self.clear_value(field),
+		}
 	}
 
 	/// Removes one model-form value and any selected file associated with it.
@@ -473,6 +493,9 @@ where
 
 	/// Builds, normalizes, and validates a submission snapshot.
 	///
+	/// **Parity: P2.** Native and WASM targets apply the same generated field
+	/// conversion and [`ModelFormValidatingPayload`] pipeline.
+	///
 	/// # Errors
 	///
 	/// Returns schema-ordered validation errors without changing raw control state.
@@ -485,6 +508,9 @@ where
 	}
 
 	/// Builds, normalizes, and validates a snapshot using a nameable payload policy.
+	///
+	/// **Parity: P2.** Native and WASM targets apply the same generated field
+	/// conversion and [`ModelFormValidatingPayload`] pipeline.
 	///
 	/// # Errors
 	///
@@ -505,13 +531,15 @@ where
 	/// Converts one payload assembly failure into the structured validation contract.
 	#[doc(hidden)]
 	pub fn payload_error_to_validation(&self, error: ModelFormPayloadError) -> ValidationErrors {
-		let field = match &error {
+		let (field, message) = match &error {
 			ModelFormPayloadError::UnknownField { field }
-			| ModelFormPayloadError::ForbiddenField { field }
-			| ModelFormPayloadError::InvalidValue { field, .. } => field.clone(),
+			| ModelFormPayloadError::ForbiddenField { field } => (field.clone(), error.to_string()),
+			ModelFormPayloadError::InvalidValue { field, message } => {
+				(field.clone(), message.clone())
+			}
 		};
 		let mut errors = ValidationErrors::new();
-		errors.add(field, ValidationError::Custom(error.to_string()));
+		errors.add(field, ValidationError::Custom(message));
 		errors
 	}
 
@@ -872,7 +900,12 @@ fn convert_control_value(
 				_ => unreachable!("email and URL fields are handled by this conversion branch"),
 			};
 			if !is_valid {
-				return Err(invalid_value(descriptor.name, "has an invalid format"));
+				let message = match descriptor.kind {
+					ModelFormFieldKind::Email { .. } => "Enter a valid email address",
+					ModelFormFieldKind::Url { .. } => "Enter a valid URL",
+					_ => unreachable!("email and URL fields are handled by this conversion branch"),
+				};
+				return Err(invalid_value(descriptor.name, message));
 			}
 			Ok(serde_json::Value::String(text))
 		}

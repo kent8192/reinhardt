@@ -8,7 +8,7 @@ use reinhardt_pages::component::{PageExt, cleanup_reactive_nodes};
 use reinhardt_pages::dom::Element;
 use reinhardt_pages::prelude::defer_yield;
 use reinhardt_pages::reactive::ReactiveScope;
-use reinhardt_pages::{form, use_form};
+use reinhardt_pages::{FieldError, form, use_form};
 use serial_test::serial;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::*;
@@ -315,6 +315,66 @@ async fn wait_for_files_to_clear(root: &web_sys::Element) {
 	}
 	assert_eq!(file_count(&query_input(root, "upload-form-document")), 0);
 	assert_eq!(file_count(&query_input(root, "upload-form-avatar")), 0);
+}
+
+#[rstest::rstest]
+#[serial(model_form_file_upload_globals)]
+#[test_attr(wasm_bindgen_test)]
+async fn automatic_model_form_submit_routes_snapshot_errors_without_fetch() {
+	// Arrange
+	let root = BodyRoot::new();
+	let document_file = browser_file("report.pdf");
+	let avatar_file = browser_file("avatar.png");
+	let fetch = MultipartFetchGuard::install(&document_file, &avatar_file);
+	let scope = ReactiveScope::new();
+	let (form, runtime) = scope.enter(|| {
+		let form = form! {
+			name: InvalidUploadForm,
+			model: Upload,
+			policy: UploadPolicy,
+			fields: [title, document, avatar],
+			server_fn: upload,
+		};
+		form.clone()
+			.into_page()
+			.mount(&Element::new(root.0.clone()))
+			.expect("model form mounts");
+		let runtime = use_form(&form).build();
+		(form, runtime)
+	});
+	let title = query_input(&root.0, "invalid-upload-form-title");
+	let document = query_input(&root.0, "invalid-upload-form-document");
+	title.set_value("Rejected by validation");
+	title
+		.dispatch_event(&web_sys::Event::new("input").expect("input event"))
+		.expect("dispatch title input");
+	select_file(&document, &document_file);
+	defer_yield().await;
+
+	// Act
+	submit(&query_form(&root.0));
+	wait_for_error(|| {
+		runtime.get_field_state(form.title_field()).error.is_some()
+			&& runtime.form_state().form_error.get().is_some()
+	})
+	.await;
+
+	// Assert
+	assert_eq!(fetch.requests(), 0);
+	assert_eq!(
+		runtime
+			.get_field_state(form.title_field())
+			.error
+			.as_ref()
+			.map(FieldError::message),
+		Some("Title is rejected")
+	);
+	assert_eq!(
+		runtime.form_state().form_error.get(),
+		Some("Validation failed\n_all: Upload is rejected".to_owned())
+	);
+	assert_eq!(title.value(), "Rejected by validation");
+	assert!(same_file(&selected_file(&document), &document_file));
 }
 
 #[wasm_bindgen_test]

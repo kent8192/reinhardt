@@ -211,12 +211,13 @@ fn model_form_validated_snapshot_preserves_invalid_url_for_correction() {
 
 	// Assert
 	let ordered = errors.ordered_field_errors().collect::<Vec<_>>();
-	let fields = ordered.iter().map(|(field, _)| *field).collect::<Vec<_>>();
-	assert_eq!(fields, ["api_url"]);
-	assert!(matches!(
-		ordered[0].1,
-		[ValidationError::Custom(message)] if message.contains("has an invalid format")
-	));
+	assert_eq!(
+		ordered,
+		vec![(
+			"api_url",
+			&[ValidationError::Custom("Enter a valid URL".to_owned())][..],
+		)]
+	);
 	assert_eq!(
 		state.value("api_url"),
 		Some(&serde_json::json!("not a URL"))
@@ -376,6 +377,27 @@ fn model_form_builds_one_policy_safe_payload() {
 	assert_eq!(payload.supplied_fields(), ["title"]);
 	assert_eq!(payload.get_json("title"), Some(serde_json::json!("Typed")));
 	assert_eq!(payload.get_json("owner_id"), None);
+}
+
+#[rstest]
+fn model_form_typed_setter_rejects_a_wrong_supported_primitive_immediately() {
+	// Arrange
+	let mut state = ModelFormState::<ModelFormQuestionSchema, ModelFormTitleOnly>::new();
+
+	// Act
+	let error = state
+		.set_any_value("title", 42_i64)
+		.expect_err("an integer must not be stored for a text descriptor");
+
+	// Assert
+	assert_eq!(
+		error,
+		ModelFormPayloadError::InvalidValue {
+			field: "title".to_owned(),
+			message: "expected a string".to_owned(),
+		}
+	);
+	assert_eq!(state.value("title"), None);
 }
 
 #[rstest]

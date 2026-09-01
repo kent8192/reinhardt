@@ -610,6 +610,26 @@ pub trait FormRuntimeSource: Clone + 'static {
 	/// Sets or clears the current custom-widget bridge error for one generated field.
 	fn runtime_set_custom_widget_error(&self, _field: Self::Field, _error: Option<FieldError>) {}
 
+	/// Returns the latest structured error emitted by an automatic generated submit.
+	///
+	/// **Parity: P2.** Generated native and WASM forms expose the same structured
+	/// error so `use_form` can route it to field and form state.
+	#[doc(hidden)]
+	fn runtime_server_error(&self) -> Option<ServerFnError> {
+		None
+	}
+
+	/// Registers a weak listener for structured automatic-submit errors.
+	///
+	/// **Parity: P2.** Generated native and WASM forms notify the listener with
+	/// the same structured error value.
+	#[doc(hidden)]
+	fn runtime_register_server_error_handler(
+		&self,
+		_handler: std::rc::Weak<dyn Fn(Option<ServerFnError>)>,
+	) {
+	}
+
 	/// Captures nested collection field values using the current runtime item keys.
 	fn runtime_path_values_from_values(
 		&self,
@@ -944,6 +964,83 @@ fn sync_custom_widget_errors_in_state<Field>(
 	}
 }
 
+fn apply_server_error_to_state<Form>(
+	form: &Form,
+	state: &FormState<Form::Field>,
+	custom_widget_error_fields: &Rc<RefCell<HashMap<Form::Field, FieldError>>>,
+	collection_errors: &Signal<HashMap<String, FieldError>>,
+	path_errors: &Signal<HashMap<String, FieldError>>,
+	error: &ServerFnError,
+) where
+	Form: FormRuntimeSource,
+{
+	let mut matched_errors = HashMap::<Form::Field, Vec<String>>::new();
+	let mut unmatched_errors = Vec::new();
+
+	for field_error in error.field_errors() {
+		if let Some(field) = form.runtime_field_by_name(field_error.field()) {
+			matched_errors
+				.entry(field)
+				.or_default()
+				.push(field_error.message().to_string());
+		} else {
+			unmatched_errors.push(format!(
+				"{}: {}",
+				field_error.field(),
+				field_error.message()
+			));
+		}
+	}
+
+	let field_errors: HashMap<Form::Field, FieldError> = matched_errors
+		.into_iter()
+		.map(|(field, messages)| (field, FieldError::new(messages.join("\n"))))
+		.collect();
+	let form_error = if field_errors.is_empty() || !unmatched_errors.is_empty() {
+		let mut messages = Vec::with_capacity(unmatched_errors.len() + 1);
+		messages.push(error.user_message().to_string());
+		messages.extend(unmatched_errors);
+		Some(messages.join("\n"))
+	} else {
+		None
+	};
+
+	for field in form.runtime_fields() {
+		form.runtime_set_custom_widget_error(*field, None);
+	}
+	{
+		let mut custom_widget_errors = custom_widget_error_fields.borrow_mut();
+		custom_widget_errors.clear();
+		for (field, field_error) in &field_errors {
+			form.runtime_set_custom_widget_error(*field, Some(field_error.clone()));
+			custom_widget_errors.insert(*field, field_error.clone());
+		}
+	}
+	state.field_errors.set(field_errors);
+	state.form_error.set(form_error.clone());
+	state.submit_error.set(form_error);
+	sync_first_error_in_state(state, collection_errors, path_errors);
+}
+
+fn clear_server_error_from_state<Form>(
+	form: &Form,
+	state: &FormState<Form::Field>,
+	custom_widget_error_fields: &Rc<RefCell<HashMap<Form::Field, FieldError>>>,
+	collection_errors: &Signal<HashMap<String, FieldError>>,
+	path_errors: &Signal<HashMap<String, FieldError>>,
+) where
+	Form: FormRuntimeSource,
+{
+	for field in form.runtime_fields() {
+		form.runtime_set_custom_widget_error(*field, None);
+	}
+	custom_widget_error_fields.borrow_mut().clear();
+	state.field_errors.set(HashMap::new());
+	state.form_error.set(None);
+	state.submit_error.set(None);
+	sync_first_error_in_state(state, collection_errors, path_errors);
+}
+
 fn adapt_no_deps_callback<Form, Deps>(
 	callback: SubmitCallback<Form, NoDeps>,
 ) -> SubmitCallback<Form, Deps>
@@ -974,6 +1071,7 @@ where
 			next_collection_item_key: Rc::clone(&handle.next_collection_item_key),
 			signal_sync_suppressed: Rc::clone(&handle.signal_sync_suppressed),
 			_signal_sync_effect: Rc::clone(&handle._signal_sync_effect),
+			_server_error_handler: Rc::clone(&handle._server_error_handler),
 			on_submit_start: None,
 			on_submit_success: None,
 			on_submit_error: None,
@@ -1178,6 +1276,29 @@ where
 			Rc::clone(&signal_sync_suppressed),
 			self.revalidate_on,
 		);
+		let server_error_handler: Rc<dyn Fn(Option<ServerFnError>)> = Rc::new({
+			let form = form.clone();
+			let state = state.clone();
+			let custom_widget_error_fields = Rc::clone(&custom_widget_error_fields);
+			move |error| match error.as_ref() {
+				Some(error) => apply_server_error_to_state(
+					&form,
+					&state,
+					&custom_widget_error_fields,
+					&collection_errors,
+					&path_errors,
+					error,
+				),
+				None => clear_server_error_from_state(
+					&form,
+					&state,
+					&custom_widget_error_fields,
+					&collection_errors,
+					&path_errors,
+				),
+			}
+		});
+		form.runtime_register_server_error_handler(Rc::downgrade(&server_error_handler));
 		UseFormReturn {
 			form,
 			scope,
@@ -1200,6 +1321,7 @@ where
 			next_collection_item_key,
 			signal_sync_suppressed,
 			_signal_sync_effect: signal_sync_effect,
+			_server_error_handler: server_error_handler,
 			on_submit_start: self.on_submit_start,
 			on_submit_success: self.on_submit_success,
 			on_submit_error: self.on_submit_error,
@@ -1234,6 +1356,7 @@ where
 	next_collection_item_key: Rc<Cell<u64>>,
 	signal_sync_suppressed: Rc<Cell<bool>>,
 	_signal_sync_effect: Rc<SignalSyncEffectGuard>,
+	_server_error_handler: Rc<dyn Fn(Option<ServerFnError>)>,
 	on_submit_start: Option<SubmitCallback<Form, Deps>>,
 	on_submit_success: Option<SubmitCallback<Form, Deps>>,
 	on_submit_error: Option<SubmitCallback<Form, Deps>>,
@@ -1267,6 +1390,7 @@ where
 			next_collection_item_key: Rc::clone(&self.next_collection_item_key),
 			signal_sync_suppressed: Rc::clone(&self.signal_sync_suppressed),
 			_signal_sync_effect: Rc::clone(&self._signal_sync_effect),
+			_server_error_handler: Rc::clone(&self._server_error_handler),
 			on_submit_start: self.on_submit_start.clone(),
 			on_submit_success: self.on_submit_success.clone(),
 			on_submit_error: self.on_submit_error.clone(),
@@ -1372,53 +1496,14 @@ where
 
 	/// Routes a server-function error to matching field and form-level error state.
 	pub fn apply_server_error(&self, error: &ServerFnError) {
-		let mut matched_errors = HashMap::<Form::Field, Vec<String>>::new();
-		let mut unmatched_errors = Vec::new();
-
-		for field_error in error.field_errors() {
-			if let Some(field) = self.form.runtime_field_by_name(field_error.field()) {
-				matched_errors
-					.entry(field)
-					.or_default()
-					.push(field_error.message().to_string());
-			} else {
-				unmatched_errors.push(format!(
-					"{}: {}",
-					field_error.field(),
-					field_error.message()
-				));
-			}
-		}
-
-		let field_errors: HashMap<Form::Field, FieldError> = matched_errors
-			.into_iter()
-			.map(|(field, messages)| (field, FieldError::new(messages.join("\n"))))
-			.collect();
-		let form_error = if field_errors.is_empty() || !unmatched_errors.is_empty() {
-			let mut messages = Vec::with_capacity(unmatched_errors.len() + 1);
-			messages.push(error.user_message().to_string());
-			messages.extend(unmatched_errors);
-			Some(messages.join("\n"))
-		} else {
-			None
-		};
-
-		for field in self.form.runtime_fields() {
-			self.form.runtime_set_custom_widget_error(*field, None);
-		}
-		{
-			let mut custom_widget_errors = self.custom_widget_error_fields.borrow_mut();
-			custom_widget_errors.clear();
-			for (field, field_error) in &field_errors {
-				self.form
-					.runtime_set_custom_widget_error(*field, Some(field_error.clone()));
-				custom_widget_errors.insert(*field, field_error.clone());
-			}
-		}
-		self.state.field_errors.set(field_errors);
-		self.state.form_error.set(form_error.clone());
-		self.state.submit_error.set(form_error);
-		self.sync_first_error();
+		apply_server_error_to_state(
+			&self.form,
+			&self.state,
+			&self.custom_widget_error_fields,
+			&self.collection_errors,
+			&self.path_errors,
+			error,
+		);
 	}
 
 	/// Clears all validation and submit errors.

@@ -110,7 +110,7 @@ impl<P: ModelFormPolicy> ModelFormPayload<P> for QuestionModelFormData<P> {
 	fn set_json(
 		&mut self,
 		field: &str,
-		_value: serde_json::Value,
+		value: serde_json::Value,
 	) -> Result<(), ModelFormPayloadError> {
 		if !P::allows(field) {
 			return Err(ModelFormPayloadError::ForbiddenField {
@@ -118,10 +118,22 @@ impl<P: ModelFormPolicy> ModelFormPayload<P> for QuestionModelFormData<P> {
 			});
 		}
 		match field {
-			"title" => Err(ModelFormPayloadError::InvalidValue {
-				field: field.to_owned(),
-				message: "payload mapping rejected title".to_owned(),
-			}),
+			"title" => {
+				let title = serde_json::from_value::<String>(value).map_err(|error| {
+					ModelFormPayloadError::InvalidValue {
+						field: field.to_owned(),
+						message: error.to_string(),
+					}
+				})?;
+				if title == "Rejected by payload mapping" {
+					return Err(ModelFormPayloadError::InvalidValue {
+						field: field.to_owned(),
+						message: "payload mapping rejected title".to_owned(),
+					});
+				}
+				self.title = Some(title);
+				Ok(())
+			}
 			_ => Err(ModelFormPayloadError::UnknownField {
 				field: field.to_owned(),
 			}),
@@ -149,6 +161,22 @@ impl<P: ModelFormPolicy> ModelFormValidatingPayload for QuestionModelFormData<P>
 	type Cleaned = CleanedQuestionModelFormData<P>;
 
 	fn clean_and_validate(self) -> Result<Self::Cleaned, ValidationErrors> {
+		if self.title.as_deref() == Some("Rejected by validation") {
+			let mut errors = ValidationErrors::new();
+			errors.add(
+				"title",
+				reinhardt_core::validators::ValidationError::Custom(
+					"Title is rejected".to_owned(),
+				),
+			);
+			errors.add(
+				"_all",
+				reinhardt_core::validators::ValidationError::Custom(
+					"Question is rejected".to_owned(),
+				),
+			);
+			return Err(errors);
+		}
 		Ok(CleanedQuestionModelFormData(self))
 	}
 }

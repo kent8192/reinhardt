@@ -5,7 +5,7 @@ use reinhardt_core::{
 		ModelFormCleanedPayload, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload,
 		ModelFormPayloadError, ModelFormPolicy, ModelFormSchema, ModelFormValidatingPayload,
 	},
-	validators::ValidationErrors,
+	validators::{ValidationError, ValidationErrors},
 };
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 
@@ -80,35 +80,55 @@ impl UploadFormSchema {
 	}
 }
 
-struct UploadModelFormData<P: ModelFormPolicy>(PhantomData<P>);
+struct UploadModelFormData<P: ModelFormPolicy> {
+	title: Option<String>,
+	_policy: PhantomData<P>,
+}
 
 impl<P: ModelFormPolicy> Default for UploadModelFormData<P> {
 	fn default() -> Self {
-		Self(PhantomData)
+		Self {
+			title: None,
+			_policy: PhantomData,
+		}
 	}
 }
 
 impl<P: ModelFormPolicy> ModelFormPayload<P> for UploadModelFormData<P> {
 	fn supplied_fields(&self) -> Vec<&'static str> {
-		Vec::new()
+		self.title.as_ref().map_or_else(Vec::new, |_| vec!["title"])
 	}
 
 	fn forbidden_fields(&self) -> &[&'static str] {
 		&[]
 	}
 
-	fn get_json(&self, _field: &str) -> Option<serde_json::Value> {
-		None
+	fn get_json(&self, field: &str) -> Option<serde_json::Value> {
+		match field {
+			"title" => self.title.clone().map(serde_json::Value::String),
+			_ => None,
+		}
 	}
 
 	fn set_json(
 		&mut self,
 		field: &str,
-		_value: serde_json::Value,
+		value: serde_json::Value,
 	) -> Result<(), ModelFormPayloadError> {
-		Err(ModelFormPayloadError::UnknownField {
-			field: field.to_owned(),
-		})
+		match field {
+			"title" => {
+				self.title = Some(serde_json::from_value(value).map_err(|error| {
+					ModelFormPayloadError::InvalidValue {
+						field: field.to_owned(),
+						message: error.to_string(),
+					}
+				})?);
+				Ok(())
+			}
+			_ => Err(ModelFormPayloadError::UnknownField {
+				field: field.to_owned(),
+			}),
+		}
 	}
 }
 
@@ -126,6 +146,18 @@ impl<P: ModelFormPolicy> ModelFormValidatingPayload for UploadModelFormData<P> {
 	type Cleaned = CleanedUploadModelFormData<P>;
 
 	fn clean_and_validate(self) -> Result<Self::Cleaned, ValidationErrors> {
+		if self.title.as_deref() == Some("Rejected by validation") {
+			let mut errors = ValidationErrors::new();
+			errors.add(
+				"title",
+				ValidationError::Custom("Title is rejected".to_owned()),
+			);
+			errors.add(
+				"_all",
+				ValidationError::Custom("Upload is rejected".to_owned()),
+			);
+			return Err(errors);
+		}
 		Ok(CleanedUploadModelFormData(self))
 	}
 }

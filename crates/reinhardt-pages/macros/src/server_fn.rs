@@ -3687,9 +3687,19 @@ mod tests {
 		let multipart = generate_server_fn(&multipart_info).to_string();
 		let payload = generate_server_fn(&payload_info).to_string();
 
-		for generated in [multipart, payload] {
-			assert!(generated.contains("state . payload_error_to_validation (error)"));
-			assert!(!generated.contains("validation_with_message (error . to_string"));
+		for (generated, expected_mappings) in [(multipart, 4), (payload, 2)] {
+			assert_eq!(
+				generated
+					.matches("state . payload_error_to_validation (error)")
+					.count(),
+				expected_mappings
+			);
+			assert_eq!(
+				generated
+					.matches("validation_with_message (error . to_string")
+					.count(),
+				0
+			);
 		}
 	}
 

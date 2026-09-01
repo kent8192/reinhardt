@@ -186,6 +186,22 @@ for unselected or unknown fields remain in `form_state().form_error`. Explicit
 field selections provide typed accessors such as `title_field()`; forms using
 `exclude` can resolve a selected field with `form.field("title")`.
 
+Model-form controls retain the raw browser value while the user is editing.
+For example, opt-in trimming does not rewrite the mounted input, and an invalid
+URL remains available for correction. Immediately before every generated
+submission, Pages builds an owned snapshot in generated schema order, applies
+field conversion and normalization, and runs the generated synchronous
+validation pipeline. The normalized raw payload is sent only when validation
+succeeds; the editable control state remains unchanged.
+
+Snapshot validation failures become the same structured `ServerFnError` used
+for server responses. A recognized selected field is routed to
+`get_field_state(field).error`; `_all`, excluded, and unknown field names are
+routed to `form_state().form_error`. Automatic form submission stops before
+the server-function adapter is called. The payload sent after successful
+client-side validation is still an ordinary raw payload, so native server code
+must independently call `clean_and_validate()` at its trust boundary.
+
 ## Excluded fields
 
 Use `exclude: [...]` when nearly every editable model field belongs in the

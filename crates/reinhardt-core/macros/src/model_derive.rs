@@ -48,6 +48,27 @@ fn ident_to_wire_name(ident: &Ident) -> String {
 	ident.unraw().to_string()
 }
 
+const MODEL_FORM_CSRF_FIELD_NAME: &str = "csrfmiddlewaretoken";
+const MODEL_FORM_RESERVED_CONTROL_PREFIXES: &[&str] = &[
+	"__reinhardt_checkbox_",
+	"__reinhardt_color_",
+	"__reinhardt_range_",
+	"__reinhardt_defaulted_",
+];
+
+/// Returns whether a field name is consumed by model-form HTML controls.
+fn is_model_form_reserved_control_name(field_name: &str) -> bool {
+	is_model_form_csrf_field_name(field_name)
+		|| MODEL_FORM_RESERVED_CONTROL_PREFIXES
+			.iter()
+			.any(|prefix| field_name.starts_with(prefix))
+}
+
+/// Returns whether a field name is reserved for the generated CSRF control.
+fn is_model_form_csrf_field_name(field_name: &str) -> bool {
+	field_name == MODEL_FORM_CSRF_FIELD_NAME
+}
+
 use crate::crate_paths::{
 	get_linkme_crate, get_reinhardt_apps_crate, get_reinhardt_core_crate, get_reinhardt_crate,
 	get_reinhardt_db_crate, get_reinhardt_forms_crate, get_reinhardt_migrations_crate,
@@ -3198,11 +3219,13 @@ fn generate_model_form_support(
 		.collect();
 	if let Some(field) = editable_fields
 		.iter()
-		.find(|field| field.name == "csrfmiddlewaretoken")
+		.find(|field| is_model_form_csrf_field_name(&ident_to_wire_name(&field.name)))
 	{
 		return Err(syn::Error::new_spanned(
 			&field.name,
-			"model-backed forms reserve `csrfmiddlewaretoken` for the CSRF control",
+			format!(
+				"model-backed forms reserve `{MODEL_FORM_CSRF_FIELD_NAME}` for the CSRF control"
+			),
 		));
 	}
 	let field_count = editable_fields.len();
@@ -3234,10 +3257,7 @@ fn generate_model_form_support(
 			"_policy",
 		]
 		.contains(&field_name.as_str())
-			|| field_name.starts_with("__reinhardt_checkbox_")
-			|| field_name.starts_with("__reinhardt_color_")
-			|| field_name.starts_with("__reinhardt_range_")
-			|| field_name.starts_with("__reinhardt_defaulted_")
+			|| is_model_form_reserved_control_name(&field_name)
 			|| [
 				"empty",
 				"forbidden_fields",
@@ -4204,6 +4224,23 @@ pub(crate) fn generate_named_model_form_contract(
 						|| is_many_to_many_field_type(&field.ty))
 			})
 		});
+		let declared_reserved_control = is_model_form_reserved_control_name(&selected_string)
+			&& lowered
+				.field_infos
+				.iter()
+				.any(|field| field.name == *selected_name);
+		if declared_reserved_control {
+			let message = if is_model_form_csrf_field_name(&selected_string) {
+				format!(
+					"named model form field `{selected_string}` is reserved for the CSRF control"
+				)
+			} else {
+				format!(
+					"named model form field `{selected_string}` collides with generated model-form API"
+				)
+			};
+			return Err(syn::Error::new_spanned(selected_name, message));
+		}
 		if relation_name.is_some() {
 			return Err(syn::Error::new_spanned(
 				selected_name,
@@ -13305,7 +13342,9 @@ mod tests {
 			"supplied_fields",
 			"__reinhardt_checkbox_enabled",
 			"__reinhardt_color_accent",
+			"__reinhardt_range_amount",
 			"__reinhardt_defaulted_summary",
+			"csrfmiddlewaretoken",
 		] {
 			let field_name = Ident::new(field_name, proc_macro2::Span::call_site());
 			let input = quote! {
@@ -13320,10 +13359,13 @@ mod tests {
 
 			let error = model_derive_impl(syn::parse2(input).unwrap())
 				.expect_err("payload API names must not be shadowed by generated accessors");
+			let expected_message = if field_name == "csrfmiddlewaretoken" {
+				"reserve `csrfmiddlewaretoken` for the CSRF control"
+			} else {
+				"collides with generated model-form API"
+			};
 			assert!(
-				error
-					.to_string()
-					.contains("collides with generated model-form API"),
+				error.to_string().contains(expected_message),
 				"field `{field_name}` must be rejected: {error}",
 			);
 		}

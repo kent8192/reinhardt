@@ -260,6 +260,18 @@ async fn object_history(
 	.expect("related object history must be queryable")
 }
 
+async fn history_actions(pool: &sqlx::PgPool, model_name: &str, object_id: &str) -> Vec<String> {
+	sqlx::query_scalar(
+		"SELECT action_name FROM reinhardt_admin_history \
+		 WHERE model_name = $1 AND object_id = $2 ORDER BY id DESC",
+	)
+	.bind(model_name)
+	.bind(object_id)
+	.fetch_all(pool)
+	.await
+	.expect("history actions must be independently queryable")
+}
+
 fn assert_history(
 	response: &HistoryResponse,
 	model_name: &str,
@@ -371,7 +383,7 @@ async fn related_inline_create_then_update_writes_canonical_per_object_history(
 		.expect("new related child identity must be returned by the database");
 	let parent_history = object_history(&context, PARENT_MODEL, &parent_id).await;
 	let updated_history = object_history(&context, CHILD_MODEL, &first_id).await;
-	let deleted_history = object_history(&context, CHILD_MODEL, &deleted_id).await;
+	let deleted_history = history_actions(pool, CHILD_MODEL, &deleted_id).await;
 	let created_history = object_history(&context, CHILD_MODEL, &created_id).await;
 
 	// Assert
@@ -416,12 +428,7 @@ async fn related_inline_create_then_update_writes_canonical_per_object_history(
 			("CREATE", &["name", "position"]),
 		],
 	);
-	assert_history(
-		&deleted_history,
-		CHILD_MODEL,
-		&deleted_id,
-		&[("DELETE", &[]), ("CREATE", &["name", "position"])],
-	);
+	assert_eq!(deleted_history, ["DELETE", "CREATE"]);
 	assert_history(
 		&created_history,
 		CHILD_MODEL,

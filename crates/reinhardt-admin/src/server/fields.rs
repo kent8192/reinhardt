@@ -126,13 +126,13 @@ pub async fn get_fields(
 			.await
 			.map_server_fn_error()?;
 		if let Some(values) = values.as_mut() {
-			translate_physical_field_names_to_logical(table_name, values).map_server_fn_error()?;
 			let allowed_fields = form
 				.fields
 				.iter()
 				.map(|field| field.name.as_str())
 				.collect::<Vec<_>>();
 			retain_allowed_fields(values, &allowed_fields);
+			translate_physical_field_names_to_logical(table_name, values).map_server_fn_error()?;
 		}
 		values
 	} else {

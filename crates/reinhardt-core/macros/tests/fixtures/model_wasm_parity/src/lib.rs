@@ -42,6 +42,8 @@ pub struct Cluster {
 
 	#[field(url = true, max_length = 2048, null = true)]
 	pub api_url: Option<String>,
+
+	pub tags: Vec<String>,
 }
 
 #[model(

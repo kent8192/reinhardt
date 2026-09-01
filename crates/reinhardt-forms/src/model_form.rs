@@ -42,17 +42,34 @@ pub trait FormModel: Model + ModelFormPrimaryKeyFields + Clone + Send + Sync {
 	fn build_from_payload<P: ModelFormPolicy>(data: &Self::Data<P>)
 	-> Result<Self, ModelFormError>;
 
-	/// Builds a validation-only candidate while allowing trusted deferred fields.
+	/// Builds a validation-only candidate while allowing one trusted deferred field.
 	///
 	/// Inline formsets use this before a newly created parent has a generated
-	/// primary key. Implementations must use deferred fields only to construct
+	/// primary key. Implementations must use the deferred field only to construct
 	/// the candidate for validation; persistence must still require its real value.
+	fn build_from_payload_with_deferred_required_field<P: ModelFormPolicy>(
+		data: &Self::Data<P>,
+		deferred_field: &str,
+	) -> Result<Self, ModelFormError> {
+		let _ = deferred_field;
+		Self::build_from_payload(data)
+	}
+
+	/// Builds a validation-only candidate while allowing trusted deferred fields.
+	///
+	/// The compatibility default delegates a single field to
+	/// [`Self::build_from_payload_with_deferred_required_field`]. Implementations
+	/// that support multiple deferred fields must override this method.
 	fn build_from_payload_with_deferred_required_fields<P: ModelFormPolicy>(
 		data: &Self::Data<P>,
 		deferred_fields: &[&str],
 	) -> Result<Self, ModelFormError> {
-		let _ = deferred_fields;
-		Self::build_from_payload(data)
+		match deferred_fields {
+			[deferred_field] => {
+				Self::build_from_payload_with_deferred_required_field(data, deferred_field)
+			}
+			_ => Self::build_from_payload(data),
+		}
 	}
 
 	/// Applies supplied payload values to an existing candidate.
@@ -1071,6 +1088,21 @@ mod tests {
 			error,
 			ModelFormError::MissingModelField { field: "owner_id" }
 		));
+	}
+
+	#[test]
+	fn generated_model_form_keeps_the_single_deferred_field_bridge() {
+		let mut data = QuestionModelFormData::<QuestionPolicy>::empty();
+		data.set_title("Deferred owner".to_owned())
+			.expect("title is permitted by the test policy");
+
+		let built = <Question as FormModel>::build_from_payload_with_deferred_required_field(
+			&data, "owner_id",
+		)
+		.expect("the public single-field bridge should remain callable");
+
+		assert_eq!(built.title, "Deferred owner");
+		assert_eq!(built.owner_id, 0);
 	}
 
 	#[test]

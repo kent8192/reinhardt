@@ -477,7 +477,6 @@ struct ModelConfig {
 	/// Named target-neutral model-form contract configuration.
 	///
 	/// Retained separately because named output uses the declared type and ordered fields.
-	#[allow(dead_code)]
 	named_form: Option<NamedModelFormConfig>,
 	/// Whether the original model derives `serde::Serialize`.
 	serde_serialize: bool,
@@ -3191,6 +3190,7 @@ fn generate_model_form_support(
 	struct_name: &Ident,
 	struct_vis: &syn::Visibility,
 	field_infos: &[FieldInfo],
+	selected_fields: Option<&[Ident]>,
 ) -> Result<TokenStream> {
 	let core_crate = get_reinhardt_core_crate();
 	let forms_crate = get_reinhardt_forms_crate();
@@ -3213,9 +3213,21 @@ fn generate_model_form_support(
 		&format!("{}_FORM_FIELDS", struct_name.to_string().to_uppercase()),
 		struct_name.span(),
 	);
+	let selected_field_names = selected_fields.map(|fields| {
+		fields
+			.iter()
+			.map(ident_to_wire_name)
+			.collect::<HashSet<_>>()
+	});
+	let is_selected_editable = |field: &FieldInfo| {
+		is_model_form_editable(field, field_infos)
+			&& selected_field_names
+				.as_ref()
+				.is_none_or(|fields| fields.contains(&ident_to_wire_name(&field.name)))
+	};
 	let editable_fields: Vec<_> = field_infos
 		.iter()
-		.filter(|field| is_model_form_editable(field, field_infos))
+		.filter(|field| is_selected_editable(field))
 		.collect();
 	if let Some(field) = editable_fields
 		.iter()
@@ -3524,7 +3536,7 @@ fn generate_model_form_support(
 	let missing_noneditable_field = field_infos
 		.iter()
 		.find(|field| {
-			if is_model_form_editable(field, field_infos)
+			if is_selected_editable(field)
 				|| field.config.skip
 				|| is_relationship_field_type(&field.ty)
 				|| model_form_declared_default(field).is_some()
@@ -3541,7 +3553,7 @@ fn generate_model_form_support(
 		.map(|field| {
 			let field_name = &field.name;
 			let field_literal = LitStr::new(&ident_to_wire_name(field_name), field.name.span());
-			if is_model_form_editable(field, field_infos) {
+			if is_selected_editable(field) {
 				let (is_optional, _) = extract_option_type(&field.ty);
 				let relation_is_nullable = model_form_relation_id_is_nullable(field, field_infos);
 				let nullable = field
@@ -3604,7 +3616,7 @@ fn generate_model_form_support(
 		.map(|field| {
 			let field_name = &field.name;
 			let field_literal = LitStr::new(&ident_to_wire_name(field_name), field.name.span());
-			if is_model_form_editable(field, field_infos) {
+			if is_selected_editable(field) {
 				let (is_optional, _) = extract_option_type(&field.ty);
 				let relation_is_nullable = model_form_relation_id_is_nullable(field, field_infos);
 				let nullable = field
@@ -3885,6 +3897,13 @@ fn generate_model_form_support(
 				data: &Self::Data<P>,
 			) -> ::core::result::Result<Self, #forms_crate::model_form::ModelFormError> {
 				#build_from_payload_body
+			}
+
+			fn build_from_payload_with_deferred_required_field<P: #core_crate::model_form::ModelFormPolicy>(
+				data: &Self::Data<P>,
+				deferred_field: &str,
+			) -> ::core::result::Result<Self, #forms_crate::model_form::ModelFormError> {
+				Self::build_from_payload_with_deferred_required_fields(data, &[deferred_field])
 			}
 
 			fn build_from_payload_with_deferred_required_fields<P: #core_crate::model_form::ModelFormPolicy>(
@@ -4336,7 +4355,11 @@ pub(crate) fn generate_named_model_form_contract(
 			"fields",
 			"model_form",
 			"clone",
+			"clone_from",
 			"default",
+			"eq",
+			"fmt",
+			"ne",
 			"supplied_fields",
 			"forbidden_fields",
 			"get_json",
@@ -6778,7 +6801,11 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	let fixture_validation =
 		generate_fixture_validation(struct_name, generics, &field_infos, &fk_field_infos);
 	let model_form_output = if model_config.form {
-		generate_model_form_support(struct_name, struct_vis, &field_infos)?
+		let selected_fields = model_config
+			.named_form
+			.as_ref()
+			.map(|form| form.fields.as_slice());
+		generate_model_form_support(struct_name, struct_vis, &field_infos, selected_fields)?
 	} else {
 		quote! {}
 	};
@@ -13388,28 +13415,33 @@ mod tests {
 	}
 
 	#[test]
-	fn test_named_model_form_rejects_clone_accessor_collision() {
-		let args = quote! {
-			app_label = "fixture_tests",
-			table_name = "fixture_models",
-			form(name = FixtureCreateForm, fields(clone))
-		};
-		let input = quote! {
-			struct FixtureModel {
-				#[field(primary_key = true)]
-				id: i64,
-				#[field(max_length = 64)]
-				clone: String,
-			}
-		};
+	fn test_named_model_form_rejects_derived_trait_accessor_collisions() {
+		for field_name in ["clone", "clone_from", "eq", "ne", "fmt"] {
+			let field = Ident::new(field_name, Span::call_site());
+			let args = quote! {
+				app_label = "fixture_tests",
+				table_name = "fixture_models",
+				form(name = FixtureCreateForm, fields(#field))
+			};
+			let input = quote! {
+				struct FixtureModel {
+					#[field(primary_key = true)]
+					id: i64,
+					#[field(max_length = 64)]
+					#field: String,
+				}
+			};
 
-		let error = crate::model_attribute::model_attribute_impl(args, syn::parse2(input).unwrap())
-			.expect_err("named contract accessors must not shadow Clone::clone");
+			let error =
+				crate::model_attribute::model_attribute_impl(args, syn::parse2(input).unwrap())
+					.expect_err("named contract accessors must not shadow derived trait methods");
 
-		assert_eq!(
-			error.to_string(),
-			"named model form field name collides with generated contract API"
-		);
+			assert_eq!(
+				error.to_string(),
+				"named model form field name collides with generated contract API",
+				"field `{field_name}` must be reserved",
+			);
+		}
 	}
 
 	#[test]

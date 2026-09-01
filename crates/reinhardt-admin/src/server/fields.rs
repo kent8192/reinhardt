@@ -132,12 +132,9 @@ pub async fn get_fields(
 				.iter()
 				.map(|field| field.name.clone())
 				.collect::<Vec<_>>();
-			allowed_fields.extend(form.aliases.iter().filter_map(|(logical, physical)| {
-				form.fields
+			allowed_fields.extend(form.aliases.iter().filter(|&(logical, physical)| form.fields
 					.iter()
-					.any(|field| field.name == *physical)
-					.then(|| logical.clone())
-			}));
+					.any(|field| field.name == *physical)).map(|(logical, physical)| logical.clone()));
 			retain_allowed_fields(values, &allowed_fields);
 		}
 		values

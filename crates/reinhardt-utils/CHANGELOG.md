@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-utils@v0.4.0-alpha.12...reinhardt-utils@v0.4.0-alpha.13) - 2026-09-01
+
+### Fixed
+
+- *(utils)* confine local storage paths
+- *(utils)* allow benign double-dot filenames
+- *(storage)* close local path races
+- *(storage)* retain local root capability
+- *(utils)* gate async filesystem import
+- *(utils)* qualify native filesystem test helper
+
 ## [0.4.0-alpha.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-utils@v0.4.0-alpha.10...reinhardt-utils@v0.4.0-alpha.11) - 2026-08-27
 
 ### Documentation

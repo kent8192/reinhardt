@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.4.0-alpha.12...reinhardt-pages@v0.4.0-alpha.13) - 2026-09-01
+
+### Fixed
+
+- *(pages)* reject executable elements in all renderers
+- *(pages)* enforce safe rendering boundaries
+- *(core)* validate batch boolean attributes
+
 ## [0.4.0-alpha.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.4.0-alpha.11...reinhardt-pages@v0.4.0-alpha.12) - 2026-08-30
 
 ### Added

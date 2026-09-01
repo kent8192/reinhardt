@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.4.0-alpha.12...reinhardt-admin@v0.4.0-alpha.13) - 2026-09-01
+
+### Fixed
+
+- *(admin)* project response fields through admin policy
+- *(admin)* close response projection gaps
+- *(admin)* project response fields exactly
+- *(admin)* separate list routing identifiers
+- *(admin)* merge current develop into advisory fix
+
 ## [0.4.0-alpha.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.4.0-alpha.10...reinhardt-admin@v0.4.0-alpha.11) - 2026-08-27
 
 ### Documentation

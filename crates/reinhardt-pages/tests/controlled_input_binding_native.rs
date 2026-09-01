@@ -1155,6 +1155,36 @@ fn native_text_binding_applies_browser_value_sanitization(reactive_scope: Reacti
 }
 
 #[rstest]
+#[case("date", "2026-02-28", "2026-02-30")]
+#[case("datetime-local", "2026-02-28T10:30", "2026-02-30T10:30")]
+#[case("month", "2026-02", "2026-13")]
+#[case("week", "2025-W52", "2025-W53")]
+#[case("time", "10:30", "24:00")]
+fn native_temporal_binding_sanitizes_invalid_values(
+	#[case] input_type: &str,
+	#[case] initial: &str,
+	#[case] edited: &str,
+	reactive_scope: ReactiveScope,
+) {
+	// Arrange
+	let value = signal_in_scope(&reactive_scope, initial.to_owned());
+	let screen = render(
+		PageElement::new("input")
+			.attr("aria-label", "Temporal target")
+			.attr("type", input_type.to_owned())
+			.control_binding(ControlBinding::text(value.clone())),
+	);
+	let input = screen.get_by_label("Temporal target");
+
+	// Act
+	input.input(edited);
+
+	// Assert
+	assert_eq!(value.get(), "");
+	assert_eq!(input.value().as_deref(), Some(""));
+}
+
+#[rstest]
 fn native_range_binding_applies_declared_step(reactive_scope: ReactiveScope) {
 	// Arrange
 	let value = signal_in_scope(&reactive_scope, 3_i32);

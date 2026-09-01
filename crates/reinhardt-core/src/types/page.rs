@@ -1188,7 +1188,14 @@ impl Page {
 				output.push_str(el.tag_name());
 				let binding = el.bound_control();
 				let binding_value = binding.map(ControlBinding::read);
-				let projected_input_value =
+				let omits_bound_password_value = el.tag_name().eq_ignore_ascii_case("input")
+					&& el.attrs().iter().any(|(name, value)| {
+						name.eq_ignore_ascii_case("type") && value.eq_ignore_ascii_case("password")
+					}) && binding
+					.is_some_and(|binding| binding.kind() == ControlKind::Text);
+				let projected_input_value = if omits_bound_password_value {
+					None
+				} else {
 					binding.and_then(|binding| match (binding.kind(), binding_value.as_ref()) {
 						(
 							ControlKind::Text | ControlKind::Number,
@@ -1196,7 +1203,8 @@ impl Page {
 						) => Some(value.as_str()),
 						(ControlKind::Radio, _) => binding.radio_value(),
 						_ => None,
-					});
+					})
+				};
 				let projects_value =
 					el.tag_name().eq_ignore_ascii_case("input") && projected_input_value.is_some();
 				let projects_checked = matches!(binding_value, Some(ControlValue::Checked(true)));
@@ -1213,7 +1221,8 @@ impl Page {
 						.any(|attribute| attribute.name().eq_ignore_ascii_case(name));
 					// Skip boolean attributes with falsy values (empty, "false", "0")
 					let name_str: &str = name.as_ref();
-					if (name_str.eq_ignore_ascii_case("value") && projects_value)
+					if (name_str.eq_ignore_ascii_case("value")
+						&& (projects_value || omits_bound_password_value))
 						|| (name_str.eq_ignore_ascii_case("checked") && binding.is_some())
 						|| (name_str.eq_ignore_ascii_case("selected") && selection.is_some())
 						|| (is_boolean_attr(name_str) && !is_boolean_attr_truthy(value))
@@ -1230,7 +1239,8 @@ impl Page {
 				}
 				for (index, attribute) in el.reactive_attrs().iter().enumerate() {
 					let name = attribute.name();
-					if (name.eq_ignore_ascii_case("value") && projects_value)
+					if (name.eq_ignore_ascii_case("value")
+						&& (projects_value || omits_bound_password_value))
 						|| (name.eq_ignore_ascii_case("checked") && binding.is_some())
 						|| (name.eq_ignore_ascii_case("selected") && selection.is_some())
 					{
@@ -1965,6 +1975,19 @@ mod tests {
 				"<input type=\"text\" value=\"current\" />"
 			);
 			assert_eq!(textarea.render_to_string(), "<textarea>current</textarea>");
+		});
+	}
+
+	#[test]
+	fn render_to_string_omits_bound_password_values() {
+		ReactiveScope::run(|| {
+			let input = PageElement::new("input")
+				.attr("type", "password")
+				.attr("value", "stale")
+				.control_binding(ControlBinding::text(Signal::new("secret".to_owned())))
+				.into_page();
+
+			assert_eq!(input.render_to_string(), "<input type=\"password\" />");
 		});
 	}
 

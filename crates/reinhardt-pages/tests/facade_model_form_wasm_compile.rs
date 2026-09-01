@@ -2,6 +2,7 @@
 
 use std::path::Path;
 use std::process::Command;
+use std::process::Output;
 
 use tempfile::TempDir;
 
@@ -33,6 +34,23 @@ fn facade_only_named_model_form_compiles_for_wasm() {
 		.env_remove("RUSTC_WRAPPER")
 		.output()
 		.expect("compile facade-only WASM fixture");
+	let output = if output.status.success() || !offline_dependency_resolution_failed(&output) {
+		output
+	} else {
+		Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
+			.arg("check")
+			.arg("--manifest-path")
+			.arg(&fixture_manifest)
+			.arg("--target")
+			.arg("wasm32-unknown-unknown")
+			.arg("--target-dir")
+			.arg(target_dir.path())
+			.env_remove("CARGO_BUILD_BUILD_DIR")
+			.env_remove("CARGO_TARGET_DIR")
+			.env_remove("RUSTC_WRAPPER")
+			.output()
+			.expect("compile facade-only WASM fixture without offline mode")
+	};
 
 	assert!(
 		output.status.success(),
@@ -40,4 +58,12 @@ fn facade_only_named_model_form_compiles_for_wasm() {
 		String::from_utf8_lossy(&output.stdout),
 		String::from_utf8_lossy(&output.stderr),
 	);
+}
+
+fn offline_dependency_resolution_failed(output: &Output) -> bool {
+	let stderr = String::from_utf8_lossy(&output.stderr);
+	stderr.contains("--offline")
+		|| stderr.contains("no matching package named")
+		|| stderr.contains("failed to download")
+		|| stderr.contains("candidate versions found which didn't match")
 }

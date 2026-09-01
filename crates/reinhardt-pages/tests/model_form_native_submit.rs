@@ -235,10 +235,20 @@ fn generated_runtime_setter_rejects_descriptor_type_mismatch_before_storage() {
 		// Act
 		let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
 			runtime.set_value(form.title_field(), 42_i64);
-		}));
+		}))
+		.expect_err("a descriptor type mismatch must panic before storage");
+		let panic_message = panic
+			.downcast_ref::<String>()
+			.map(String::as_str)
+			.or_else(|| panic.downcast_ref::<&str>().copied());
 
 		// Assert
-		assert!(panic.is_err());
+		assert_eq!(
+			panic_message,
+			Some(
+				"model form field \"title\" rejected value: invalid value for model form field 'title': expected a string"
+			)
+		);
 		assert!(!runtime.get_field_state(form.title_field()).is_dirty);
 		assert_eq!(form.value("title"), None);
 	});

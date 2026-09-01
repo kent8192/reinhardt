@@ -93,6 +93,27 @@ struct EmailRecord {
 	email: String,
 }
 
+fn reject_required_scalar_candidate<P: ModelFormPolicy>(
+	_payload: &CleanedRequiredScalarRecordModelFormData<P>,
+) -> Result<(), ValidationErrors> {
+	let mut errors = ValidationErrors::new();
+	errors.add(
+		"_all",
+		ValidationError::Custom("required scalar callback must not run".to_owned()),
+	);
+	Err(errors)
+}
+
+#[model(app_label = "forms_test", form = true, info = false)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[form(validate = reject_required_scalar_candidate)]
+struct RequiredScalarRecord {
+	#[field(primary_key = true)]
+	id: Option<i64>,
+	enabled: bool,
+	replicas: i64,
+}
+
 struct ClusterNameOnlyPolicy;
 
 impl ModelFormPolicy for ClusterNameOnlyPolicy {
@@ -237,6 +258,15 @@ async fn update_cluster(
 		.map_err(|error| ServerFnError::application(error.to_string()))
 }
 
+async fn create_required_scalar_record(
+	payload: RequiredScalarRecordModelFormData<AllEditableModelFields>,
+) -> Result<RequiredScalarRecord, ServerFnError> {
+	payload
+		.clean_and_validate()?
+		.into_model()
+		.map_err(|error| ServerFnError::application(error.to_string()))
+}
+
 #[rstest]
 fn generated_cluster_pipeline_normalizes_before_validation() {
 	// Arrange
@@ -289,7 +319,6 @@ fn generated_cluster_field_validation_observes_normalized_values(
 		validation_error_tuples(&errors),
 		vec![(field.to_owned(), message.to_owned())]
 	);
-	assert!(!errors.field_errors().contains_key("_all"));
 }
 
 #[rstest]
@@ -317,13 +346,15 @@ fn generated_cluster_accumulates_field_errors_in_schema_order() {
 
 	// Assert
 	assert_eq!(
-		errors
-			.ordered_field_errors()
-			.map(|(field, _)| field)
-			.collect::<Vec<_>>(),
-		["name", "api_url"]
+		validation_error_tuples(&errors),
+		vec![
+			(
+				"name".to_owned(),
+				"Ensure this value has at most 63 characters (it has 64)".to_owned(),
+			),
+			("api_url".to_owned(), "Enter a valid URL".to_owned()),
+		]
 	);
-	assert!(!errors.field_errors().contains_key("_all"));
 }
 
 #[rstest]
@@ -463,6 +494,59 @@ async fn direct_create_rejects_omitted_required_fields_before_callbacks() {
 		MISSING_CLUSTER_ASYNC_VALIDATOR_CALLS.load(Ordering::SeqCst),
 		0
 	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn direct_create_reports_canonical_required_scalar_errors_before_the_callback() {
+	// Arrange
+	let payload = RequiredScalarRecordModelFormData::<AllEditableModelFields>::empty();
+
+	// Act
+	let error = create_required_scalar_record(payload)
+		.await
+		.expect_err("omitted required scalars must fail before the callback");
+
+	// Assert
+	assert_eq!(error.kind(), ServerFnErrorKind::Validation);
+	assert_eq!(error.status(), Some(422));
+	assert_eq!(
+		error
+			.field_errors()
+			.iter()
+			.map(|error| (error.field().to_owned(), error.message().to_owned()))
+			.collect::<Vec<_>>(),
+		vec![
+			("enabled".to_owned(), "This field is required.".to_owned()),
+			("replicas".to_owned(), "This field is required.".to_owned()),
+		]
+	);
+}
+
+#[rstest]
+#[case(
+	serde_json::json!({"enabled": null, "replicas": 1}),
+	"invalid type: null, expected a boolean"
+)]
+#[case(
+	serde_json::json!({"enabled": true, "replicas": null}),
+	"invalid type: null, expected i64"
+)]
+fn generated_nonnullable_scalar_nulls_fail_during_wire_decode(
+	#[case] wire: serde_json::Value,
+	#[case] expected: &str,
+) {
+	// Arrange and Act
+	let error = match serde_json::from_value::<
+		RequiredScalarRecordModelFormData<AllEditableModelFields>,
+	>(wire)
+	{
+		Ok(_) => panic!("non-nullable scalar null must fail during payload decoding"),
+		Err(error) => error,
+	};
+
+	// Assert
+	assert_eq!(error.to_string(), expected);
 }
 
 #[rstest]

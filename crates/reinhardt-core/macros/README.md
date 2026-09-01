@@ -228,9 +228,10 @@ Provides compile-time code generation for common patterns.
     generated fields otherwise preserve surrounding whitespace
   - `#[field(...)]` remains database and model metadata; form-only behavior
     belongs in `#[form(...)]`
-  - Native code consumes raw payloads with `clean_and_validate()`, then uses
-    cleaned `into_model(context)` for creation or `apply_to(existing)` for an
-    update
+  - Native create code consumes raw payloads with `clean_and_validate()`, then
+    uses cleaned `into_model(context)`; update code uses
+    `clean_and_validate_for_update(&existing)` before `apply_to(existing)` so
+    synchronous cross-field validation observes the post-merge candidate
 
 - **`#[derive(Model)]`** - Derive macro for automatic Model implementation
   - Implements `Model` trait

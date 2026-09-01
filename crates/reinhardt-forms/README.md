@@ -111,8 +111,9 @@ use reinhardt::forms::{Form, Field, CharField, IntegerField};
   - Explicit `#[model(form = true)]` opt-in
   - Generated `{Model}FormSchema` metadata and
     `{Model}ModelFormData<P>` typed payload
-  - Generated `Cleaned{Model}ModelFormData<P>` after consuming
-    `clean_and_validate()`
+  - Generated `Cleaned{Model}ModelFormData<P>` after consuming strict create
+    validation with `clean_and_validate()` or post-merge update validation with
+    `clean_and_validate_for_update(&existing)`
   - `#[form(trim)]` opt-in normalization for generated text, email, and URL
     fields
   - `#[form(validate = path)]` synchronous cross-field validation
@@ -377,13 +378,19 @@ on the server, run application-owned async checks on normalized values, and
 then construct or update the model:
 
 ```rust,ignore
+use reinhardt_core::model_form::{
+    ModelFormUpdatingPayload,
+    ModelFormValidatingPayload,
+};
+
 let cleaned = payload.clean_and_validate()?;
 ensure_cluster_name_available(&cleaned).await?;
 let cluster = cleaned.into_model(
     ClusterModelFormServerContext::new().organization_id(organization_id),
 )?;
 
-let cleaned = update_payload.clean_and_validate()?;
+let cleaned = update_payload.clean_and_validate_for_update(&existing)?;
+ensure_cluster_name_available(&cleaned).await?;
 let updated = cleaned.apply_to(existing)?;
 ```
 
@@ -391,6 +398,13 @@ Required server-owned create values enter through the generated typed context,
 so an incomplete context cannot call `into_model`. Async validation remains an
 explicit application step after cleaning. Database failures remain structured
 persistence errors; they are not validation errors.
+
+Create validation requires every public field needed to construct the model.
+Update validation instead merges omitted fields from `existing` while running
+generated field and synchronous `#[form(validate = path)]` checks. The returned
+cleaned payload stays partial, so `apply_to(existing)` changes only fields that
+were supplied. Explicit nullable `null` values remain clears rather than being
+replaced from the existing model.
 
 Generated string-like fields preserve surrounding whitespace unless their
 model field has `#[form(trim)]`. This does not change the defaults of manually

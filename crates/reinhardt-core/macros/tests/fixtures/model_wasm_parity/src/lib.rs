@@ -160,6 +160,34 @@ struct Cluster {
 	notes: String,
 }
 
+fn reject_required_scalar_candidate<
+	P: reinhardt_core::model_form::ModelFormPolicy,
+>(
+	_payload: &CleanedRequiredScalarRecordModelFormData<P>,
+) -> Result<(), ValidationErrors> {
+	let mut errors = ValidationErrors::new();
+	errors.add(
+		"_all",
+		ValidationError::Custom("required scalar callback must not run".to_owned()),
+	);
+	Err(errors)
+}
+
+#[model(
+	app_label = "required_scalars",
+	table_name = "required_scalar_records",
+	form = true,
+	info = false
+)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[form(validate = reject_required_scalar_candidate)]
+struct RequiredScalarRecord {
+	#[field(primary_key = true)]
+	id: Option<i64>,
+	enabled: bool,
+	replicas: i64,
+}
+
 struct ClusterPolicy;
 
 impl reinhardt_core::model_form::ModelFormPolicy for ClusterPolicy {
@@ -821,6 +849,25 @@ mod tests {
 				"_all".to_owned(),
 				"Name and API URL must differ".to_owned(),
 			)]
+		);
+	}
+
+	#[rstest]
+	#[wasm_bindgen_test]
+	fn generated_required_scalars_use_canonical_create_errors_in_wasm_runtime() {
+		let payload =
+			RequiredScalarRecordModelFormData::<AllEditableModelFields>::empty();
+		let errors = match payload.clean_and_validate() {
+			Ok(_) => panic!("omitted required scalars must fail before the callback"),
+			Err(errors) => errors,
+		};
+
+		assert_eq!(
+			error_tuples(&errors),
+			vec![
+				("enabled".to_owned(), "This field is required.".to_owned()),
+				("replicas".to_owned(), "This field is required.".to_owned()),
+			]
 		);
 	}
 

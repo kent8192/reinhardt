@@ -556,6 +556,12 @@ mod tests {
 				ModelFormFieldKind::Url { .. } => json!("https://example.com"),
 				_ => unreachable!("only textual field kinds are included"),
 			};
+			let expected_untrimmed_error = match kind {
+				ModelFormFieldKind::Email { .. } => Some("Enter a valid email address"),
+				ModelFormFieldKind::Url { .. } => Some("Enter a valid URL"),
+				ModelFormFieldKind::Text { .. } => None,
+				_ => unreachable!("only textual field kinds are included"),
+			};
 			let descriptor = |trim| ModelFormFieldDescriptor {
 				name: "value",
 				kind,
@@ -570,11 +576,11 @@ mod tests {
 			let untrimmed = create_form_field(&descriptor(false));
 			let trimmed = create_form_field(&descriptor(true));
 
-			if matches!(
-				kind,
-				ModelFormFieldKind::Email { .. } | ModelFormFieldKind::Url { .. }
-			) {
-				assert!(untrimmed.clean(Some(&value)).is_err());
+			if let Some(message) = expected_untrimmed_error {
+				assert_eq!(
+					untrimmed.clean(Some(&value)).unwrap_err().to_string(),
+					message
+				);
 			} else {
 				assert_eq!(untrimmed.clean(Some(&value)).unwrap(), value);
 			}

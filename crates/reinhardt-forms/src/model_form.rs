@@ -13,7 +13,7 @@ use crate::form::ALL_FIELDS_KEY;
 use reinhardt_core::model_form::{
 	AllEditableModelFields, ModelFormCleanedPayload, ModelFormFieldKind, ModelFormPayload,
 	ModelFormPayloadError, ModelFormPolicy, ModelFormPrimaryKeyFields, ModelFormSchema,
-	ModelFormUpdatingPayload, ModelFormValidatingPayload,
+	ModelFormValidatingPayload,
 };
 use reinhardt_core::validators::{ValidationError, ValidationErrors};
 use reinhardt_db::orm::transaction::AtomicTransactionOutcome;
@@ -40,10 +40,22 @@ pub trait FormModel: Model + ModelFormPrimaryKeyFields + Clone + Send + Sync {
 	/// Generated typed payload under the active field policy.
 	type Data<P: ModelFormPolicy>: ModelFormPayload<P>
 		+ ModelFormValidatingPayload<Cleaned = Self::CleanedData<P>>
-		+ ModelFormUpdatingPayload<Model = Self>
 		+ Clone;
 	/// Generated cleaned payload under the active field policy.
 	type CleanedData<P: ModelFormPolicy>: ModelFormCleanedPayload<Raw = Self::Data<P>>;
+
+	/// Cleans a payload before applying it to an existing model.
+	///
+	/// Generated implementations override this compatibility hook to merge
+	/// omitted values for synchronous validation. Hand-written implementations
+	/// retain strict validation unless they opt in to the update extension.
+	#[doc(hidden)]
+	fn clean_for_update<P: ModelFormPolicy>(
+		data: Self::Data<P>,
+		_existing: &Self,
+	) -> Result<Self::CleanedData<P>, ValidationErrors> {
+		data.clean_and_validate()
+	}
 
 	/// Builds a create candidate from cleaned data and explicit server values.
 	#[doc(hidden)]
@@ -205,6 +217,23 @@ where
 	}
 	if !errors.is_empty() {
 		return Err(errors);
+	}
+	if require_all {
+		for descriptor in S::fields() {
+			if descriptor.editable
+				&& P::allows(descriptor.name)
+				&& descriptor.required
+				&& !supplied.contains(&descriptor.name)
+			{
+				errors.add(
+					descriptor.name,
+					ValidationError::Custom("This field is required.".to_owned()),
+				);
+			}
+		}
+		if !errors.is_empty() {
+			return Err(errors);
+		}
 	}
 	if !form.is_valid() {
 		for descriptor in S::fields() {
@@ -404,7 +433,7 @@ where
 		}
 
 		let cleaned = match self.instance.as_ref() {
-			Some(existing) => self.data.clone().clean_and_validate_for_update(existing),
+			Some(existing) => T::clean_for_update(self.data.clone(), existing),
 			None => self.data.clone().clean_and_validate(),
 		}
 		.map_err(model_form_error_from_validation_errors)?;

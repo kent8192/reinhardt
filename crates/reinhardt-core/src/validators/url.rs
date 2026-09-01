@@ -145,7 +145,12 @@ mod tests {
 		assert!(validator.validate("http://example.com:80/").is_ok());
 		assert!(validator.validate("https://example.com:443/").is_ok());
 		assert!(validator.validate("http://localhost:3000/").is_ok());
-		assert!(validator.validate("http://example.com:123456/").is_err());
+		assert_eq!(
+			validator.validate("http://example.com:123456/"),
+			Err(ValidationError::InvalidUrl(
+				"http://example.com:123456/".to_owned()
+			))
+		);
 	}
 
 	#[test]

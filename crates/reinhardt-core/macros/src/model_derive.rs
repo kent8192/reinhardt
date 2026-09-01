@@ -3233,8 +3233,8 @@ fn generate_model_form_support(
 		.zip(&field_types)
 		.map(|(field_name, field_ty)| {
 			quote! {
-				#[doc = "Returns the normalized value when this field was supplied."]
-				#[doc = "This P2 accessor has equivalent semantics on native and WASM targets."]
+				#[doc = "Returns the raw, unvalidated value when this field was supplied."]
+				#[doc = "This P2 supplied-value accessor has equivalent semantics on native and WASM targets."]
 				pub fn #field_name(&self) -> ::core::option::Option<&#field_ty> {
 					self.#field_name.as_ref()
 				}
@@ -3485,6 +3485,8 @@ fn generate_model_form_support(
 		.zip(&field_types)
 		.map(|(field_name, field_ty)| {
 			quote! {
+				#[doc = "Returns the normalized value when this field was supplied."]
+				#[doc = "This P2 cleaned-value accessor has equivalent semantics on native and WASM targets."]
 				pub fn #field_name(&self) -> ::core::option::Option<&#field_ty> {
 					self.#field_name.as_ref()
 				}
@@ -3710,6 +3712,7 @@ fn generate_model_form_support(
 			impl #context_name<#(#context_missing_markers),*> {
 				#[doc = "Creates an empty native server context."]
 				#[doc = "Every generated setter must be called before the context can construct a model."]
+				#[doc = "This is a P0 native-only API because server-owned values are unavailable on WASM clients."]
 				pub fn new() -> Self {
 					Self {
 						#(#empty_context_fields,)*
@@ -4566,6 +4569,19 @@ fn generate_model_form_support(
 			type Schema = #schema_name;
 			type Data<P: #core_crate::model_form::ModelFormPolicy> = #payload_name<P>;
 			type CleanedData<P: #core_crate::model_form::ModelFormPolicy> = #cleaned_payload_name<P>;
+
+			fn clean_for_update<P: #core_crate::model_form::ModelFormPolicy>(
+				data: Self::Data<P>,
+				existing: &Self,
+			) -> ::core::result::Result<
+				Self::CleanedData<P>,
+				#core_crate::validators::ValidationErrors,
+			> {
+				<#payload_name<P> as #core_crate::model_form::ModelFormUpdatingPayload>::clean_and_validate_for_update(
+					data,
+					existing,
+				)
+			}
 
 			fn build_from_cleaned_compat<P: #core_crate::model_form::ModelFormPolicy>(
 				data: &Self::CleanedData<P>,

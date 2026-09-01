@@ -84,7 +84,9 @@ pub struct ModelFormFieldDescriptor {
 	pub editable: bool,
 	/// Whether the field is a generated relationship identifier.
 	pub generated_relation_id: bool,
-	/// Whether generated model-form cleaning strips surrounding whitespace on native and WASM targets.
+	/// Whether generated model-form cleaning strips surrounding whitespace.
+	///
+	/// **Parity: P2.** Native and WASM targets apply the same opt-in normalization.
 	pub trim: bool,
 }
 

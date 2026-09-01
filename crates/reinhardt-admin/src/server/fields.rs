@@ -127,11 +127,17 @@ pub async fn get_fields(
 			.map_server_fn_error()?;
 		if let Some(values) = values.as_mut() {
 			translate_physical_field_names_to_logical(table_name, values).map_server_fn_error()?;
-			let allowed_fields = form
+			let mut allowed_fields = form
 				.fields
 				.iter()
-				.map(|field| field.name.as_str())
+				.map(|field| field.name.clone())
 				.collect::<Vec<_>>();
+			allowed_fields.extend(form.aliases.iter().filter_map(|(logical, physical)| {
+				form.fields
+					.iter()
+					.any(|field| field.name == *physical)
+					.then(|| logical.clone())
+			}));
 			retain_allowed_fields(values, &allowed_fields);
 		}
 		values

@@ -3241,7 +3241,7 @@ fn generate_model_form(
 													snapshot_valid = false;
 													submit_form.error.set(::core::option::Option::Some(error.to_string()));
 												}
-											} else if checkbox_was_unchecked && !nullable
+											} else if checkbox_was_unchecked
 											{
 												let _ = state.set_value(field, #pages_crate::__private::serde_json::Value::Bool(false));
 											}
@@ -8772,6 +8772,8 @@ mod tests {
 		assert!(output.contains("__reinhardt_checkbox_"));
 		assert!(output.contains("let checkbox_was_unchecked = is_checkbox"));
 		assert!(output.contains("values . get (& checkbox_sentinel)"));
+		assert!(output.contains("else if checkbox_was_unchecked"));
+		assert!(!output.contains("checkbox_was_unchecked && ! nullable"));
 		assert!(output.contains("\"unset\""));
 		assert!(output.contains("Clear value"));
 		assert!(!output.contains("checkbox_edit_script"));

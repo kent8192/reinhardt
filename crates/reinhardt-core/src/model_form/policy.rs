@@ -391,6 +391,29 @@ mod tests {
 		}
 	}
 
+	struct NullableDefaultTrueBooleanSchema;
+
+	impl ModelFormSchema for NullableDefaultTrueBooleanSchema {
+		type Model = ();
+
+		fn fields() -> &'static [ModelFormFieldDescriptor] {
+			const FIELDS: [ModelFormFieldDescriptor; 1] = [ModelFormFieldDescriptor {
+				name: "published",
+				kind: ModelFormFieldKind::Boolean,
+				required: false,
+				has_default: true,
+				nullable: true,
+				editable: true,
+				generated_relation_id: false,
+			}];
+			&FIELDS
+		}
+
+		fn default_boolean_is_true(field: &str) -> bool {
+			field == "published"
+		}
+	}
+
 	#[test]
 	fn policy_rejects_known_but_unselected_fields() {
 		assert!(PublicOnly::allows("title"));
@@ -459,6 +482,22 @@ mod tests {
 		}))
 		.expect("nullable boolean false selection should normalize");
 		assert_eq!(false_value, serde_json::json!({ "published": false }));
+	}
+
+	#[test]
+	fn native_normalization_clears_nullable_default_true_checkbox() {
+		assert!(NullableDefaultTrueBooleanSchema::default_boolean_is_true(
+			"published"
+		));
+		let value = normalize_native_model_form_value::<
+			NullableDefaultTrueBooleanSchema,
+			AllEditableModelFields,
+		>(serde_json::json!({
+			"__reinhardt_checkbox_published": "false",
+		}))
+		.expect("unchecked default-true checkbox should normalize");
+
+		assert_eq!(value, serde_json::json!({ "published": false }));
 	}
 
 	#[test]

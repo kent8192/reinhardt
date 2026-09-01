@@ -582,7 +582,7 @@ individual modules under `src/server/`:
 - `get_list` — model list view with pagination
 - `get_list_action_metadata` — primary-key and registered action metadata
 - `get_detail` — detail view for a single record
-- `get_history` — newest-first per-object change history, including deleted records
+- `get_history` — newest-first history for objects visible through the request-aware admin scope; deleted-object history remains persisted but is not exposed after deletion
 - `get_fields` — field metadata for a model
 - `get_relation_options` — search and resolve configured relation field options
 - `create_record` — create a new record

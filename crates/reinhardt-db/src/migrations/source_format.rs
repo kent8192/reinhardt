@@ -451,9 +451,19 @@ fn convert_migration(expression: &ExprStruct) -> Result<TokenStream> {
 		.database_only(#database_only)
 	});
 	for dependency in optional_vec_expressions(expression, "swappable_dependencies")? {
+		if expression_contains_attributes(&dependency) {
+			return Err(invalid_shape(
+				"generated migration field 'swappable_dependencies' contains an attributed dependency; conditional entries are unsupported",
+			));
+		}
 		builder.extend(quote! { .add_swappable_dependency(#dependency) });
 	}
 	for dependency in optional_vec_expressions(expression, "optional_dependencies")? {
+		if expression_contains_attributes(&dependency) {
+			return Err(invalid_shape(
+				"generated migration field 'optional_dependencies' contains an attributed dependency; conditional entries are unsupported",
+			));
+		}
 		builder.extend(quote! { .add_optional_dependency(#dependency) });
 	}
 	Ok(builder)
@@ -1254,6 +1264,59 @@ fn migration() -> Migration {
 		assert_eq!(
 			error.to_string(),
 			"Invalid migration: generated migration field 'operations' contains an attributed operation; conditional entries are unsupported"
+		);
+	}
+
+	#[rstest]
+	#[case::swappable(
+		r#"fn migration() -> Migration {
+    Migration {
+        name: "0001_initial".to_string(),
+        app_label: "app".to_string(),
+        operations: vec![],
+        dependencies: vec![],
+        swappable_dependencies: vec![
+            #[cfg(feature = "postgres")]
+            SwappableDependency::new("AUTH_USER_MODEL", "auth", "User", "0001_initial"),
+        ],
+        ..Default::default()
+    }
+}
+"#,
+		"swappable_dependencies"
+	)]
+	#[case::optional(
+		r#"fn migration() -> Migration {
+    Migration {
+        name: "0001_initial".to_string(),
+        app_label: "app".to_string(),
+        operations: vec![],
+        dependencies: vec![],
+        optional_dependencies: vec![
+            #[cfg(feature = "postgres")]
+            OptionalDependency::new(
+                "gis",
+                "0001_initial",
+                DependencyCondition::AppInstalled("gis".to_string()),
+            ),
+        ],
+        ..Default::default()
+    }
+}
+"#,
+		"optional_dependencies"
+	)]
+	fn rejects_cfg_attributes_on_conditional_dependency_entries(
+		#[case] source: &str,
+		#[case] field_name: &str,
+	) {
+		let error = upgrade_source(source).unwrap_err();
+
+		assert_eq!(
+			error.to_string(),
+			format!(
+				"Invalid migration: generated migration field '{field_name}' contains an attributed dependency; conditional entries are unsupported"
+			)
 		);
 	}
 

@@ -63,9 +63,11 @@ pub trait NativeModelFormPayload: Sized {
 /// omit unchecked checkboxes. The generated color-control marker also omits an
 /// untouched optional color control when the browser supplies its synthetic
 /// black fallback. An untouched optional range control likewise omits its
-/// browser-generated minimum value. This conversion is intentionally limited to schema fields
-/// permitted by the selected policy; unrelated controls such as the CSRF token
-/// are removed before typed payload decoding.
+/// browser-generated minimum value. An explicit clear marker for a nullable,
+/// defaulted control takes precedence over the control's submitted value. This
+/// conversion is intentionally limited to schema fields permitted by the selected
+/// policy; unrelated controls such as the CSRF token are removed before typed
+/// payload decoding.
 ///
 /// # Errors
 ///
@@ -102,9 +104,15 @@ where
 		let range_sentinel = format!("__reinhardt_range_{}", descriptor.name);
 		let range_default = values.remove(&range_sentinel);
 		let default_clear_sentinel = format!("__reinhardt_defaulted_{}", descriptor.name);
-		let had_defaulted_value = values
-			.remove(&default_clear_sentinel)
-			.is_some_and(|value| value == serde_json::Value::String("true".to_owned()));
+		let clears_default = descriptor.nullable
+			&& descriptor.has_default
+			&& values
+				.remove(&default_clear_sentinel)
+				.is_some_and(|value| value == serde_json::Value::String("true".to_owned()));
+		if clears_default {
+			values.insert(descriptor.name.to_owned(), serde_json::Value::Null);
+			continue;
+		}
 		let Some(control) = values.get_mut(descriptor.name) else {
 			if matches!(descriptor.kind, ModelFormFieldKind::Boolean) && checkbox_was_unchecked {
 				values.insert(descriptor.name.to_owned(), serde_json::Value::Bool(false));
@@ -138,7 +146,7 @@ where
 						| ModelFormFieldKind::Url { .. }
 				));
 		if text.is_empty() && !descriptor.required && descriptor.nullable {
-			if descriptor.has_default && !had_defaulted_value {
+			if descriptor.has_default {
 				values.remove(descriptor.name);
 			} else {
 				*control = serde_json::Value::Null;
@@ -261,6 +269,7 @@ mod tests {
 	use crate::model_form::{
 		ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPolicy, ModelFormSchema,
 	};
+	use rstest::rstest;
 
 	struct PublicOnly;
 
@@ -520,11 +529,13 @@ mod tests {
 		assert_eq!(value, serde_json::json!({}));
 	}
 
-	#[test]
-	fn native_normalization_preserves_explicit_nullable_default_clears() {
+	#[rstest]
+	#[case("")]
+	#[case("existing summary")]
+	fn native_normalization_honors_explicit_nullable_default_clears(#[case] control: &str) {
 		let value = normalize_native_model_form_value::<TestSchema, AllEditableModelFields>(
 			serde_json::json!({
-				"summary": "",
+				"summary": control,
 				"__reinhardt_defaulted_summary": "true",
 			}),
 		)

@@ -327,7 +327,6 @@ fn hydrated_unrelated_reactive_attributes_preserve_an_active_control_edit() {
 			.expect("window")
 			.document()
 			.expect("document");
-		let raw_root = document.create_element("div").expect("root");
 		let raw_input = document.create_element("input").expect("input");
 		raw_input.set_attribute("type", "text").expect("input type");
 		raw_input
@@ -335,8 +334,7 @@ fn hydrated_unrelated_reactive_attributes_preserve_an_active_control_edit() {
 			.expect("initial reactive attribute");
 		let input: web_sys::HtmlInputElement = raw_input.clone().unchecked_into();
 		input.set_value("bound");
-		raw_root.append_child(&raw_input).expect("SSR input");
-		let root = Element::new(raw_root);
+		let root = Element::new(raw_input);
 		let invalid = Signal::new(false);
 		let value = Signal::new("bound".to_owned());
 		let _state = SsrStateElement::install(&document);
@@ -369,15 +367,13 @@ fn hydrated_password_type_removes_the_serialized_bound_value() {
 			.expect("window")
 			.document()
 			.expect("document");
-		let raw_root = document.create_element("div").expect("root");
 		let raw_input = document.create_element("input").expect("input");
 		raw_input.set_attribute("type", "text").expect("input type");
 		raw_input
 			.set_attribute("value", "secret")
 			.expect("serialized value");
 		let input: web_sys::HtmlInputElement = raw_input.clone().unchecked_into();
-		raw_root.append_child(&raw_input).expect("SSR input");
-		let root = Element::new(raw_root);
+		let root = Element::new(raw_input);
 		let password_type = Signal::new(false);
 		let value = Signal::new("secret".to_owned());
 		let _state = SsrStateElement::install(&document);

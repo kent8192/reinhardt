@@ -467,6 +467,11 @@ struct HydratedReactiveNumberInput {
 	value: Signal<u8>,
 }
 
+struct HydratedReactiveRangeInput {
+	max: Signal<u16>,
+	value: Signal<u8>,
+}
+
 impl Component for HydratedReactivePasswordInput {
 	fn name() -> &'static str {
 		"HydratedReactivePasswordInput"
@@ -538,6 +543,21 @@ impl Component for HydratedReactiveNumberInput {
 		let max = self.max;
 		PageElement::new("input")
 			.attr("type", "number")
+			.reactive_attr("max", move || Some(max.get().to_string().into()))
+			.control_binding(ControlBinding::number(self.value))
+			.into_page()
+	}
+}
+
+impl Component for HydratedReactiveRangeInput {
+	fn name() -> &'static str {
+		"HydratedReactiveRangeInput"
+	}
+
+	fn render(&self) -> Page {
+		let max = self.max;
+		PageElement::new("input")
+			.attr("type", "range")
 			.reactive_attr("max", move || Some(max.get().to_string().into()))
 			.control_binding(ControlBinding::number(self.value))
 			.into_page()
@@ -747,6 +767,40 @@ fn hydration_initial_reactive_attributes_preserve_rejected_numeric_edits() {
 
 		assert_eq!(input.value(), "300");
 		assert_eq!(value.get(), 7);
+	});
+}
+
+#[rstest]
+#[wasm_bindgen_test]
+fn hydration_initial_reactive_range_constraint_reconciles_browser_sanitization() {
+	ReactiveScope::run(|| {
+		// Arrange
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_input = document.create_element("input").expect("input");
+		raw_input
+			.set_attribute("type", "range")
+			.expect("input type");
+		raw_input.set_attribute("max", "100").expect("SSR max");
+		raw_input.set_attribute("value", "100").expect("SSR value");
+		let input: web_sys::HtmlInputElement = raw_input.clone().unchecked_into();
+		let _cleanup = AttachedRootCleanup(raw_input.clone());
+		let root = Element::new(raw_input);
+		let max = Signal::new(50_u16);
+		let value = Signal::new(100_u8);
+		let _state = SsrStateElement::install(&document);
+
+		// Act
+		reinhardt_pages::hydration::hydrate(&HydratedReactiveRangeInput { max, value }, &root)
+			.expect("hydrate range with a narrower reactive maximum");
+
+		// Assert
+		assert_eq!(
+			(input.max(), input.value(), value.get()),
+			("50".to_owned(), "50".to_owned(), 50)
+		);
 	});
 }
 

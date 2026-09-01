@@ -671,13 +671,16 @@ fn tuple_pairs(expression: Expr, field_name: &str) -> Result<Vec<(Expr, Expr)>> 
 	vec_expressions(&expression, field_name)?
 		.into_iter()
 		.map(|expression| match expression {
-			Expr::Tuple(tuple) if tuple.elems.len() == 2 => {
+			Expr::Tuple(tuple) if tuple.elems.len() == 2 && tuple.attrs.is_empty() => {
 				let mut elems = tuple.elems.into_iter();
 				Ok((
 					elems.next().expect("tuple length checked"),
 					elems.next().expect("tuple length checked"),
 				))
 			}
+			Expr::Tuple(tuple) if !tuple.attrs.is_empty() => Err(invalid_shape(&format!(
+				"generated migration field '{field_name}' contains an attributed tuple; conditional entries are unsupported"
+			))),
 			_ => Err(invalid_shape(&format!(
 				"generated migration field '{field_name}' contains a non-pair"
 			))),
@@ -1103,6 +1106,32 @@ fn migration() -> Migration {
 				.to_string()
 				.contains("unsupported field 'future_field'")
 		);
+	}
+
+	#[test]
+	fn rejects_cfg_attributes_on_dependency_tuples() {
+		let source = r#"fn migration() -> Migration {
+    Migration {
+        name: "0001_initial".to_string(),
+        app_label: "app".to_string(),
+        operations: vec![],
+        dependencies: vec![
+            #[cfg(feature = "sqlite")]
+            ("app", "0000_initial"),
+        ],
+        replaces: vec![],
+        atomic: true,
+        initial: None,
+        state_only: false,
+        database_only: false,
+        swappable_dependencies: vec![],
+        optional_dependencies: vec![],
+    }
+}
+"#;
+		let error = upgrade_source(source).unwrap_err();
+
+		assert!(error.to_string().contains("attributed tuple"));
 	}
 
 	#[test]

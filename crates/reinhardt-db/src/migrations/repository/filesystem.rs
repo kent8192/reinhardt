@@ -1016,6 +1016,7 @@ impl MigrationRepository for FilesystemRepository {
 				e
 			)))
 		})?;
+		crate::migrations::source_format::validate_source_version(&content)?;
 
 		// Parse with syn
 		let ast: syn::File = syn::parse_file(&content).map_err(|e| {
@@ -1060,13 +1061,7 @@ impl MigrationRepository for FilesystemRepository {
 
 			// Extract name from filename
 			if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
-				// Get migration
-				match self.get(app_label, name).await {
-					Ok(migration) => migrations.push(migration),
-					Err(e) => {
-						eprintln!("Warning: Failed to load migration {}: {}", name, e);
-					}
-				}
+				migrations.push(self.get(app_label, name).await?);
 			}
 		}
 
@@ -1431,6 +1426,28 @@ mod tests {
 	#[rstest]
 	#[tokio::test]
 	#[serial(filesystem_repository)]
+	async fn test_filesystem_repository_get_rejects_newer_source_format() {
+		let temp_dir = TempDir::new().unwrap();
+		let app_dir = temp_dir.path().join("polls");
+		std::fs::create_dir_all(&app_dir).unwrap();
+		std::fs::write(
+			app_dir.join("0001_initial.rs"),
+			"// reinhardt-migration-source: 2\n",
+		)
+		.unwrap();
+		let repo = FilesystemRepository::new(temp_dir.path());
+
+		let error = repo
+			.get("polls", "0001_initial")
+			.await
+			.expect_err("future source format must be rejected");
+
+		assert!(error.to_string().contains("newer Reinhardt tool"));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(filesystem_repository)]
 	async fn test_filesystem_repository_list() {
 		// Arrange
 		let temp_dir = TempDir::new().unwrap();
@@ -1462,6 +1479,28 @@ mod tests {
 
 		// Assert
 		assert_eq!(migrations.len(), 0);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(filesystem_repository)]
+	async fn test_filesystem_repository_list_propagates_newer_source_format() {
+		let temp_dir = TempDir::new().unwrap();
+		let app_dir = temp_dir.path().join("polls");
+		std::fs::create_dir_all(&app_dir).unwrap();
+		std::fs::write(
+			app_dir.join("0001_initial.rs"),
+			"// reinhardt-migration-source: 2\n",
+		)
+		.unwrap();
+		let repo = FilesystemRepository::new(temp_dir.path());
+
+		let error = repo
+			.list("polls")
+			.await
+			.expect_err("future source format must not be omitted");
+
+		assert!(error.to_string().contains("newer Reinhardt tool"));
 	}
 
 	#[rstest]

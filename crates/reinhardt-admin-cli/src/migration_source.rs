@@ -68,6 +68,34 @@ impl TemporaryFileGuard {
 	}
 }
 
+struct DestinationPermissionsGuard {
+	path: PathBuf,
+	permissions: fs::Permissions,
+	armed: bool,
+}
+
+impl DestinationPermissionsGuard {
+	fn new(path: &Path, permissions: fs::Permissions) -> Self {
+		Self {
+			path: path.to_path_buf(),
+			permissions,
+			armed: true,
+		}
+	}
+
+	fn disarm(&mut self) {
+		self.armed = false;
+	}
+}
+
+impl Drop for DestinationPermissionsGuard {
+	fn drop(&mut self) {
+		if self.armed {
+			let _ = fs::set_permissions(&self.path, self.permissions.clone());
+		}
+	}
+}
+
 impl Drop for TemporaryFileGuard {
 	fn drop(&mut self) {
 		if !self.committed {
@@ -272,7 +300,7 @@ fn write_atomically(path: &Path, expected_source: &str, content: &str) -> Result
 		std::process::id(),
 		nonce
 	)));
-	let mut destination_was_readonly = false;
+	let mut destination_permissions_guard = None;
 	let write_result = (|| -> std::io::Result<()> {
 		let mut file = OpenOptions::new()
 			.write(true)
@@ -285,22 +313,24 @@ fn write_atomically(path: &Path, expected_source: &str, content: &str) -> Result
 			file.sync_all()?;
 		}
 		metadata = verify_current_source(path, expected_source)?;
-		destination_was_readonly = metadata.permissions().readonly();
-		if destination_was_readonly {
-			let mut writable_permissions = metadata.permissions();
+		if metadata.permissions().readonly() {
+			let original_permissions = metadata.permissions();
+			let mut writable_permissions = original_permissions.clone();
 			writable_permissions.set_readonly(false);
 			fs::set_permissions(path, writable_permissions)?;
+			destination_permissions_guard =
+				Some(DestinationPermissionsGuard::new(path, original_permissions));
 		}
 		fs::rename(&temporary.path, path)?;
 		// The rename transferred ownership of the temporary path to the destination.
 		temporary.commit();
 		fs::set_permissions(path, metadata.permissions())?;
+		if let Some(guard) = destination_permissions_guard.as_mut() {
+			guard.disarm();
+		}
 		Ok(())
 	})();
 	if let Err(error) = write_result {
-		if destination_was_readonly {
-			let _ = fs::set_permissions(path, metadata.permissions());
-		}
 		return Err(MigrationSourceError::Write(format!(
 			"{}: {error}",
 			path.display()
@@ -343,6 +373,35 @@ mod tests {
 
 		assert!(result.is_err());
 		assert!(!path.exists());
+	}
+
+	#[test]
+	fn destination_permissions_guard_restores_during_unwinding() {
+		let directory = tempfile::tempdir().expect("temporary directory");
+		let path = directory.path().join("migration.rs");
+		fs::write(&path, "source").expect("write destination");
+		let mut original_permissions = fs::metadata(&path)
+			.expect("read destination metadata")
+			.permissions();
+		original_permissions.set_readonly(true);
+		fs::set_permissions(&path, original_permissions.clone())
+			.expect("make destination readonly");
+		let mut writable_permissions = original_permissions.clone();
+		writable_permissions.set_readonly(false);
+		fs::set_permissions(&path, writable_permissions).expect("make destination writable");
+
+		let result = std::panic::catch_unwind(|| {
+			let _guard = DestinationPermissionsGuard::new(&path, original_permissions.clone());
+			panic!("abort the replacement");
+		});
+
+		assert!(result.is_err());
+		assert!(
+			fs::metadata(path)
+				.expect("read destination metadata")
+				.permissions()
+				.readonly()
+		);
 	}
 
 	#[test]

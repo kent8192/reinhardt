@@ -3303,6 +3303,10 @@ fn generate_model_form(
 					self.__server_error.get()
 				}
 
+				fn runtime_clear_server_error(&self) {
+					self.set_server_error(::core::option::Option::None);
+				}
+
 				fn runtime_register_server_error_handler(
 					&self,
 					handler: ::std::rc::Weak<

@@ -175,7 +175,7 @@ where
 	P: ModelFormPolicy,
 	D: ModelFormPayload<P>,
 {
-	clean_generated_payload_with_trusted_values::<S, P, D>(data, None, true, None)
+	clean_generated_payload_with_trusted_values::<S, P, D>(data, None, true, &[])
 }
 
 /// Cleans only supplied fields for native generated update validation.
@@ -189,7 +189,37 @@ where
 	P: ModelFormPolicy,
 	D: ModelFormPayload<P>,
 {
-	clean_generated_payload_with_trusted_values::<S, P, D>(data, None, false, None)
+	clean_generated_payload_with_trusted_values::<S, P, D>(data, None, false, &[])
+}
+
+/// Cleans only supplied fields for generated update validation using existing
+/// model values as trusted storage references.
+#[doc(hidden)]
+pub fn clean_generated_partial_payload_with_trusted_values<S, P, D>(
+	data: &mut D,
+	trusted_values: Option<&Value>,
+) -> Result<(), ValidationErrors>
+where
+	S: ModelFormSchema,
+	P: ModelFormPolicy,
+	D: ModelFormPayload<P>,
+{
+	clean_generated_payload_with_trusted_values::<S, P, D>(data, trusted_values, false, &[])
+}
+
+/// Cleans a generated model-form snapshot while deferring required file fields
+/// to the multipart server-function boundary.
+#[doc(hidden)]
+pub fn clean_generated_payload_with_deferred_required_fields<S, P, D>(
+	data: &mut D,
+	deferred_fields: &[&str],
+) -> Result<(), ValidationErrors>
+where
+	S: ModelFormSchema,
+	P: ModelFormPolicy,
+	D: ModelFormPayload<P>,
+{
+	clean_generated_payload_with_trusted_values::<S, P, D>(data, None, true, deferred_fields)
 }
 
 /// Cleans a native generated payload while deferring one server-trusted required field.
@@ -218,14 +248,14 @@ where
 		);
 		return Err(errors);
 	}
-	clean_generated_payload_with_trusted_values::<S, P, D>(data, None, true, Some(deferred_field))
+	clean_generated_payload_with_trusted_values::<S, P, D>(data, None, true, &[deferred_field])
 }
 
 fn clean_generated_payload_with_trusted_values<S, P, D>(
 	data: &mut D,
 	trusted_values: Option<&Value>,
 	require_all: bool,
-	deferred_required_field: Option<&str>,
+	deferred_required_fields: &[&str],
 ) -> Result<(), ValidationErrors>
 where
 	S: ModelFormSchema,
@@ -274,7 +304,7 @@ where
 			&& P::allows(descriptor.name)
 			&& descriptor.required
 			&& !supplied.contains(&descriptor.name)
-			&& deferred_required_field != Some(descriptor.name)
+			&& !deferred_required_fields.contains(&descriptor.name)
 		{
 			errors.add(
 				descriptor.name,
@@ -454,7 +484,7 @@ where
 			&mut self.data,
 			instance_values.as_ref(),
 			self.persistence_mode == ModelFormPersistenceMode::Create,
-			None,
+			&[],
 		)
 		.map_err(model_form_error_from_validation_errors)?;
 
@@ -886,6 +916,20 @@ mod tests {
 		owner_id: i64,
 		#[field(default = true)]
 		published: bool,
+	}
+
+	#[model(
+		app_label = "forms",
+		table_name = "model_form_assigned_key_documents",
+		form = true,
+		info = false
+	)]
+	#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+	struct AssignedKeyDocument {
+		#[field(primary_key = true, editable = true, max_length = 64)]
+		id: String,
+		#[field(max_length = 200)]
+		title: String,
 	}
 
 	#[model(
@@ -1964,6 +2008,28 @@ mod tests {
 		assert_eq!(built.title, "Updated");
 		assert_eq!(built.owner_id, 41);
 		assert!(!built.published);
+	}
+
+	#[test]
+	fn generated_payload_rejects_supplied_assigned_primary_keys_on_update() {
+		let mut data = AssignedKeyDocumentModelFormData::<AllEditableModelFields>::empty();
+		data.set_id("attacker-key".to_owned())
+			.expect("assigned primary key should be editable");
+		let existing = AssignedKeyDocument {
+			id: "existing-key".to_owned(),
+			title: "existing".to_owned(),
+		};
+
+		let errors = match data.clean_and_validate_for_update(&existing) {
+			Ok(_) => panic!("direct generated updates must reject supplied primary keys"),
+			Err(errors) => errors,
+		};
+
+		assert!(matches!(
+			errors.ordered_field_errors().next(),
+			Some(("id", [ValidationError::Custom(message)]))
+				if message == "model form primary keys cannot be updated"
+		));
 	}
 
 	#[test]

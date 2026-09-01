@@ -521,10 +521,36 @@ where
 		D::Cleaned: ModelFormCleanedPayload<Raw = D>,
 		Q: ModelFormPolicy,
 	{
-		let raw = self
-			.build_payload_for::<D, Q>()
-			.map_err(|error| self.payload_error_to_validation(error))?;
-		raw.clean_and_validate()
+		let mut raw = D::default();
+		let mut conversion_errors = ValidationErrors::new();
+		for descriptor in self.selected_descriptors() {
+			if is_file_kind(descriptor.kind) {
+				continue;
+			}
+			if let Some(value) = self.values.get(descriptor.name) {
+				match convert_snapshot_value(descriptor, value.clone()) {
+					Ok(Some(value)) => {
+						if let Err(error) = raw.set_json(descriptor.name, value) {
+							Self::append_payload_error_to_validation(&mut conversion_errors, error);
+						}
+					}
+					Ok(None) => {}
+					Err(error) => {
+						Self::append_payload_error_to_validation(&mut conversion_errors, error);
+					}
+				}
+			}
+		}
+		if !conversion_errors.is_empty() {
+			return Err(conversion_errors);
+		}
+		let deferred_required_fields = self
+			.selected_descriptors()
+			.iter()
+			.filter(|descriptor| descriptor.required && is_file_kind(descriptor.kind))
+			.map(|descriptor| descriptor.name)
+			.collect::<Vec<_>>();
+		raw.clean_and_validate_with_deferred_required_fields(&deferred_required_fields)
 			.map(ModelFormCleanedPayload::into_raw)
 	}
 
@@ -534,6 +560,15 @@ where
 	/// the same field and message.
 	#[doc(hidden)]
 	pub fn payload_error_to_validation(&self, error: ModelFormPayloadError) -> ValidationErrors {
+		let mut errors = ValidationErrors::new();
+		Self::append_payload_error_to_validation(&mut errors, error);
+		errors
+	}
+
+	fn append_payload_error_to_validation(
+		errors: &mut ValidationErrors,
+		error: ModelFormPayloadError,
+	) {
 		let (field, message) = match &error {
 			ModelFormPayloadError::UnknownField { field }
 			| ModelFormPayloadError::ForbiddenField { field } => (field.clone(), error.to_string()),
@@ -541,9 +576,7 @@ where
 				(field.clone(), message.clone())
 			}
 		};
-		let mut errors = ValidationErrors::new();
 		errors.add(field, ValidationError::Custom(message));
-		errors
 	}
 
 	/// Builds a payload using a nameable policy while retaining this form's
@@ -1272,9 +1305,11 @@ fn normalize_datetime_local(value: &str, aware: bool) -> Option<String> {
 mod tests {
 	use super::{ModelFormState, any_value_to_json, convert_snapshot_value, is_date};
 	use reinhardt_core::model_form::{
-		AllEditableModelFields, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload,
-		ModelFormPayloadError, ModelFormSchema,
+		AllEditableModelFields, ModelFormCleanedPayload, ModelFormFieldDescriptor,
+		ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError, ModelFormSchema,
+		ModelFormValidatingPayload,
 	};
+	use reinhardt_core::validators::ValidationErrors;
 	use rstest::rstest;
 
 	struct NullableBooleanSchema;
@@ -1483,6 +1518,122 @@ mod tests {
 		assert_eq!(
 			state.value("ratio"),
 			Some(&serde_json::Value::String("1e100".to_owned()))
+		);
+	}
+
+	struct F32PairSchema;
+
+	impl ModelFormSchema for F32PairSchema {
+		type Model = ();
+
+		fn fields() -> &'static [ModelFormFieldDescriptor] {
+			const FIELDS: [ModelFormFieldDescriptor; 2] = [
+				ModelFormFieldDescriptor {
+					name: "first",
+					kind: ModelFormFieldKind::Float {
+						min: Some(f32::MIN as f64),
+						max: Some(f32::MAX as f64),
+					},
+					required: true,
+					has_default: false,
+					nullable: false,
+					editable: true,
+					generated_relation_id: false,
+					trim: false,
+				},
+				ModelFormFieldDescriptor {
+					name: "second",
+					kind: ModelFormFieldKind::Float {
+						min: Some(f32::MIN as f64),
+						max: Some(f32::MAX as f64),
+					},
+					required: true,
+					has_default: false,
+					nullable: false,
+					editable: true,
+					generated_relation_id: false,
+					trim: false,
+				},
+			];
+			&FIELDS
+		}
+	}
+
+	#[derive(Default)]
+	struct F32PairPayload(serde_json::Map<String, serde_json::Value>);
+
+	struct F32PairCleaned(F32PairPayload);
+
+	impl ModelFormCleanedPayload for F32PairCleaned {
+		type Raw = F32PairPayload;
+
+		fn into_raw(self) -> Self::Raw {
+			self.0
+		}
+	}
+
+	impl ModelFormPayload<AllEditableModelFields> for F32PairPayload {
+		fn supplied_fields(&self) -> Vec<&'static str> {
+			["first", "second"]
+				.into_iter()
+				.filter(|field| self.0.contains_key(*field))
+				.collect()
+		}
+
+		fn forbidden_fields(&self) -> &[&'static str] {
+			&[]
+		}
+
+		fn get_json(&self, field: &str) -> Option<serde_json::Value> {
+			self.0.get(field).cloned()
+		}
+
+		fn set_json(
+			&mut self,
+			field: &str,
+			value: serde_json::Value,
+		) -> Result<(), ModelFormPayloadError> {
+			if !["first", "second"].contains(&field) {
+				return Err(ModelFormPayloadError::UnknownField {
+					field: field.to_owned(),
+				});
+			}
+			self.0.insert(field.to_owned(), value);
+			Ok(())
+		}
+	}
+
+	impl ModelFormValidatingPayload for F32PairPayload {
+		type Cleaned = F32PairCleaned;
+
+		fn clean_and_validate(self) -> Result<Self::Cleaned, ValidationErrors> {
+			Ok(F32PairCleaned(self))
+		}
+	}
+
+	#[rstest]
+	fn snapshot_conversion_reports_all_errors_in_schema_order() {
+		// Arrange
+		let mut state = ModelFormState::<F32PairSchema, AllEditableModelFields>::new();
+		for field in ["first", "second"] {
+			state
+				.set_value(field, serde_json::Value::String("1e100".to_owned()))
+				.expect("raw finite f64 input should remain editable");
+		}
+
+		// Act
+		let errors = match state.build_validated_payload::<F32PairPayload>() {
+			Ok(_) => panic!("all out-of-range fields should be reported"),
+			Err(errors) => errors,
+		};
+
+		// Assert
+		assert_eq!(
+			errors
+				.ordered_field_errors()
+				.map(|(field, _)| field)
+				.collect::<Vec<_>>(),
+			["first", "second"]
 		);
 	}
 

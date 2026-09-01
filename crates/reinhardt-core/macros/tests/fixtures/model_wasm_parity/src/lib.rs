@@ -100,6 +100,20 @@ pub struct FormProject {
 	pub avatar: ImageField,
 }
 
+#[model(
+	app_label = "assigned_key_documents",
+	table_name = "assigned_key_documents",
+	form = true,
+	info = false
+)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AssignedKeyDocument {
+	#[field(primary_key = true, editable = true, max_length = 64)]
+	pub id: String,
+	#[field(max_length = 200)]
+	pub title: String,
+}
+
 fn validate_form_project<P: reinhardt_core::model_form::ModelFormPolicy>(
 	payload: &CleanedFormProjectModelFormData<P>,
 ) -> Result<(), ValidationErrors> {
@@ -431,6 +445,26 @@ mod tests {
 	#[wasm_bindgen_test]
 	fn generated_payload_cleans_and_validates_in_wasm_runtime() {
 		let existing = valid_form_project();
+		let assigned_existing = AssignedKeyDocument {
+			id: "existing-key".to_owned(),
+			title: "existing".to_owned(),
+		};
+		let mut assigned = AssignedKeyDocumentModelFormData::<AllEditableModelFields>::empty();
+		assigned
+			.set_id("attacker-key".to_owned())
+			.expect("assigned primary key should be editable");
+		let errors = match assigned.clean_and_validate_for_update(&assigned_existing) {
+			Ok(_) => panic!("direct generated updates must reject supplied primary keys"),
+			Err(errors) => errors,
+		};
+		assert_eq!(
+			error_tuples(&errors),
+			vec![(
+				"id".to_owned(),
+				"model form primary keys cannot be updated".to_owned()
+			)]
+		);
+
 		let mut payload = FormProjectModelFormData::<AllEditableModelFields>::empty();
 		payload
 			.set_title("  trimmed  ".to_owned())
@@ -691,6 +725,23 @@ mod tests {
 		assert_eq!(
 			error_tuples(&errors),
 			expected_errors(PARITY_DATETIME_ERRORS)
+		);
+
+		let mut existing_with_document = existing.clone();
+		existing_with_document.document = FileField {
+			path: "documents/existing.pdf".to_owned(),
+			storage_alias: "default".to_owned(),
+		};
+		let mut existing_document = FormProjectModelFormData::<AllEditableModelFields>::empty();
+		existing_document
+			.set_document(existing_with_document.document.clone())
+			.expect("existing stored reference should be editable");
+		let cleaned = existing_document
+			.clean_and_validate_for_update(&existing_with_document)
+			.expect("the existing stored file reference should be trusted");
+		assert_eq!(
+			cleaned.document(),
+			Some(&existing_with_document.document)
 		);
 
 		let mut document = FormProjectModelFormData::<AllEditableModelFields>::empty();

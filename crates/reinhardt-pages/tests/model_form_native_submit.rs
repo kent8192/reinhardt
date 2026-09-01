@@ -105,6 +105,35 @@ fn late_use_form_subscriber_replays_generated_submit_errors_on_build() {
 }
 
 #[rstest]
+fn clear_errors_invalidates_generated_submit_error_cache() {
+	reinhardt_core::reactive::ReactiveScope::run(|| {
+		// Arrange
+		let form = form! {
+			name: QuestionClearErrorsForm,
+			model: Question,
+			policy: QuestionPolicy,
+			fields: [title],
+			server_fn: save_question,
+		};
+		let runtime = use_form(&form).build();
+		form.set_value("title", serde_json::json!("Rejected by validation"))
+			.expect("control state accepts a valid title");
+		tokio_test::block_on(form.submit()).expect_err("native submit must preserve validation");
+		assert!(reinhardt_pages::FormRuntimeSource::runtime_server_error(&form).is_some());
+
+		// Act
+		runtime.clear_errors();
+		drop(runtime);
+		let rebuilt = use_form(&form).build();
+
+		// Assert
+		assert!(reinhardt_pages::FormRuntimeSource::runtime_server_error(&form).is_none());
+		assert!(rebuilt.get_field_state(form.title_field()).error.is_none());
+		assert_eq!(rebuilt.form_state().form_error.get(), None);
+	});
+}
+
+#[rstest]
 fn model_form_runtime_prunes_dropped_server_error_handlers() {
 	reinhardt_core::reactive::ReactiveScope::run(|| {
 		let form = form! {

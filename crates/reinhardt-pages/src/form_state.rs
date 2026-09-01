@@ -619,6 +619,10 @@ pub trait FormRuntimeSource: Clone + 'static {
 		None
 	}
 
+	/// Clears the cached structured error emitted by an automatic generated submit.
+	#[doc(hidden)]
+	fn runtime_clear_server_error(&self) {}
+
 	/// Registers a weak listener for structured automatic-submit errors.
 	///
 	/// **Parity: P2.** Generated native and WASM forms notify the listener with
@@ -1511,6 +1515,7 @@ where
 
 	/// Clears all validation and submit errors.
 	pub fn clear_errors(&self) {
+		self.form.runtime_clear_server_error();
 		for field in self.form.runtime_fields() {
 			self.form.runtime_set_custom_widget_error(*field, None);
 		}

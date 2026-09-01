@@ -3160,6 +3160,31 @@ fn generate_model_form_support(
 		.iter()
 		.map(|field| LitStr::new(&field.name.to_string(), field.name.span()))
 		.collect();
+	let primary_key_literals: Vec<_> = field_infos
+		.iter()
+		.filter(|field| field.config.primary_key)
+		.map(|field| LitStr::new(&field.name.to_string(), field.name.span()))
+		.collect();
+	let reject_supplied_primary_keys = if primary_key_literals.is_empty() {
+		quote! {}
+	} else {
+		quote! {
+			if let Some(field) = supplied_fields.iter().copied().find(|field| {
+				[#(#primary_key_literals),*]
+					.iter()
+					.any(|primary_key| *primary_key == *field)
+			}) {
+				let mut errors = #core_crate::validators::ValidationErrors::new();
+				errors.add(
+					field.to_owned(),
+					#core_crate::validators::ValidationError::Custom(
+						"model form primary keys cannot be updated".to_owned(),
+					),
+				);
+				return ::core::result::Result::Err(errors);
+			}
+		}
+	};
 	let descriptor_entries = editable_fields
 		.iter()
 		.zip(&field_kinds)
@@ -3926,15 +3951,28 @@ fn generate_model_form_support(
 				}
 
 				fn clean_and_validate_with_deferred_required_field(
-					mut self,
+					self,
 					deferred_field: &str,
 				) -> ::core::result::Result<
 					Self::Cleaned,
 					#core_crate::validators::ValidationErrors,
 				> {
-					#forms_crate::model_form::clean_generated_payload_with_deferred_required_field::<#schema_name, P, _>(
+					<Self as #core_crate::model_form::ModelFormValidatingPayload>::clean_and_validate_with_deferred_required_fields(
+						self,
+						&[deferred_field],
+					)
+				}
+
+				fn clean_and_validate_with_deferred_required_fields(
+					mut self,
+					deferred_fields: &[&str],
+				) -> ::core::result::Result<
+					Self::Cleaned,
+					#core_crate::validators::ValidationErrors,
+				> {
+					#forms_crate::model_form::clean_generated_payload_with_deferred_required_fields::<#schema_name, P, _>(
 						&mut self,
-						deferred_field,
+						deferred_fields,
 					)?;
 					let cleaned = #cleaned_payload_name::from_validated_raw(self);
 					#validator_call
@@ -3956,12 +3994,15 @@ fn generate_model_form_support(
 				) -> ::core::result::Result<
 					Self::Cleaned,
 					#core_crate::validators::ValidationErrors,
-			> {
-				let supplied_fields =
-					<Self as #core_crate::model_form::ModelFormPayload<P>>::supplied_fields(&self);
-				#forms_crate::model_form::clean_generated_partial_payload::<#schema_name, P, _>(
-					&mut self,
-				)?;
+				> {
+					let supplied_fields =
+						<Self as #core_crate::model_form::ModelFormPayload<P>>::supplied_fields(&self);
+					#reject_supplied_primary_keys
+					let instance_values = #serde_json_crate::to_value(existing).ok();
+					#forms_crate::model_form::clean_generated_partial_payload_with_trusted_values::<#schema_name, P, _>(
+						&mut self,
+						instance_values.as_ref(),
+					)?;
 				let cleaned = #cleaned_payload_name::from_validated_raw(self);
 				let mut merged = cleaned.clone();
 				#(#merge_existing_into_cleaned)*
@@ -3980,6 +4021,8 @@ fn generate_model_form_support(
 				mut self,
 				require_all: bool,
 				run_validator: bool,
+				deferred_required_fields: &[&str],
+				trusted_values: ::core::option::Option<&#serde_json_crate::Value>,
 			) -> ::core::result::Result<
 				#cleaned_payload_name<P>,
 				#core_crate::validators::ValidationErrors,
@@ -4050,7 +4093,10 @@ fn generate_model_form_support(
 								descriptor.name,
 							)
 						else {
-						if require_all && descriptor.required {
+						if require_all
+							&& descriptor.required
+							&& !deferred_required_fields.contains(&descriptor.name)
+						{
 							errors.add(
 								descriptor.name,
 								#core_crate::validators::ValidationError::Custom(
@@ -4316,6 +4362,13 @@ fn generate_model_form_support(
 											.and_then(#serde_json_crate::Value::as_str)
 											.is_some_and(|storage| !storage.is_empty())
 								});
+								if valid_reference
+									&& trusted_values
+										.and_then(|values| values.get(descriptor.name))
+										.is_some_and(|trusted_value| trusted_value == &value)
+								{
+									continue;
+								}
 								let message = if valid_reference {
 									"Stored file references must come from the existing instance"
 								} else {
@@ -4368,9 +4421,19 @@ fn generate_model_form_support(
 			) -> ::core::result::Result<
 				Self::Cleaned,
 				#core_crate::validators::ValidationErrors,
-			> {
-				self.__reinhardt_clean_and_validate(true, true)
-			}
+				> {
+					self.__reinhardt_clean_and_validate(true, true, &[], None)
+				}
+
+				fn clean_and_validate_with_deferred_required_fields(
+					self,
+					deferred_fields: &[&str],
+				) -> ::core::result::Result<
+					Self::Cleaned,
+					#core_crate::validators::ValidationErrors,
+				> {
+					self.__reinhardt_clean_and_validate(true, true, deferred_fields, None)
+				}
 		}
 
 		#[cfg(all(target_family = "wasm", target_os = "unknown"))]
@@ -4387,10 +4450,17 @@ fn generate_model_form_support(
 			) -> ::core::result::Result<
 				Self::Cleaned,
 				#core_crate::validators::ValidationErrors,
-			> {
-				let supplied_fields =
-					<Self as #core_crate::model_form::ModelFormPayload<P>>::supplied_fields(&self);
-				let cleaned = self.__reinhardt_clean_and_validate(false, false)?;
+				> {
+					let supplied_fields =
+						<Self as #core_crate::model_form::ModelFormPayload<P>>::supplied_fields(&self);
+					#reject_supplied_primary_keys
+					let instance_values = #serde_json_crate::to_value(existing).ok();
+					let cleaned = self.__reinhardt_clean_and_validate(
+						false,
+						false,
+						&[],
+						instance_values.as_ref(),
+					)?;
 				let mut merged = cleaned.clone();
 				#(#merge_existing_into_cleaned)*
 				#merged_validator_call

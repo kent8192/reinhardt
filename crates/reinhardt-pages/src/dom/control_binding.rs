@@ -1377,28 +1377,6 @@ fn range_constraints(element: &web_sys::Element) -> Option<(f64, f64, Option<f64
 	Some((min, max.max(min), step, step_base))
 }
 
-fn incompatible_range_step_grids(
-	first_step: Option<f64>,
-	first_base: f64,
-	second_step: Option<f64>,
-	second_base: f64,
-) -> bool {
-	let (Some(first_step), Some(second_step)) = (first_step, second_step) else {
-		return false;
-	};
-	let mut larger = first_step.max(second_step);
-	let mut smaller = first_step.min(second_step);
-	let tolerance = larger.max(1.0) * 1e-12;
-	while smaller > tolerance {
-		let remainder = larger % smaller;
-		larger = smaller;
-		smaller = remainder.abs();
-	}
-	let phase = (first_base - second_base) / larger;
-	let phase_tolerance = phase.abs().max(1.0) * 1e-9;
-	!phase.is_finite() || (phase - phase.round()).abs() > phase_tolerance
-}
-
 fn has_conflicting_range_binding(element: &Element, binding: &ControlBinding) -> bool {
 	if binding.kind() != ControlKind::Number {
 		return false;
@@ -1415,18 +1393,12 @@ fn has_conflicting_range_binding(element: &Element, binding: &ControlBinding) ->
 					.clone()
 					.unchecked_into::<web_sys::Node>()
 					.is_same_node(Some(&node))
-				&& range_constraints(&candidate.element).is_some_and(
-					|(candidate_min, candidate_max, candidate_step, candidate_step_base)| {
-						max < candidate_min
-							|| candidate_max < min
-							|| incompatible_range_step_grids(
-								step,
-								step_base,
-								candidate_step,
-								candidate_step_base,
-							)
-					},
-				)
+				&& range_constraints(&candidate.element).is_some_and(|candidate_constraints| {
+					crate::control_binding::range_constraints_conflict(
+						(min, max, step, step_base),
+						candidate_constraints,
+					)
+				})
 		})
 	})
 }
@@ -1455,7 +1427,9 @@ pub(crate) fn reconcile_control_binding(
 	binding: &ControlBinding,
 ) -> Result<(), ControlBindingError> {
 	let value = untracked(|| binding.read());
-	write_control_and_reconcile(element, binding, &value)
+	write_control_and_reconcile(element, binding, &value)?;
+	crate::component::into_page::initialize_control_default(element, binding);
+	Ok(())
 }
 
 fn missing(control: ControlKind, property: &'static str) -> ControlBindingError {

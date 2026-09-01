@@ -228,7 +228,9 @@ fn reactive_password_type_removes_the_serialized_bound_value(#[case] nested_in_r
 			.expect("window")
 			.document()
 			.expect("document");
-		let root = Element::new(document.create_element("div").expect("root"));
+		let raw_form = document.create_element("form").expect("form");
+		let form: web_sys::HtmlFormElement = raw_form.clone().unchecked_into();
+		let root = Element::new(raw_form);
 		let password_type = Signal::new(false);
 		let reactive_password_type = password_type;
 		let value = Signal::new("secret".to_owned());
@@ -266,6 +268,14 @@ fn reactive_password_type_removes_the_serialized_bound_value(#[case] nested_in_r
 		assert_eq!(input.value(), "secret");
 		assert_eq!(input.get_attribute("value"), None);
 		assert_eq!(value.get(), "secret");
+
+		password_type.set(false);
+		with_runtime(|runtime| runtime.flush_updates());
+		input.set_value("draft");
+		form.reset();
+
+		assert_eq!(input.type_(), "text");
+		assert_eq!(input.value(), "secret");
 		reinhardt_pages::cleanup_reactive_nodes();
 	});
 }
@@ -326,6 +336,11 @@ struct HydratedDuplicateStaticPasswordInput {
 	value: Signal<String>,
 }
 
+struct HydratedReactiveNumberInput {
+	max: Signal<u16>,
+	value: Signal<u8>,
+}
+
 impl Component for HydratedReactivePasswordInput {
 	fn name() -> &'static str {
 		"HydratedReactivePasswordInput"
@@ -357,6 +372,21 @@ impl Component for HydratedDuplicateStaticPasswordInput {
 			.attr("type", "password")
 			.attr("type", "text")
 			.control_binding(ControlBinding::text(self.value))
+			.into_page()
+	}
+}
+
+impl Component for HydratedReactiveNumberInput {
+	fn name() -> &'static str {
+		"HydratedReactiveNumberInput"
+	}
+
+	fn render(&self) -> Page {
+		let max = self.max;
+		PageElement::new("input")
+			.attr("type", "number")
+			.reactive_attr("max", move || Some(max.get().to_string().into()))
+			.control_binding(ControlBinding::number(self.value))
 			.into_page()
 	}
 }
@@ -432,6 +462,9 @@ fn hydrated_password_type_removes_the_serialized_bound_value() {
 		raw_input
 			.set_attribute("value", "secret")
 			.expect("serialized value");
+		let raw_form = document.create_element("form").expect("form");
+		raw_form.append_child(&raw_input).expect("form input");
+		let form: web_sys::HtmlFormElement = raw_form.unchecked_into();
 		let input: web_sys::HtmlInputElement = raw_input.clone().unchecked_into();
 		let root = Element::new(raw_input);
 		let password_type = Signal::new(false);
@@ -453,7 +486,44 @@ fn hydrated_password_type_removes_the_serialized_bound_value() {
 		assert_eq!(input.value(), "secret");
 		assert_eq!(input.get_attribute("value"), None);
 		assert_eq!(value.get(), "secret");
+
+		password_type.set(false);
+		with_runtime(|runtime| runtime.flush_updates());
+		input.set_value("draft");
+		form.reset();
+
+		assert_eq!(input.type_(), "text");
+		assert_eq!(input.value(), "secret");
 		reinhardt_pages::cleanup_reactive_nodes();
+	});
+}
+
+#[rstest]
+#[wasm_bindgen_test]
+fn hydration_initial_reactive_attributes_preserve_rejected_numeric_edits() {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_input = document.create_element("input").expect("input");
+		raw_input
+			.set_attribute("type", "number")
+			.expect("input type");
+		raw_input.set_attribute("max", "500").expect("input max");
+		let input: web_sys::HtmlInputElement = raw_input.clone().unchecked_into();
+		let _cleanup = AttachedRootCleanup(raw_input.clone());
+		input.set_value("300");
+		let root = Element::new(raw_input);
+		let max = Signal::new(500_u16);
+		let value = Signal::new(7_u8);
+		let _state = SsrStateElement::install(&document);
+
+		reinhardt_pages::hydration::hydrate(&HydratedReactiveNumberInput { max, value }, &root)
+			.expect("hydrate rejected numeric edit");
+
+		assert_eq!(input.value(), "300");
+		assert_eq!(value.get(), 7);
 	});
 }
 

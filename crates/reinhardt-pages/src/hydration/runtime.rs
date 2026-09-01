@@ -1306,6 +1306,7 @@ fn attach_hydrated_element_events(
 			.map_err(|error| HydrationError::EventAttachmentFailed(error.to_string()))?;
 	}
 
+	let initializing_reactive_attributes = std::rc::Rc::new(std::cell::Cell::new(true));
 	let reactive_attribute_effects = element_view
 		.reactive_attrs()
 		.iter()
@@ -1326,6 +1327,7 @@ fn attach_hydrated_element_events(
 		.map(|attribute| {
 			let element = element.clone();
 			let binding = element_view.bound_control().cloned();
+			let initializing = std::rc::Rc::clone(&initializing_reactive_attributes);
 			crate::reactive::Effect::new(move || {
 				match attribute.value() {
 					Some(value)
@@ -1348,7 +1350,8 @@ fn attach_hydrated_element_events(
 						let _ = element.remove_attribute(attribute.name());
 					}
 				}
-				if let Some(binding) = binding.as_ref()
+				if !initializing.get()
+					&& let Some(binding) = binding.as_ref()
 					&& crate::component::into_page::controlled_attribute_affects_value(
 						&element,
 						binding,
@@ -1363,6 +1366,7 @@ fn attach_hydrated_element_events(
 			})
 		})
 		.collect::<Vec<_>>();
+	initializing_reactive_attributes.set(false);
 	store_reactive_node(ReactiveAttributeEffects::new(reactive_attribute_effects));
 
 	Ok(())

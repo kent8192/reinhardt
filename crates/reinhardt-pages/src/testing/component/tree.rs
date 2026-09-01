@@ -586,17 +586,36 @@ impl TestDom {
 
 	pub(crate) fn refresh_control_bindings(&mut self) {
 		let mut selects = Vec::new();
-		for (node_id, node) in self.nodes.iter_mut().enumerate() {
-			let TestNode::Element(element) = node else {
+		for node_id in 0..self.nodes.len() {
+			let binding = {
+				let TestNode::Element(element) = &mut self.nodes[node_id] else {
+					continue;
+				};
+				element.refresh_reactive_attributes();
+				element.control_binding.clone()
+			};
+			let Some(binding) = binding else {
 				continue;
 			};
-			element.refresh_reactive_attributes();
-			let Some(binding) = element.control_binding.clone() else {
+			// ponytail: TestDom trees are small; index bindings if large-tree tests make this scan costly.
+			let conflicting_range = {
+				let TestNode::Element(element) = &self.nodes[node_id] else {
+					continue;
+				};
+				has_conflicting_native_range_binding(&self.nodes, Some(node_id), element, &binding)
+			};
+			let TestNode::Element(element) = &mut self.nodes[node_id] else {
 				continue;
 			};
 			let value = binding.read();
 			let normalized = normalize_native_control_value(element, &binding, value.clone());
-			let applied = apply_native_control_normalization(element, &binding, &value, normalized);
+			let applied = apply_native_control_normalization(
+				element,
+				&binding,
+				&value,
+				normalized,
+				!conflicting_range,
+			);
 			let signal_revision = reinhardt_core::reactive::with_runtime(|runtime| {
 				runtime.signal_revision(binding.target())
 			});
@@ -744,11 +763,18 @@ impl TestDom {
 					) {
 					let normalized =
 						normalize_native_control_value(&element_node, &binding, value.clone());
+					let normalization_write_back_allowed = !has_conflicting_native_range_binding(
+						&self.nodes,
+						None,
+						&element_node,
+						&binding,
+					);
 					let applied = apply_native_control_normalization(
 						&element_node,
 						&binding,
 						&value,
 						normalized,
+						normalization_write_back_allowed,
 					);
 					element_node.last_observed_control_value = Some(binding.read());
 					element_node.last_observed_signal_revision =
@@ -1316,24 +1342,9 @@ fn normalize_native_control_value(
 	if binding.kind() != ControlKind::Number || !input_type.eq_ignore_ascii_case("range") {
 		return ControlValue::Text(raw);
 	}
-	let min_attribute = element
-		.attr("min")
-		.and_then(|value| value.parse::<f64>().ok())
-		.filter(|value| value.is_finite());
-	let min = min_attribute.unwrap_or(0.0);
-	let max = element
-		.attr("max")
-		.and_then(|value| value.parse::<f64>().ok())
-		.filter(|value| value.is_finite())
-		.unwrap_or(100.0);
-	let step_base = min_attribute
-		.or_else(|| {
-			element
-				.attr("value")
-				.and_then(|value| value.parse::<f64>().ok())
-				.filter(|value| value.is_finite())
-		})
-		.unwrap_or(0.0);
+	let Some((min, max, step, step_base)) = native_range_constraints(element) else {
+		return ControlValue::Text(raw);
+	};
 	let number = raw
 		.parse::<f64>()
 		.ok()
@@ -1343,15 +1354,6 @@ fn normalize_native_control_value(
 		min
 	} else {
 		let clamped = number.clamp(min, max);
-		let step = match element.attr("step") {
-			Some(value) if value.eq_ignore_ascii_case("any") => None,
-			Some(value) => value
-				.parse::<f64>()
-				.ok()
-				.filter(|value| value.is_finite() && *value > 0.0)
-				.or(Some(1.0)),
-			None => Some(1.0),
-		};
 		match step {
 			None => clamped,
 			Some(step) => {
@@ -1385,6 +1387,82 @@ fn normalize_native_control_value(
 	}
 }
 
+fn native_range_constraints(element: &ElementNode) -> Option<(f64, f64, Option<f64>, f64)> {
+	if !element.tag.eq_ignore_ascii_case("input")
+		|| !element
+			.attr("type")
+			.is_some_and(|input_type| input_type.eq_ignore_ascii_case("range"))
+	{
+		return None;
+	}
+	let min_attribute = element
+		.attr("min")
+		.and_then(|value| value.parse::<f64>().ok())
+		.filter(|value| value.is_finite());
+	let min = min_attribute.unwrap_or(0.0);
+	let max = element
+		.attr("max")
+		.and_then(|value| value.parse::<f64>().ok())
+		.filter(|value| value.is_finite())
+		.unwrap_or(100.0);
+	let step_base = min_attribute
+		.or_else(|| {
+			element
+				.attr("value")
+				.and_then(|value| value.parse::<f64>().ok())
+				.filter(|value| value.is_finite())
+		})
+		.unwrap_or(0.0);
+	let step = match element.attr("step") {
+		Some(value) if value.eq_ignore_ascii_case("any") => None,
+		Some(value) => value
+			.parse::<f64>()
+			.ok()
+			.filter(|value| value.is_finite() && *value > 0.0)
+			.or(Some(1.0)),
+		None => Some(1.0),
+	};
+	Some((min, max, step, step_base))
+}
+
+fn has_conflicting_native_range_binding(
+	nodes: &[TestNode],
+	current_node: Option<NodeId>,
+	element: &ElementNode,
+	binding: &ControlBinding,
+) -> bool {
+	if binding.kind() != ControlKind::Number {
+		return false;
+	}
+	let Some((min, max, step, step_base)) = native_range_constraints(element) else {
+		return false;
+	};
+	let constraints = (min, max.max(min), step, step_base);
+	nodes.iter().enumerate().any(|(node_id, candidate)| {
+		if current_node == Some(node_id) {
+			return false;
+		}
+		let TestNode::Element(candidate) = candidate else {
+			return false;
+		};
+		candidate
+			.control_binding
+			.as_ref()
+			.is_some_and(|candidate_binding| {
+				candidate_binding.kind() == ControlKind::Number
+					&& candidate_binding.target() == binding.target()
+					&& native_range_constraints(candidate).is_some_and(
+						|(min, max, step, step_base)| {
+							crate::control_binding::range_constraints_conflict(
+								constraints,
+								(min, max.max(min), step, step_base),
+							)
+						},
+					)
+			})
+	})
+}
+
 fn normalize_native_color_value(raw: &str) -> String {
 	let bytes = raw.as_bytes();
 	if bytes.len() == 7
@@ -1402,8 +1480,10 @@ fn apply_native_control_normalization(
 	binding: &ControlBinding,
 	original: &ControlValue,
 	normalized: ControlValue,
+	normalization_write_back_allowed: bool,
 ) -> ControlValue {
 	if &normalized == original
+		|| !normalization_write_back_allowed
 		|| !should_commit_native_normalization(element, binding, original, &normalized)
 	{
 		return normalized;
@@ -1688,6 +1768,81 @@ mod case_normalization_tests {
 
 			assert_eq!(value.get(), 50.0);
 			assert_eq!(dom.value(node).as_deref(), Some("50"));
+		});
+	}
+
+	#[rstest]
+	fn native_conflicting_ranges_keep_browser_values_local() {
+		ReactiveScope::run(|| {
+			let value = Signal::new(150_i32);
+			let mut dom = TestDom::render(
+				PageElement::new("div")
+					.child(
+						PageElement::new("input")
+							.attr("type", "range")
+							.attr("max", "100")
+							.control_binding(ControlBinding::number(value)),
+					)
+					.child(
+						PageElement::new("input")
+							.attr("type", "range")
+							.attr("min", "200")
+							.attr("max", "400")
+							.control_binding(ControlBinding::number(value)),
+					)
+					.into_page(),
+			);
+			let container = dom.children(dom.root())[0];
+			let ranges = dom.children(container).to_vec();
+
+			assert_eq!(
+				(value.get(), dom.value(ranges[0]), dom.value(ranges[1])),
+				(100, Some("100".to_owned()), Some("200".to_owned()))
+			);
+
+			value.set(150);
+			dom.refresh_control_bindings();
+
+			assert_eq!(
+				(value.get(), dom.value(ranges[0]), dom.value(ranges[1])),
+				(150, Some("100".to_owned()), Some("200".to_owned()))
+			);
+		});
+	}
+
+	#[rstest]
+	fn native_range_normalization_precedes_later_reactive_attributes() {
+		ReactiveScope::run(|| {
+			let value = Signal::new(150_i32);
+			let second_max = value;
+			let mut dom = TestDom::render(
+				PageElement::new("div")
+					.child(
+						PageElement::new("input")
+							.attr("type", "range")
+							.attr("max", "100")
+							.control_binding(ControlBinding::number(value)),
+					)
+					.child(
+						PageElement::new("input")
+							.attr("type", "range")
+							.reactive_attr("max", move || Some(second_max.get().to_string().into()))
+							.control_binding(ControlBinding::number(value)),
+					)
+					.into_page(),
+			);
+			let container = dom.children(dom.root())[0];
+			let ranges = dom.children(container).to_vec();
+
+			value.set(150);
+			dom.refresh_control_bindings();
+
+			assert_eq!(value.get(), 100);
+			assert_eq!(
+				dom.element(ranges[1])
+					.and_then(|element| element.attr("max")),
+				Some("100")
+			);
 		});
 	}
 

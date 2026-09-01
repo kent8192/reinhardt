@@ -203,9 +203,20 @@ fn main() {
 		assert_eq!(form.title_field().name(), "title");
 		let runtime = use_form(&form).build();
 		let _ = page!({
-			input { a11y: off, bind: text(runtime.field(form.title_field())) }
-			input { a11y: off, type: "radio", value: "published", bind: radio(runtime.field(form.title_field()), "published") }
-			select { a11y: off, bind: selected(runtime.field(form.title_field())) }
+			input {
+				a11y: off,
+				bind: runtime.field(form.title_field())
+			}
+			input {
+				a11y: off,
+				type: "radio",
+				value: "published",
+				bind: runtime.field(form.title_field())
+			}
+			select {
+				a11y: off,
+				bind: runtime.field(form.title_field())
+			}
 		});
 	});
 }

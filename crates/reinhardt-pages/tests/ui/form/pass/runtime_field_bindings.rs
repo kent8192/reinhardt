@@ -10,19 +10,45 @@ fn main() {
 				count: IntegerField,
 				active: BooleanField,
 				choice: CharField,
-				choice_typed: ChoiceField<String> { widget: RadioSelect, choices_from: "options", choice_value: "value", choice_label: "label" },
+				choice_typed: ChoiceField<String> {
+					widget: RadioSelect,
+					choices_from: "options",
+					choice_value: "value",
+					choice_label: "label"
+				},
 				labels: MultipleChoiceField<String>,
 			}
 		};
 		let runtime = use_form(&form).build();
 		let _ = page!({
-			input { bind: text(runtime.field(RuntimeFormField::Name)) }
-			input { type: "number", bind: number(runtime.field(RuntimeFormField::Count)) }
-			input { type: "checkbox", bind: checked(runtime.field(RuntimeFormField::Active)) }
-			input { type: "radio", value: "yes", bind: radio(runtime.field(RuntimeFormField::Choice), "yes") }
-			input { type: "radio", value: "yes", bind: radio(runtime.field(RuntimeFormField::ChoiceTyped), "yes") }
-			select { bind: selected(runtime.field(RuntimeFormField::Choice)) }
-			select { multiple: true, bind: selected_many(runtime.field(RuntimeFormField::Labels)) }
+			input {
+				bind: runtime.field(RuntimeFormField::Name)
+			}
+			input {
+				type: "number",
+				bind: runtime.field(RuntimeFormField::Count)
+			}
+			input {
+				type: "checkbox",
+				bind: runtime.field(RuntimeFormField::Active)
+			}
+			input {
+				type: "radio",
+				value: "yes",
+				bind: runtime.field(RuntimeFormField::Choice)
+			}
+			input {
+				type: "radio",
+				value: "yes",
+				bind: runtime.field(RuntimeFormField::ChoiceTyped)
+			}
+			select {
+				bind: runtime.field(RuntimeFormField::Choice)
+			}
+			select {
+				multiple: true,
+				bind: runtime.field(RuntimeFormField::Labels)
+			}
 		});
 	});
 }

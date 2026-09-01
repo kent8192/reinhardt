@@ -12,8 +12,8 @@ use reinhardt_pages::component::{PageExt, cleanup_reactive_nodes};
 use reinhardt_pages::dom::Element;
 use reinhardt_pages::hydration::hydrate;
 use reinhardt_pages::prelude::defer_yield;
-use reinhardt_pages::reactive::ReactiveScope;
 use reinhardt_pages::reactive::query::{QueryClient, QueryDefaults, QueryOptions};
+use reinhardt_pages::reactive::{Effect, ReactiveScope};
 use serial_test::serial;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::*;
@@ -584,6 +584,90 @@ async fn delete_mutation_suppresses_duplicate_dispatches_while_pending() {
 	assert_eq!(fetch.delete_requests(), 1);
 
 	scope.dispose();
+}
+
+#[wasm_bindgen_test]
+#[serial(server_mutation_globals)]
+fn stale_mutation_dispatch_is_ignored() {
+	let scope = ReactiveScope::new();
+	let mutation = scope.enter(|| use_server_mutation(delete_cluster::mutation()).build());
+
+	scope.dispose();
+
+	assert_eq!(
+		mutation.dispatch("cluster-1".to_owned()),
+		MutationDispatchOutcome::AlreadyPending
+	);
+}
+
+#[wasm_bindgen_test(async)]
+#[serial(server_mutation_globals)]
+async fn generated_dispatch_does_not_subscribe_the_calling_effect() {
+	let fetch = FetchGuard::install();
+	let scope = ReactiveScope::new();
+	let effect_runs = Rc::new(Cell::new(0));
+	let (form, runtime, mutation, _effect) = scope.enter(|| {
+		let form = UpdateClusterRequestClientForm::new().with_defaults(default_update_request());
+		let runtime = use_form(&form).build();
+		runtime.set_value(form.name_field(), "existing".to_owned());
+		let mutation = form.server_mutation(&runtime).build();
+		let mutation_for_effect = mutation.clone();
+		let effect_runs_for_effect = Rc::clone(&effect_runs);
+		let effect = Effect::new(move || {
+			let run = effect_runs_for_effect.get();
+			effect_runs_for_effect.set(run + 1);
+			if run == 0 {
+				assert_eq!(
+					mutation_for_effect.dispatch(),
+					MutationDispatchOutcome::Dispatched
+				);
+			}
+		});
+		(form, runtime, mutation, effect)
+	});
+
+	wait_until(
+		&fetch,
+		"effect-driven validation error",
+		|| {
+			runtime
+				.get_field_state(form.name_field())
+				.error
+				.as_ref()
+				.map(|error| error.message())
+				== Some("Name is already used")
+		},
+		|| format!("{:?}", mutation.phase()),
+	)
+	.await;
+	settle_browser().await;
+
+	assert_eq!(effect_runs.get(), 1);
+	assert_eq!(fetch.update_requests(), 1);
+	scope.dispose();
+}
+
+#[wasm_bindgen_test(async)]
+#[serial(server_mutation_globals)]
+async fn disposing_mutation_scope_clears_parent_form_pending() {
+	let _fetch = FetchGuard::install();
+	let parent_scope = ReactiveScope::new();
+	let (form, runtime) = parent_scope.enter(|| {
+		let form = UpdateClusterRequestClientForm::new().with_defaults(default_update_request());
+		let runtime = use_form(&form).build();
+		runtime.set_value(form.name_field(), "pending".to_owned());
+		(form, runtime)
+	});
+	let mutation_scope = ReactiveScope::new();
+	let mutation = mutation_scope.enter(|| form.server_mutation(&runtime).build());
+
+	assert_eq!(mutation.dispatch(), MutationDispatchOutcome::Dispatched);
+	assert!(runtime.form_state().is_submitting.get());
+	mutation_scope.dispose();
+	settle_browser().await;
+
+	assert!(!runtime.form_state().is_submitting.get());
+	parent_scope.dispose();
 }
 
 #[wasm_bindgen_test(async)]

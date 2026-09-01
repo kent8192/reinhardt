@@ -202,9 +202,12 @@ impl<T: Clone + 'static, E: Clone + 'static> Action<T, E> {
 		self.phase().is_pending()
 	}
 
-	#[cfg(any(wasm, test))]
-	pub(crate) fn is_pending_untracked(&self) -> bool {
-		self.state().get_untracked().is_pending()
+	pub(crate) fn try_is_pending_untracked(&self) -> Option<bool> {
+		with_page_node::<ActionSlot<T, E>, _>(self.key, |slot| slot.state)
+			.ok()?
+			.try_get_untracked()
+			.ok()
+			.map(|phase| phase.is_pending())
 	}
 
 	/// Returns `true` if the action completed successfully.
@@ -843,6 +846,17 @@ mod tests {
 
 	#[rstest]
 	#[serial_test::serial(reactive_runtime)]
+	fn stale_action_pending_check_is_unavailable() {
+		let scope = reinhardt_core::reactive::ReactiveScope::new();
+		let action = scope.enter(|| use_action(|_: ()| async { Ok::<i32, String>(42) }));
+
+		scope.dispose();
+
+		assert_eq!(action.try_is_pending_untracked(), None);
+	}
+
+	#[rstest]
+	#[serial_test::serial(reactive_runtime)]
 	fn untracked_pending_check_does_not_subscribe() {
 		let scope = reinhardt_core::reactive::ReactiveScope::new();
 		let action = scope.enter(|| use_action(|_: ()| async { Ok::<(), String>(()) }));
@@ -852,7 +866,7 @@ mod tests {
 			let runs = Rc::clone(&runs);
 			reinhardt_core::reactive::Effect::new(move || {
 				runs.set(runs.get() + 1);
-				let _ = action.is_pending_untracked();
+				assert_eq!(action.try_is_pending_untracked(), Some(false));
 			})
 		});
 

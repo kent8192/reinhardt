@@ -26,7 +26,7 @@ type FormPrepare<Form, Deps, Input> = Rc<
 pub enum MutationDispatchOutcome {
 	/// The mutation was dispatched.
 	Dispatched,
-	/// The mutation was already pending and no new dispatch occurred.
+	/// The mutation was pending or no longer live, so no new dispatch occurred.
 	AlreadyPending,
 	/// Validation failed before dispatch could start.
 	ValidationFailed,
@@ -362,6 +362,20 @@ where
 			prepare,
 			reset_form_on_success,
 		} = self;
+		let action_fn = Rc::clone(&builder.action_fn);
+		let form_for_pending = form.clone();
+		builder.action_fn = Rc::new(move |input| {
+			let mut pending_guard = crate::form_state::SubmitPendingGuard::new(
+				form_for_pending.form_state().is_submitting,
+			);
+			let future = action_fn(input);
+			let future: ServerMutationFuture<Output> = Box::pin(async move {
+				let result = future.await;
+				pending_guard.disarm();
+				result
+			});
+			future
+		});
 		let form_for_success = form.clone();
 		builder.before_success.push(Rc::new(move |_| {
 			form_for_success.complete_submit_success();
@@ -416,7 +430,7 @@ where
 
 	/// Resets the mutation back to `Idle`.
 	pub fn reset(&self) {
-		if self.action.is_pending() {
+		if self.action.try_is_pending_untracked() != Some(false) {
 			return;
 		}
 		self.action.reset();
@@ -425,7 +439,7 @@ where
 
 	#[cfg(wasm)]
 	fn reset_action_preserving_result(&self) {
-		if !self.action.is_pending() {
+		if self.action.try_is_pending_untracked() == Some(false) {
 			self.action.reset();
 		}
 	}
@@ -448,7 +462,7 @@ where
 	pub fn dispatch(&self, input: Input) -> MutationDispatchOutcome {
 		#[cfg(wasm)]
 		{
-			if self.action.is_pending_untracked() {
+			if self.action.try_is_pending_untracked() != Some(false) {
 				return MutationDispatchOutcome::AlreadyPending;
 			}
 			self.action.dispatch(input);
@@ -542,9 +556,13 @@ where
 		{
 			let mut pending_guard =
 				crate::form_state::SubmitPendingGuard::new(self.form.form_state().is_submitting);
-			if self.mutation.is_pending() {
-				pending_guard.disarm();
-				return MutationDispatchOutcome::AlreadyPending;
+			match self.mutation.action.try_is_pending_untracked() {
+				Some(false) => {}
+				Some(true) => {
+					pending_guard.disarm();
+					return MutationDispatchOutcome::AlreadyPending;
+				}
+				None => return MutationDispatchOutcome::AlreadyPending,
 			}
 			match self.form.begin_submit_lifecycle() {
 				crate::UseFormSubmitOutcome::AlreadyPending => {
@@ -596,7 +614,7 @@ mod tests {
 	use std::cell::{Cell, RefCell};
 	use std::rc::Rc;
 
-	use reinhardt_core::reactive::ReactiveScope;
+	use reinhardt_core::reactive::{Effect, ReactiveScope, with_runtime};
 	use rstest::rstest;
 
 	use super::ServerMutation;
@@ -814,6 +832,29 @@ mod tests {
 			assert_eq!(mutation.phase(), ActionPhase::Idle);
 			assert_eq!(mutation.result(), None);
 		});
+	}
+
+	#[rstest]
+	#[serial_test::serial(reactive_runtime)]
+	fn reset_does_not_subscribe_the_calling_effect() {
+		let scope = ReactiveScope::new();
+		let mutation = scope.enter(|| {
+			use_server_mutation(|value: i32| async move { Ok::<i32, ServerFnError>(value) }).build()
+		});
+		mutation.force_success_for_test(7);
+		let runs = Rc::new(Cell::new(0));
+		let runs_for_effect = Rc::clone(&runs);
+		let _effect = scope.enter(|| {
+			Effect::new(move || {
+				runs_for_effect.set(runs_for_effect.get() + 1);
+				mutation.reset();
+			})
+		});
+
+		with_runtime(|runtime| runtime.flush_updates());
+
+		assert_eq!(runs.get(), 1);
+		assert_eq!(mutation.phase(), ActionPhase::Idle);
 	}
 
 	#[rstest]

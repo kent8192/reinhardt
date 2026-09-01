@@ -3203,6 +3203,13 @@ fn generate_model_form(
 											.collect::<::std::vec::Vec<_>>();
 										let mut state = submit_form.__model_state.borrow_mut();
 										for (field, is_checkbox, nullable, required, has_default, is_range, is_color) in fields {
+											let checkbox_sentinel = format!("__reinhardt_checkbox_{field}");
+											let checkbox_was_unchecked = is_checkbox
+												&& values
+													.get(&checkbox_sentinel)
+													.as_string()
+													.as_deref()
+													== ::core::option::Option::Some("false");
 											let default_clear_sentinel = format!("__reinhardt_defaulted_{field}");
 											let clears_default = nullable
 												&& has_default
@@ -3234,9 +3241,7 @@ fn generate_model_form(
 													snapshot_valid = false;
 													submit_form.error.set(::core::option::Option::Some(error.to_string()));
 												}
-											} else if is_checkbox
-												&& !nullable
-												&& !(has_default && state.value(field).is_none())
+											} else if checkbox_was_unchecked && !nullable
 											{
 												let _ = state.set_value(field, #pages_crate::__private::serde_json::Value::Bool(false));
 											}
@@ -8765,6 +8770,8 @@ mod tests {
 		assert!(output.contains("Value :: Null => :: std :: string :: String :: new ()"));
 		assert!(output.contains("child (\"Unset\")"));
 		assert!(output.contains("__reinhardt_checkbox_"));
+		assert!(output.contains("let checkbox_was_unchecked = is_checkbox"));
+		assert!(output.contains("values . get (& checkbox_sentinel)"));
 		assert!(output.contains("\"unset\""));
 		assert!(output.contains("Clear value"));
 		assert!(!output.contains("checkbox_edit_script"));

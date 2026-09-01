@@ -1078,18 +1078,20 @@ fn text_binding_accepts_exact_text_controls(
 }
 
 #[rstest]
-#[case("search")]
-#[case("tel")]
-#[case("url")]
-#[case("email")]
-#[case("password")]
-#[case("color")]
+#[case("search", "bound", "edited")]
+#[case("tel", "bound", "edited")]
+#[case("url", "bound", "edited")]
+#[case("email", "bound", "edited")]
+#[case("password", "bound", "edited")]
+#[case("color", "#112233", "#abcdef")]
 fn text_binding_accepts_supported_input_types(
 	#[case] input_type: &str,
+	#[case] initial: &str,
+	#[case] edited: &str,
 	reactive_scope: ReactiveScope,
 ) {
 	// Arrange
-	let value = signal_in_scope(&reactive_scope, "bound".to_owned());
+	let value = signal_in_scope(&reactive_scope, initial.to_owned());
 	let screen = render(
 		PageElement::new("input")
 			.attr("aria-label", "Text target")
@@ -1099,11 +1101,11 @@ fn text_binding_accepts_supported_input_types(
 	let input = screen.get_by_label("Text target");
 
 	// Act
-	input.input("edited");
+	input.input(edited);
 
 	// Assert
-	assert_eq!(value.get(), "edited");
-	assert_eq!(input.value().as_deref(), Some("edited"));
+	assert_eq!(value.get(), edited);
+	assert_eq!(input.value().as_deref(), Some(edited));
 }
 
 #[rstest]
@@ -1124,6 +1126,37 @@ fn number_binding_accepts_range_input_type(reactive_scope: ReactiveScope) {
 	// Assert
 	assert_eq!(value.get(), 42);
 	assert_eq!(input.value().as_deref(), Some("42"));
+}
+
+#[rstest]
+#[tokio::test]
+async fn range_binding_reconciles_native_control_bounds(reactive_scope: ReactiveScope) {
+	// Arrange
+	let value = signal_in_scope(&reactive_scope, 200_i32);
+	let screen = render(
+		PageElement::new("input")
+			.attr("aria-label", "Range target")
+			.attr("type", "range")
+			.control_binding(ControlBinding::number(value.clone())),
+	);
+
+	// Assert
+	assert_eq!(value.get(), 100);
+	assert_eq!(
+		screen.get_by_label("Range target").value().as_deref(),
+		Some("100")
+	);
+
+	// Act
+	value.set(-10);
+	screen.settle().await;
+
+	// Assert
+	assert_eq!(value.get(), 0);
+	assert_eq!(
+		screen.get_by_label("Range target").value().as_deref(),
+		Some("0")
+	);
 }
 
 #[rstest]

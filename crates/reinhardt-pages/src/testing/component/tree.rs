@@ -583,7 +583,12 @@ impl TestDom {
 			let Some(binding) = element.control_binding.clone() else {
 				continue;
 			};
-			let value = binding.read();
+			let mut value = binding.read();
+			let normalized = normalize_native_control_value(element, &binding, value.clone());
+			if normalized != value {
+				let _ = binding.write(normalized.clone());
+				value = normalized;
+			}
 			let signal_revision = reinhardt_core::reactive::with_runtime(|runtime| {
 				runtime.signal_revision(binding.target())
 			});
@@ -729,6 +734,15 @@ impl TestDom {
 						element_node.control_binding.clone(),
 						last_observed_control_value,
 					) {
+					let value = normalize_native_control_value(&element_node, &binding, value);
+					if value != binding.read() {
+						let _ = binding.write(value.clone());
+					}
+					element_node.last_observed_control_value = Some(value.clone());
+					element_node.last_observed_signal_revision =
+						Some(reinhardt_core::reactive::with_runtime(|runtime| {
+							runtime.signal_revision(binding.target())
+						}));
 					element_node.apply_control_value(&binding, value);
 				}
 				if let Some(raw) = rejected_number_raw {
@@ -1244,6 +1258,52 @@ fn has_effective_text_type(input_type: Option<&str>) -> bool {
 		]
 		.iter()
 		.any(|known| input_type.eq_ignore_ascii_case(known))
+}
+
+fn normalize_native_control_value(
+	element: &ElementNode,
+	binding: &ControlBinding,
+	value: ControlValue,
+) -> ControlValue {
+	// ponytail: model range min/max clamping only; add full step sanitization if native parity requires it.
+	if binding.kind() != ControlKind::Number
+		|| !element.tag.eq_ignore_ascii_case("input")
+		|| !element
+			.attr("type")
+			.is_some_and(|input_type| input_type.eq_ignore_ascii_case("range"))
+	{
+		return value;
+	}
+	let ControlValue::Text(raw) = value else {
+		return value;
+	};
+	let Ok(number) = raw.parse::<f64>() else {
+		return ControlValue::Text(raw);
+	};
+	if !number.is_finite() {
+		return ControlValue::Text(raw);
+	}
+	let min = element
+		.attr("min")
+		.and_then(|value| value.parse::<f64>().ok())
+		.filter(|value| value.is_finite())
+		.unwrap_or(0.0);
+	let max = element
+		.attr("max")
+		.and_then(|value| value.parse::<f64>().ok())
+		.filter(|value| value.is_finite())
+		.unwrap_or(100.0);
+	let normalized = if max < min {
+		min
+	} else {
+		number.clamp(min, max)
+	};
+	let normalized = normalized.to_string();
+	if normalized == raw {
+		ControlValue::Text(raw)
+	} else {
+		ControlValue::Text(normalized)
+	}
 }
 
 #[cfg(test)]

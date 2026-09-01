@@ -2423,7 +2423,7 @@ fn generate_server_handler(
 					}
 					#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 					{
-						drop(request);
+						let _request = request;
 						::std::boxed::Box::pin(async move { ::core::unreachable!() })
 					}
 				}

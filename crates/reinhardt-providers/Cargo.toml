@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-providers"
-version = "0.3.14"
+version = "0.3.15"
 description = "Cloud provider integrations for Reinhardt"
 edition.workspace = true
 rust-version.workspace = true

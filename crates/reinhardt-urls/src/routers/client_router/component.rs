@@ -88,11 +88,21 @@ pub struct ComponentMetadata {
 	pub module_path: &'static str,
 	/// Optional stable route-level loader identifier.
 	pub loader_id: Option<RouteLoaderId>,
-	/// Optional stable route-level navigation guard identifier.
-	pub navigation_guard_id: Option<NavigationGuardId>,
 }
 
 inventory::collect!(ComponentMetadata);
+
+/// Static navigation-guard metadata submitted by `#[component]`.
+pub struct ComponentNavigationGuardMetadata {
+	/// Client route pattern.
+	pub path: &'static str,
+	/// Route name used by `ClientRouter`.
+	pub name: &'static str,
+	/// Stable route-level navigation guard identifier.
+	pub navigation_guard_id: NavigationGuardId,
+}
+
+inventory::collect!(ComponentNavigationGuardMetadata);
 
 /// Static metadata submitted by `#[layout]` for diagnostics and tooling.
 pub struct LayoutMetadata {
@@ -110,8 +120,48 @@ pub struct LayoutMetadata {
 	pub module_path: &'static str,
 	/// Optional stable route-level loader identifier.
 	pub loader_id: Option<RouteLoaderId>,
-	/// Optional stable route-level navigation guard identifier.
-	pub navigation_guard_id: Option<NavigationGuardId>,
 }
 
 inventory::collect!(LayoutMetadata);
+
+/// Static navigation-guard metadata submitted by `#[layout]`.
+pub struct LayoutNavigationGuardMetadata {
+	/// Client layout route pattern.
+	pub path: &'static str,
+	/// Layout route name used by `ClientRouter`.
+	pub name: &'static str,
+	/// Stable route-level navigation guard identifier.
+	pub navigation_guard_id: NavigationGuardId,
+}
+
+inventory::collect!(LayoutNavigationGuardMetadata);
+
+#[cfg(test)]
+mod tests {
+	use super::{ComponentMetadata, LayoutMetadata};
+
+	#[test]
+	fn legacy_metadata_struct_literals_remain_compatible() {
+		let component = ComponentMetadata {
+			path: "/component/",
+			name: "component",
+			component_name: "Component",
+			function_name: "component",
+			props_type_name: "ComponentProps",
+			module_path: "tests",
+			loader_id: None,
+		};
+		let layout = LayoutMetadata {
+			path: "/layout/",
+			name: "layout",
+			component_name: "Layout",
+			function_name: "layout",
+			props_type_name: "LayoutProps",
+			module_path: "tests",
+			loader_id: None,
+		};
+
+		assert_eq!(component.path, "/component/");
+		assert_eq!(layout.path, "/layout/");
+	}
+}

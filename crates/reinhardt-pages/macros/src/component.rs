@@ -239,6 +239,20 @@ fn expand_component(args: ComponentArgs, input: ItemFn) -> syn::Result<proc_macr
 		|| quote! { ::core::option::Option::None },
 		|id| quote! { ::core::option::Option::Some(#id) },
 	);
+	let navigation_guard_metadata = navigation_guard_id.as_ref().map_or_else(
+		|| quote! {},
+		|id| {
+			quote! {
+				#pages_crate::__private::inventory::submit! {
+					#pages_crate::__private::reinhardt_urls::routers::client_router::ComponentNavigationGuardMetadata {
+						path: #path,
+						name: #route_name,
+						navigation_guard_id: #id,
+					}
+				}
+			}
+		},
+	);
 	let loader_assertion = loader_binding.as_ref().map_or_else(
 		|| quote! {},
 		|binding| {
@@ -387,9 +401,10 @@ fn expand_component(args: ComponentArgs, input: ItemFn) -> syn::Result<proc_macr
 				props_type_name: #props_type_literal,
 				module_path: ::core::module_path!(),
 				loader_id: #loader_id_method,
-				navigation_guard_id: #navigation_guard_id_method,
 			}
 		}
+
+		#navigation_guard_metadata
 
 		fn #original_ident(#(#original_inputs,)*) #output {
 			#block
@@ -467,6 +482,20 @@ fn expand_layout(args: LayoutArgs, input: ItemFn) -> syn::Result<proc_macro2::To
 	let navigation_guard_id_method = navigation_guard_id.as_ref().map_or_else(
 		|| quote! { ::core::option::Option::None },
 		|id| quote! { ::core::option::Option::Some(#id) },
+	);
+	let navigation_guard_metadata = navigation_guard_id.as_ref().map_or_else(
+		|| quote! {},
+		|id| {
+			quote! {
+				#pages_crate::__private::inventory::submit! {
+					#pages_crate::__private::reinhardt_urls::routers::client_router::LayoutNavigationGuardMetadata {
+						path: #path,
+						name: #route_name,
+						navigation_guard_id: #id,
+					}
+				}
+			}
+		},
 	);
 	let loader_assertion = loader_binding.as_ref().map_or_else(
 		|| quote! {},
@@ -621,9 +650,10 @@ fn expand_layout(args: LayoutArgs, input: ItemFn) -> syn::Result<proc_macro2::To
 				props_type_name: #props_type_literal,
 				module_path: ::core::module_path!(),
 				loader_id: #loader_id_method,
-				navigation_guard_id: #navigation_guard_id_method,
 			}
 		}
+
+		#navigation_guard_metadata
 
 		fn #original_ident(#(#original_inputs,)* #outlet_name: #outlet_ty) #output {
 			#block

@@ -90,7 +90,8 @@ pub mod scope;
 pub mod tree;
 // Public re-exports
 pub use component::{
-	ComponentInfo, ComponentMetadata, FromLayoutRequest, LayoutInfo, LayoutMetadata,
+	ComponentInfo, ComponentMetadata, ComponentNavigationGuardMetadata, FromLayoutRequest,
+	LayoutInfo, LayoutMetadata, LayoutNavigationGuardMetadata,
 };
 pub use core::{
 	ClientRoute, ClientRouteMatch, ClientRouter, NavigationSubscription, RouteMetadata,

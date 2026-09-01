@@ -3,7 +3,7 @@
 //! This module provides the main ClientRouter struct and routing logic.
 //! The router uses `Page` type for all view rendering.
 
-use super::component::{ComponentInfo, ComponentMetadata};
+use super::component::{ComponentInfo, ComponentMetadata, ComponentNavigationGuardMetadata};
 use super::error::{MergeError, RouteRegistrationError, RouterError};
 use super::from_request::FromRequest;
 use super::handler::{
@@ -925,10 +925,10 @@ impl ClientRouter {
 			.into_iter()
 			.find(|metadata| metadata.name == name && metadata.path == pattern)
 			.and_then(|metadata| metadata.loader_id);
-		let navigation_guard_id = inventory::iter::<ComponentMetadata>
+		let navigation_guard_id = inventory::iter::<ComponentNavigationGuardMetadata>
 			.into_iter()
 			.find(|metadata| metadata.name == name && metadata.path == pattern)
-			.and_then(|metadata| metadata.navigation_guard_id);
+			.map(|metadata| metadata.navigation_guard_id);
 		let mut route = ClientRoute::from_route_handler(
 			Some(name.to_string()),
 			ClientPathPattern::new(pattern)
@@ -1984,7 +1984,14 @@ mod tests {
 			props_type_name: "LoadedPageProps",
 			module_path: module_path!(),
 			loader_id: Some(RouteLoaderId::new("test:loaded-page")),
-			navigation_guard_id: Some(NavigationGuardId::new("test:loaded-page-guard")),
+		}
+	}
+
+	inventory::submit! {
+		ComponentNavigationGuardMetadata {
+			path: "/loaded/",
+			name: "loaded-page",
+			navigation_guard_id: NavigationGuardId::new("test:loaded-page-guard"),
 		}
 	}
 

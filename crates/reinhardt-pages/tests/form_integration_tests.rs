@@ -434,6 +434,35 @@ fn model_form_binding_setters_keep_raw_text_and_reject_invalid_numeric_edits() {
 }
 
 #[test]
+fn model_form_binding_validation_rechecks_raw_text_values() {
+	let mut state = ModelFormState::<ModelFormBindingSchema, ModelFormBindingPolicy>::new();
+	state
+		.set_binding_text("email", "partial@".to_owned())
+		.expect("controlled text should retain the editor value");
+	state
+		.set_value("count", serde_json::json!(7))
+		.expect("the required integer should be valid");
+	state
+		.set_value("ratio", serde_json::json!(0.5))
+		.expect("the required float should be valid");
+
+	assert_eq!(
+		state.validate_values(),
+		Err(ModelFormPayloadError::InvalidValue {
+			field: "email".to_owned(),
+			message: "has an invalid format".to_owned(),
+		})
+	);
+
+	state
+		.set_binding_text("email", "user@example.com".to_owned())
+		.expect("a valid email should replace the raw editor value");
+	state
+		.validate_values()
+		.expect("validated controlled values should pass submission validation");
+}
+
+#[test]
 fn model_form_binding_text_rejects_forbidden_unknown_file_and_image_fields() {
 	let mut state = ModelFormState::<ModelFormBindingSchema, ModelFormBindingPolicy>::new();
 
@@ -484,7 +513,7 @@ fn model_form_clearing_optional_control_removes_previous_payload_value() {
 		.set_value("unsigned", serde_json::json!(42_u64))
 		.expect("optional integer should accept a value");
 	state
-		.set_value("unsigned", serde_json::json!(""))
+		.set_binding_number("unsigned", "")
 		.expect("empty optional input should unset the control");
 
 	assert_eq!(state.value("unsigned"), None);

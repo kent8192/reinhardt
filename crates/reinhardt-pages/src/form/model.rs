@@ -322,6 +322,11 @@ where
 		let descriptor = self
 			.binding_descriptor(field)
 			.map_err(|_| NumberParseError::from_raw_kind(raw, NumberParseErrorKind::OutOfRange))?;
+		if raw.is_empty() {
+			return self
+				.set_value(field, serde_json::Value::String(String::new()))
+				.map_err(|_| NumberParseError::from_raw_kind(raw, NumberParseErrorKind::Empty));
+		}
 		let value = match descriptor.kind {
 			ModelFormFieldKind::Integer { .. } if raw.starts_with('-') => {
 				let value = <i64 as NumberValue>::parse_control_value(raw)?;
@@ -525,6 +530,31 @@ where
 			.iter()
 			.filter(|descriptor| descriptor.editable && P::allows(descriptor.name))
 			.collect()
+	}
+
+	/// Validates values retained by controlled bindings before submission.
+	///
+	/// Controlled text bindings intentionally retain raw editor text so that
+	/// incomplete input is not lost. Submission must therefore run the normal
+	/// descriptor conversion again instead of trusting the stored JSON shape.
+	#[doc(hidden)]
+	pub fn validate_values(&self) -> Result<(), ModelFormPayloadError> {
+		for descriptor in self.selected_descriptors() {
+			if is_file_kind(descriptor.kind) {
+				continue;
+			}
+			match self.values.get(descriptor.name) {
+				Some(serde_json::Value::Null) if descriptor.nullable => {}
+				Some(value) => {
+					convert_control_value(descriptor, value.clone())?;
+				}
+				None if descriptor.required => {
+					return Err(invalid_value(descriptor.name, "is required"));
+				}
+				None => {}
+			}
+		}
+		Ok(())
 	}
 
 	/// Clears every value that belongs to the active form policy.

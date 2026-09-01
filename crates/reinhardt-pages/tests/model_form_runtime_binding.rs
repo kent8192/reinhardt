@@ -452,6 +452,16 @@ fn numeric_binding_rejection_and_snapshot_preserve_value_and_error() {
 				.map(reinhardt_pages::FieldError::message),
 			Some("cannot parse numeric control value \"1e\": Incomplete")
 		);
+		let validation = runtime
+			.trigger()
+			.expect_err("an invalid numeric editor value must block validation");
+		assert_eq!(
+			validation
+				.field_errors()
+				.get(&form.count_field())
+				.map(reinhardt_pages::FieldError::message),
+			Some("cannot parse numeric control value \"1e\": Incomplete")
+		);
 
 		let snapshot = binding.snapshot();
 		assert_eq!(

@@ -1508,6 +1508,48 @@ fn generate_form_runtime_contract(
 			})
 		})
 		.collect();
+	let number_parse_validation_checks: Vec<TokenStream> = all_fields
+		.iter()
+		.zip(field_variants.iter())
+		.filter_map(|(field, variant)| {
+			if !matches!(
+				field.field_type,
+				TypedFieldType::IntegerField | TypedFieldType::FloatField
+			) {
+				return None;
+			}
+			let name = format_ident!(
+				"__{}_number_parse_error",
+				field.name,
+				span = field.name.span()
+			);
+			Some(quote! {
+				if let ::core::option::Option::Some(parse_error) = self.#name.get() {
+					error.add_field_error(
+						#field_ident::#variant,
+						parse_error.to_string(),
+					);
+				}
+			})
+		})
+		.collect();
+	let number_parse_error_resets: Vec<TokenStream> = all_fields
+		.iter()
+		.filter_map(|field| {
+			if !matches!(
+				field.field_type,
+				TypedFieldType::IntegerField | TypedFieldType::FloatField
+			) {
+				return None;
+			}
+			let name = format_ident!(
+				"__{}_number_parse_error",
+				field.name,
+				span = field.name.span()
+			);
+			Some(quote! { self.#name.set(::core::option::Option::None); })
+		})
+		.collect();
 	let collection_constraints_validation_checks: Vec<TokenStream> = collections
 		.iter()
 		.zip(collection_variants.iter())
@@ -1672,6 +1714,7 @@ fn generate_form_runtime_contract(
 
 			fn runtime_reset_state(&self) {
 				self.__explicitly_reset.set(true);
+				#(#number_parse_error_resets)*
 			}
 
 			fn runtime_reactive_scope(
@@ -1799,6 +1842,7 @@ fn generate_form_runtime_contract(
 				fn runtime_validate(&self) -> ::core::result::Result<(), #pages_crate::FormValidationError<Self::Field>> {
 					let mut error = #pages_crate::FormValidationError::new();
 					#(#required_validation_checks)*
+					#(#number_parse_validation_checks)*
 					#(#collection_constraints_validation_checks)*
 					#(#collection_required_validation_checks)*
 					match self.validate() {
@@ -2634,6 +2678,45 @@ fn generate_model_form(
 		},
 		TypedModelFieldSelection::Exclude(_) => quote! {},
 	};
+	let model_form_number_validation = match &model_source.selection {
+		TypedModelFieldSelection::Fields(fields) => {
+			let checks = fields.iter().filter_map(|field| {
+				let variant = field_variant_ident(field);
+				let error = format_ident!("__{}_number_parse_error", field, span = field.span());
+				Some(quote! {
+					if let ::core::option::Option::Some(parse_error) = self.#error.get() {
+						error.add_field_error(
+							__ReinhardtModelFormField::#variant,
+							parse_error.to_string(),
+						);
+					}
+				})
+			});
+			quote! { #(#checks)* }
+		}
+		TypedModelFieldSelection::Exclude(_) => quote! {},
+	};
+	let model_form_binding_validation = quote! {
+		if let ::core::result::Result::Err(__validation_error) =
+			self.__model_state.borrow().validate_values()
+		{
+			let __field_name = match &__validation_error {
+				#pages_crate::form::ModelFormPayloadError::UnknownField { field }
+				| #pages_crate::form::ModelFormPayloadError::ForbiddenField { field }
+				| #pages_crate::form::ModelFormPayloadError::InvalidValue { field, .. } => field.as_str(),
+			};
+			if let ::core::option::Option::Some(__field) =
+				<#form_ident as #pages_crate::FormRuntimeSource>::runtime_field_by_name(
+					self,
+					__field_name,
+				)
+			{
+				error.add_field_error(__field, __validation_error.to_string());
+			} else {
+				error.set_form_error(__validation_error.to_string());
+			}
+		}
+	};
 
 	let override_arms = model_source.overrides.iter().map(|override_| {
 		let name = override_.field.to_string();
@@ -2704,6 +2787,12 @@ fn generate_model_form(
 					"input",
 					"text",
 					#pages_crate::form::ModelFormFieldKind::Text { .. },
+				) => ::core::option::Option::Some(#pages_crate::component::ControlKind::Text),
+				(
+					"input",
+					"email" | "url",
+					#pages_crate::form::ModelFormFieldKind::Email { .. }
+					| #pages_crate::form::ModelFormFieldKind::Url { .. },
 				) => ::core::option::Option::Some(#pages_crate::component::ControlKind::Text),
 				(
 					"input",
@@ -2923,6 +3012,70 @@ fn generate_model_form(
 					}
 				}
 
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+				fn sync_mounted_field(
+					&self,
+					field: &str,
+					value: ::core::option::Option<
+						&#pages_crate::__private::serde_json::Value,
+					>,
+					kind: #pages_crate::form::ModelFormFieldKind,
+					default_true: bool,
+				) {
+					use #pages_crate::__private::wasm_bindgen::JsCast;
+					let Some(form) = #pages_crate::__private::web_sys::window()
+						.and_then(|window| window.document())
+						.and_then(|document| document.get_element_by_id(&self.__form_id))
+						.and_then(|form| form.dyn_into::<#pages_crate::__private::web_sys::HtmlFormElement>().ok())
+					else {
+						return;
+					};
+					let Ok(elements) = form.query_selector_all("[name]") else {
+						return;
+					};
+					let mut text_value = value.map_or_else(::std::string::String::new, |value| {
+						if matches!(kind, #pages_crate::form::ModelFormFieldKind::Json) {
+							#pages_crate::__private::serde_json::to_string(value).unwrap_or_default()
+						} else {
+							match value {
+								#pages_crate::__private::serde_json::Value::Null => ::std::string::String::new(),
+								#pages_crate::__private::serde_json::Value::String(value) => value.clone(),
+								value => value.to_string(),
+							}
+						}
+					});
+					if matches!(kind, #pages_crate::form::ModelFormFieldKind::DateTime) {
+						if let Some(value) = text_value.strip_suffix('Z') {
+							text_value = value.to_owned();
+						}
+					}
+					for index in 0..elements.length() {
+						let Some(element) = elements.item(index) else {
+							continue;
+						};
+						if let Ok(input) = element.clone().dyn_into::<#pages_crate::__private::web_sys::HtmlInputElement>()
+							&& input.name() == field
+						{
+							match input.type_().as_str() {
+								"file" => {}
+								"checkbox" => input.set_checked(
+									value.and_then(#pages_crate::__private::serde_json::Value::as_bool)
+										.unwrap_or(value.is_none() && default_true),
+								),
+								_ => input.set_value(&text_value),
+							}
+						} else if let Ok(select) = element.clone().dyn_into::<#pages_crate::__private::web_sys::HtmlSelectElement>()
+							&& select.name() == field
+						{
+							select.set_value(&text_value);
+						} else if let Ok(textarea) = element.dyn_into::<#pages_crate::__private::web_sys::HtmlTextAreaElement>()
+							&& textarea.name() == field
+						{
+							textarea.set_value(&text_value);
+						}
+					}
+				}
+
 				pub fn data(
 					&self,
 				) -> ::core::result::Result<
@@ -2955,8 +3108,15 @@ fn generate_model_form(
 				pub async fn submit_response(
 					&self,
 				) -> ::core::result::Result<#model_form_response_type, #pages_crate::ServerFnError> {
+					let submission_generation = self
+						.__submission_generation
+						.get()
+						.wrapping_add(1);
+					self.__submission_generation.set(submission_generation);
 					let state = self.__model_state.borrow().clone();
-					self.submit_state(state, ::core::option::Option::None).await
+					self
+						.submit_state(state, ::core::option::Option::None, submission_generation)
+						.await
 				}
 
 				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
@@ -3038,12 +3198,8 @@ fn generate_model_form(
 					form: ::core::option::Option<
 						&#pages_crate::__private::web_sys::HtmlFormElement,
 					>,
+					submission_generation: u64,
 				) -> ::core::result::Result<#model_form_response_type, #pages_crate::ServerFnError> {
-					let submission_generation = self
-						.__submission_generation
-						.get()
-						.wrapping_add(1);
-					self.__submission_generation.set(submission_generation);
 					self.loading.set(true);
 					self.error.set(::core::option::Option::None);
 					self.success.set(false);
@@ -3678,10 +3834,21 @@ fn generate_model_form(
 								}
 								#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 								{
+									let submission_generation = submit_form
+										.__submission_generation
+										.get()
+										.wrapping_add(1);
+									submit_form
+										.__submission_generation
+										.set(submission_generation);
 									let form = submit_form.clone();
 									#pages_crate::platform::spawn_task(async move {
 										let _ = form
-											.submit_state(submitted_state, submit_target.as_ref())
+											.submit_state(
+												submitted_state,
+												submit_target.as_ref(),
+												submission_generation,
+											)
 											.await;
 									});
 								}
@@ -3713,6 +3880,19 @@ fn generate_model_form(
 				type Field = __ReinhardtModelFormField;
 
 				#model_form_runtime_binding_impl
+
+				fn runtime_validate(
+					&self,
+				) -> ::core::result::Result<(), #pages_crate::FormValidationError<Self::Field>> {
+					let mut error = #pages_crate::FormValidationError::new();
+					#model_form_number_validation
+					#model_form_binding_validation
+					if error.is_empty() {
+						::core::result::Result::Ok(())
+					} else {
+						::core::result::Result::Err(error)
+					}
+				}
 
 				fn runtime_reset_state(&self) {
 					self.__explicitly_reset.set(true);
@@ -3787,6 +3967,32 @@ fn generate_model_form(
 							self.clear_mounted_file_input(descriptor.name);
 						}
 					}
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					{
+						let state = self.__model_state.borrow();
+						for descriptor in state.selected_descriptors() {
+							if matches!(
+								descriptor.kind,
+								#pages_crate::form::ModelFormFieldKind::File
+									| #pages_crate::form::ModelFormFieldKind::Image
+							) {
+								continue;
+							}
+							let value = state.value(descriptor.name).cloned();
+							let default_true = matches!(
+								descriptor.kind,
+								#pages_crate::form::ModelFormFieldKind::Boolean
+							) && <#schema_path as #pages_crate::form::ModelFormSchema>::default_boolean_is_true(
+								descriptor.name,
+							);
+							self.sync_mounted_field(
+								descriptor.name,
+								value.as_ref(),
+								descriptor.kind,
+								default_true,
+							);
+						}
+					}
 					self.__state_version.update(|version| *version = version.wrapping_add(1));
 				}
 
@@ -3805,6 +4011,26 @@ fn generate_model_form(
 					}
 					if let ::core::result::Result::Err(error) = result {
 						panic!("model form field {:?} rejected value: {}", field_name, error);
+					}
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					if let ::core::option::Option::Some(descriptor) =
+						<#schema_path as #pages_crate::form::ModelFormSchema>::fields()
+							.iter()
+							.find(|descriptor| descriptor.name == field_name)
+					{
+						let value = self.__model_state.borrow().value(field_name).cloned();
+						let default_true = matches!(
+							descriptor.kind,
+							#pages_crate::form::ModelFormFieldKind::Boolean
+						) && <#schema_path as #pages_crate::form::ModelFormSchema>::default_boolean_is_true(
+							descriptor.name,
+						);
+						self.sync_mounted_field(
+							field_name,
+							value.as_ref(),
+							descriptor.kind,
+							default_true,
+						);
 					}
 				}
 
@@ -3842,6 +4068,31 @@ fn generate_model_form(
 						})
 					{
 						self.clear_mounted_file_input(field_name);
+					}
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					if let ::core::option::Option::Some(descriptor) =
+						<#schema_path as #pages_crate::form::ModelFormSchema>::fields()
+							.iter()
+							.find(|descriptor| descriptor.name == field_name)
+						&& !matches!(
+							descriptor.kind,
+							#pages_crate::form::ModelFormFieldKind::File
+								| #pages_crate::form::ModelFormFieldKind::Image
+						)
+					{
+						let value = self.__model_state.borrow().value(field_name).cloned();
+						let default_true = matches!(
+							descriptor.kind,
+							#pages_crate::form::ModelFormFieldKind::Boolean
+						) && <#schema_path as #pages_crate::form::ModelFormSchema>::default_boolean_is_true(
+							descriptor.name,
+						);
+						self.sync_mounted_field(
+							field_name,
+							value.as_ref(),
+							descriptor.kind,
+							default_true,
+						);
 					}
 					self.__state_version.update(|version| *version = version.wrapping_add(1));
 				}
@@ -6595,14 +6846,23 @@ fn generate_field_view(
 	} else {
 		control_binding
 	};
+	let hydration_preference = quote! {
+		.prefer_source_on_hydration({
+			let explicitly_reset = self.__explicitly_reset.clone();
+			move || explicitly_reset.get()
+		})
+	};
 	let radio_binding = if let Some(radio_signal) = signal_ident
 		&& matches!(field.widget, TypedWidget::RadioSelect)
 		&& is_string_valued_field(&field.field_type)
 	{
 		quote! {
-			.control_binding(#pages_crate::component::ControlBinding::radio(
-				#radio_signal.clone(), choice_value.to_string(),
-			))
+			.control_binding(
+				#pages_crate::component::ControlBinding::radio(
+					#radio_signal.clone(), choice_value.to_string(),
+				)
+				#hydration_preference
+			)
 		}
 	} else {
 		event_listener.clone()
@@ -7038,9 +7298,18 @@ fn generate_generated_control_binding(
 	let Some(signal_ident) = signal_ident else {
 		return TokenStream::new();
 	};
+	let hydration_preference = quote! {
+		.prefer_source_on_hydration({
+			let explicitly_reset = self.__explicitly_reset.clone();
+			move || explicitly_reset.get()
+		})
+	};
 	match (widget, field_type) {
 		(TypedWidget::CheckboxInput, TypedFieldType::BooleanField) => quote! {
-			.control_binding(#pages_crate::component::ControlBinding::checkbox(#signal_ident.clone()))
+			.control_binding(
+				#pages_crate::component::ControlBinding::checkbox(#signal_ident.clone())
+				#hydration_preference
+			)
 		},
 		(
 			TypedWidget::Select,
@@ -7051,18 +7320,27 @@ fn generate_generated_control_binding(
 			| TypedFieldType::UrlField
 			| TypedFieldType::SlugField,
 		) => quote! {
-			.control_binding(#pages_crate::component::ControlBinding::select_one(#signal_ident.clone()))
+			.control_binding(
+				#pages_crate::component::ControlBinding::select_one(#signal_ident.clone())
+				#hydration_preference
+			)
 		},
 		(TypedWidget::Select, TypedFieldType::ChoiceField { inner }) if type_is_string(inner) => {
 			quote! {
-				.control_binding(#pages_crate::component::ControlBinding::select_one(#signal_ident.clone()))
+				.control_binding(
+					#pages_crate::component::ControlBinding::select_one(#signal_ident.clone())
+					#hydration_preference
+				)
 			}
 		}
 		(TypedWidget::SelectMultiple, TypedFieldType::MultipleChoiceField { inner })
 			if type_is_string(inner) =>
 		{
 			quote! {
-				.control_binding(#pages_crate::component::ControlBinding::select_many(#signal_ident.clone()))
+				.control_binding(
+					#pages_crate::component::ControlBinding::select_many(#signal_ident.clone())
+					#hydration_preference
+				)
 			}
 		}
 		(TypedWidget::NumberInput, TypedFieldType::IntegerField | TypedFieldType::FloatField) => {
@@ -7071,9 +7349,12 @@ fn generate_generated_control_binding(
 				signal_ident.to_string().trim_end_matches("_signal")
 			);
 			quote! {
-				.control_binding(#pages_crate::component::ControlBinding::number_with_error(
-					#signal_ident.clone(), self.#error.clone(),
-				))
+				.control_binding(
+					#pages_crate::component::ControlBinding::number_with_error(
+						#signal_ident.clone(), self.#error.clone(),
+					)
+					#hydration_preference
+				)
 			}
 		}
 		(
@@ -7085,13 +7366,19 @@ fn generate_generated_control_binding(
 			| TypedFieldType::UrlField
 			| TypedFieldType::SlugField,
 		) => quote! {
-			.control_binding(#pages_crate::component::ControlBinding::text(#signal_ident.clone()))
+			.control_binding(
+				#pages_crate::component::ControlBinding::text(#signal_ident.clone())
+				#hydration_preference
+			)
 		},
 		(TypedWidget::TextInput | TypedWidget::Textarea, TypedFieldType::ChoiceField { inner })
 			if type_is_string(inner) =>
 		{
 			quote! {
-				.control_binding(#pages_crate::component::ControlBinding::text(#signal_ident.clone()))
+				.control_binding(
+					#pages_crate::component::ControlBinding::text(#signal_ident.clone())
+					#hydration_preference
+				)
 			}
 		}
 		_ => TokenStream::new(),
@@ -9361,7 +9648,7 @@ mod tests {
 		assert!(output.contains("__submission_generation"));
 		assert!(output.contains("return result"));
 		assert!(output.contains("control = control . control_binding (binding)"));
-		assert!(!output.contains("sync_mounted_field"));
+		assert!(output.contains("sync_mounted_field"));
 		assert!(!output.contains("struct __ReinhardtModelFormField (& 'static str)"));
 	}
 
@@ -10328,11 +10615,10 @@ mod tests {
 		let output = parse_validate_generate(input);
 		let output_str = output.to_string();
 
-		// Default bind is true, so should generate signal binding and listener
+		// Default bind is true, so should generate a controlled binding.
 		assert!(output_str.contains("let username_signal = self . username . clone ()"));
-		assert!(output_str.contains("KnownEvent :: Input"));
-		assert!(output_str.contains("typed_event_handler :: <"));
-		assert!(output_str.contains("signal . set"));
+		assert!(output_str.contains("ControlBinding :: text"));
+		assert!(output_str.contains("prefer_source_on_hydration"));
 	}
 
 	#[rstest::rstest]
@@ -10351,10 +10637,10 @@ mod tests {
 		let output = parse_validate_generate(input);
 		let output_str = output.to_string();
 
-		// bind: true should generate signal binding and listener
+		// bind: true should generate a controlled binding.
 		assert!(output_str.contains("let email_signal = self . email . clone ()"));
-		assert!(output_str.contains("KnownEvent :: Input"));
-		assert!(output_str.contains("InputEvent"));
+		assert!(output_str.contains("ControlBinding :: text"));
+		assert!(output_str.contains("prefer_source_on_hydration"));
 	}
 
 	#[rstest::rstest]
@@ -10383,7 +10669,7 @@ mod tests {
 	}
 
 	#[rstest::rstest]
-	fn test_generate_bind_textarea_uses_input_event() {
+	fn test_generate_bind_textarea_uses_control_binding() {
 		let input = quote! {
 			name: TextareaBindForm,
 			action: "/test",
@@ -10398,16 +10684,12 @@ mod tests {
 		let output = parse_validate_generate(input);
 		let output_str = output.to_string();
 
-		assert!(output_str.contains("typed_event_handler :: <"));
-		assert!(output_str.contains("InputEvent"));
-		assert!(output_str.contains("event . value ()"));
-		assert!(output_str.contains("failed to extract `value`"));
-		assert!(output_str.contains("\"description\""));
-		assert!(!output_str.contains("HtmlTextAreaElement"));
+		assert!(output_str.contains("ControlBinding :: text"));
+		assert!(output_str.contains("prefer_source_on_hydration"));
 	}
 
 	#[rstest::rstest]
-	fn test_generate_bind_select_uses_change_event() {
+	fn test_generate_bind_select_uses_control_binding() {
 		let input = quote! {
 			name: SelectBindForm,
 			action: "/test",
@@ -10422,12 +10704,8 @@ mod tests {
 		let output = parse_validate_generate(input);
 		let output_str = output.to_string();
 
-		assert!(output_str.contains("typed_event_handler :: <"));
-		assert!(output_str.contains("ChangeEvent"));
-		assert!(output_str.contains("event . value ()"));
-		assert!(output_str.contains("failed to extract `value`"));
-		assert!(output_str.contains("\"country\""));
-		assert!(!output_str.contains("HtmlSelectElement"));
+		assert!(output_str.contains("ControlBinding :: select_one"));
+		assert!(output_str.contains("prefer_source_on_hydration"));
 	}
 
 	#[rstest::rstest]
@@ -10512,7 +10790,7 @@ mod tests {
 	}
 
 	#[rstest::rstest]
-	fn test_generate_bind_checkbox_uses_change_event() {
+	fn test_generate_bind_checkbox_uses_control_binding() {
 		let input = quote! {
 			name: CheckboxBindForm,
 			action: "/test",
@@ -10527,12 +10805,8 @@ mod tests {
 		let output = parse_validate_generate(input);
 		let output_str = output.to_string();
 
-		assert!(output_str.contains("typed_event_handler :: <"));
-		assert!(output_str.contains("ChangeEvent"));
-		assert!(output_str.contains("event . checked ()"));
-		assert!(output_str.contains("failed to extract `checked`"));
-		assert!(output_str.contains("\"agree\""));
-		assert!(!output_str.contains("HtmlInputElement"));
+		assert!(output_str.contains("ControlBinding :: checkbox"));
+		assert!(output_str.contains("prefer_source_on_hydration"));
 	}
 
 	#[rstest::rstest]

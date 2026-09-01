@@ -9,11 +9,12 @@ use reinhardt_urls::routers::ClientRouter;
 use rstest::rstest;
 use serial_test::serial;
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 static LOADER_CALLS: AtomicUsize = AtomicUsize::new(0);
 static GUARD_CALLS: AtomicUsize = AtomicUsize::new(0);
 static QUERY_CALLS: AtomicUsize = AtomicUsize::new(0);
+static SYNC_GUARD_ALLOWS: AtomicBool = AtomicBool::new(true);
 
 thread_local! {
 	static EVENTS: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
@@ -76,6 +77,13 @@ async fn ssr_guarded_loader() -> Result<String, String> {
 	LOADER_CALLS.fetch_add(1, Ordering::SeqCst);
 	EVENTS.with(|events| events.borrow_mut().push("loader"));
 	Ok("protected content".to_owned())
+}
+
+#[loader]
+async fn ssr_sync_guard_flip_loader() -> Result<String, String> {
+	LOADER_CALLS.fetch_add(1, Ordering::SeqCst);
+	SYNC_GUARD_ALLOWS.store(false, Ordering::SeqCst);
+	Ok("protected synchronous content".to_owned())
 }
 
 #[component(
@@ -153,6 +161,16 @@ fn ssr_allowed(Loader(value): Loader<String>) -> Page {
 	Page::text(value)
 }
 
+#[component(
+	"/ssr-sync-recheck/",
+	name = "ssr-sync-recheck",
+	navigation_guard = ssr_guard,
+	loader = ssr_sync_guard_flip_loader,
+)]
+fn ssr_sync_recheck(Loader(value): Loader<String>) -> Page {
+	Page::text(value)
+}
+
 #[layout("/ssr-layout/", name = "ssr-layout", navigation_guard = ssr_guard)]
 fn ssr_layout(outlet: Outlet) -> Page {
 	outlet.into_page()
@@ -179,13 +197,18 @@ fn router() -> ClientRouter {
 		.component(ssr_forbidden)
 		.component(ssr_error)
 		.component(ssr_allowed)
+		.component(ssr_sync_recheck)
 		.routes(|routes| routes.layout(ssr_layout, |children| children.component(ssr_layout_child)))
+		.with_route_guard("ssr-sync-recheck", |_| {
+			SYNC_GUARD_ALLOWS.load(Ordering::SeqCst)
+		})
 }
 
 fn reset_counts() {
 	LOADER_CALLS.store(0, Ordering::SeqCst);
 	GUARD_CALLS.store(0, Ordering::SeqCst);
 	QUERY_CALLS.store(0, Ordering::SeqCst);
+	SYNC_GUARD_ALLOWS.store(true, Ordering::SeqCst);
 	EVENTS.with(|events| events.borrow_mut().clear());
 }
 
@@ -285,6 +308,25 @@ fn allowed_guards_run_twice_before_loader_and_query_fetches_once() {
 		assert_eq!(QUERY_CALLS.load(Ordering::SeqCst), 1);
 		assert_eq!(LOADER_CALLS.load(Ordering::SeqCst), 1);
 		assert!(renderer.state().to_json().unwrap().contains("ssr.session"));
+	});
+}
+
+#[test]
+#[serial(ssr_navigation_guard)]
+fn synchronous_guard_is_rechecked_after_ssr_preparation() {
+	tokio_test::block_on(async {
+		reset_counts();
+		let router = router();
+		let mut renderer = SsrRenderer::new();
+
+		let output = renderer
+			.render_route_to_string(&router, "/ssr-sync-recheck/")
+			.await;
+
+		assert_eq!(output.status, 404);
+		assert_eq!(output.html, "configured not found");
+		assert_eq!(LOADER_CALLS.load(Ordering::SeqCst), 1);
+		assert_eq!(GUARD_CALLS.load(Ordering::SeqCst), 2);
 	});
 }
 

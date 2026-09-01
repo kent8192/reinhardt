@@ -93,6 +93,9 @@ impl SsrRenderer {
 			if decision != NavigationDecision::Allow {
 				return Ok(RouteAttempt::Decision(decision));
 			}
+			if !matched.guards_allow() {
+				return Ok(RouteAttempt::Decision(NavigationDecision::NotFound));
+			}
 			Ok(RouteAttempt::Prepared(prepared))
 		};
 		let attempt = match tokio::time::timeout(self.route_loader_timeout(), attempt).await {

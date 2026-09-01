@@ -500,6 +500,42 @@ fn hydrated_password_type_removes_the_serialized_bound_value() {
 
 #[rstest]
 #[wasm_bindgen_test]
+fn hydration_initial_password_type_removes_the_serialized_bound_value() {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_input = document.create_element("input").expect("input");
+		raw_input.set_attribute("type", "text").expect("input type");
+		raw_input
+			.set_attribute("value", "secret")
+			.expect("serialized value");
+		let input: web_sys::HtmlInputElement = raw_input.clone().unchecked_into();
+		let _cleanup = AttachedRootCleanup(raw_input.clone());
+		let root = Element::new(raw_input);
+		let password_type = Signal::new(true);
+		let value = Signal::new("secret".to_owned());
+		let _state = SsrStateElement::install(&document);
+
+		reinhardt_pages::hydration::hydrate(
+			&HydratedReactivePasswordInput {
+				password_type,
+				value,
+			},
+			&root,
+		)
+		.expect("hydrate");
+
+		assert_eq!(input.type_(), "password");
+		assert_eq!(input.value(), "secret");
+		assert_eq!(input.get_attribute("value"), None);
+		assert_eq!(value.get(), "secret");
+	});
+}
+
+#[rstest]
+#[wasm_bindgen_test]
 fn hydration_initial_reactive_attributes_preserve_rejected_numeric_edits() {
 	ReactiveScope::run(|| {
 		let document = web_sys::window()

@@ -171,13 +171,27 @@ pub(crate) fn controlled_attribute_is_overridden(
 }
 
 #[cfg(wasm)]
-pub(crate) fn static_attribute_is_effective<N: AsRef<str>, V>(
+pub(crate) fn static_attribute_is_effective<N: AsRef<str>, V: AsRef<str>>(
 	attrs: &[(N, V)],
 	index: usize,
 ) -> bool {
 	let name = attrs[index].0.as_ref();
 	if is_boolean_attr(name) {
-		return true;
+		return attrs
+			.iter()
+			.enumerate()
+			.find(|(_, (candidate, value))| {
+				candidate.as_ref().eq_ignore_ascii_case(name)
+					&& is_boolean_attr_truthy(value.as_ref())
+			})
+			.map_or_else(
+				|| {
+					!attrs[..index]
+						.iter()
+						.any(|(earlier, _)| earlier.as_ref().eq_ignore_ascii_case(name))
+				},
+				|(truthy_index, _)| truthy_index == index,
+			);
 	}
 	!attrs[..index]
 		.iter()

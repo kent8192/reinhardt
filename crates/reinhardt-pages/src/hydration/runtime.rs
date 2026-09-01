@@ -1367,6 +1367,19 @@ fn attach_hydrated_element_events(
 		})
 		.collect::<Vec<_>>();
 	initializing_reactive_attributes.set(false);
+	if registry.should_hydrate_control_bindings()
+		&& let Some(binding) = element_view.bound_control()
+		&& binding.kind() != crate::component::ControlKind::Number
+		&& element_view.reactive_attrs().iter().any(|attribute| {
+			crate::component::into_page::controlled_attribute_affects_value(
+				element,
+				binding,
+				attribute.name(),
+			)
+		}) {
+		crate::dom::control_binding::reconcile_control_binding(element, binding)
+			.map_err(|error| HydrationError::EventAttachmentFailed(error.to_string()))?;
+	}
 	store_reactive_node(ReactiveAttributeEffects::new(reactive_attribute_effects));
 
 	Ok(())

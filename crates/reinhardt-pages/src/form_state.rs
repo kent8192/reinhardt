@@ -1549,7 +1549,10 @@ where
 	}
 
 	pub(crate) fn begin_submit_lifecycle(&self) -> UseFormSubmitOutcome {
-		if self.state.is_submitting.get() {
+		let Ok(is_submitting) = self.state.is_submitting.try_get_untracked() else {
+			return UseFormSubmitOutcome::AlreadyPending;
+		};
+		if is_submitting {
 			return UseFormSubmitOutcome::AlreadyPending;
 		}
 
@@ -1737,8 +1740,10 @@ where
 		Submit: FnOnce() -> Fut,
 		Fut: Future<Output = Result<Output, ServerFnError>>,
 	{
+		let mut pending_guard = SubmitPendingGuard::new(self.state.is_submitting);
 		let outcome = self.begin_submit_lifecycle();
 		if outcome != UseFormSubmitOutcome::Submitted {
+			pending_guard.disarm();
 			return Ok(match outcome {
 				UseFormSubmitOutcome::AlreadyPending => UseFormAsyncSubmitOutcome::AlreadyPending,
 				UseFormSubmitOutcome::ValidationFailed => {
@@ -1748,7 +1753,6 @@ where
 			});
 		}
 
-		let mut pending_guard = SubmitPendingGuard::new(self.state.is_submitting);
 		let Ok(future) = enter_scope(self.scope, submit) else {
 			pending_guard.disarm();
 			return Ok(UseFormAsyncSubmitOutcome::AlreadyPending);
@@ -2297,20 +2301,20 @@ impl Drop for SignalSyncGuard {
 	}
 }
 
-struct SubmitPendingGuard {
+pub(crate) struct SubmitPendingGuard {
 	is_submitting: Signal<bool>,
 	active: bool,
 }
 
 impl SubmitPendingGuard {
-	fn new(is_submitting: Signal<bool>) -> Self {
+	pub(crate) fn new(is_submitting: Signal<bool>) -> Self {
 		Self {
 			is_submitting,
 			active: true,
 		}
 	}
 
-	fn disarm(&mut self) {
+	pub(crate) fn disarm(&mut self) {
 		self.active = false;
 	}
 }
@@ -2519,6 +2523,28 @@ mod tests {
 		scope.dispose();
 
 		let mut submit = Box::pin(runtime.submit_async(|| async { Ok::<_, String>(()) }));
+		let mut context = Context::from_waker(Waker::noop());
+		assert_eq!(
+			submit.as_mut().poll(&mut context),
+			Poll::Ready(Ok(super::UseFormAsyncSubmitOutcome::AlreadyPending))
+		);
+	}
+
+	#[test]
+	#[serial(reactive_runtime)]
+	fn stale_server_fn_submit_is_rejected_without_reading_disposed_state() {
+		let scope = Rc::new(ReactiveScope::new());
+		let form = scope.enter(|| RetainedScopeForm {
+			scope: Rc::clone(&scope),
+			value: Signal::new("initial".to_string()),
+		});
+		let runtime = use_form(&form).build();
+
+		scope.dispose();
+
+		let mut submit = Box::pin(
+			runtime.submit_server_fn(|| async { Ok::<_, crate::server_fn::ServerFnError>(()) }),
+		);
 		let mut context = Context::from_waker(Waker::noop());
 		assert_eq!(
 			submit.as_mut().poll(&mut context),

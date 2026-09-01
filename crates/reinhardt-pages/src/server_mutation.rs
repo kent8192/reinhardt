@@ -38,7 +38,7 @@ pub enum MutationDispatchOutcome {
 pub struct ServerMutationBuilder<Input, Output>
 where
 	Input: 'static,
-	Output: Clone + 'static,
+	Output: 'static,
 {
 	action_fn: ServerMutationFn<Input, Output>,
 	before_success: Vec<SuccessCallback<Output>>,
@@ -58,7 +58,7 @@ where
 	Form: crate::FormRuntimeSource,
 	Deps: Clone + PartialEq + 'static,
 	Input: 'static,
-	Output: Clone + 'static,
+	Output: 'static,
 {
 	builder: ServerMutationBuilder<Input, Output>,
 	form: crate::UseFormReturn<Form, Deps>,
@@ -73,6 +73,7 @@ where
 	Output: Clone + 'static,
 {
 	action: Action<Output, ServerFnError>,
+	last_success: crate::Signal<Option<Output>>,
 	_input: PhantomData<fn(Input)>,
 }
 
@@ -114,7 +115,7 @@ pub fn use_server_mutation<Input, Output, Error, ActionFn, ActionFuture>(
 ) -> ServerMutationBuilder<Input, Output>
 where
 	Input: 'static,
-	Output: Clone + 'static,
+	Output: 'static,
 	Error: Into<ServerFnError> + 'static,
 	ActionFn: Fn(Input) -> ActionFuture + 'static,
 	ActionFuture: Future<Output = Result<Output, Error>> + 'static,
@@ -144,15 +145,6 @@ where
 	Input: 'static,
 	Output: Clone + 'static,
 {
-	/// Registers a callback that runs after a successful mutation.
-	pub fn on_success<Callback>(mut self, callback: Callback) -> Self
-	where
-		Callback: Fn(&Output) + 'static,
-	{
-		self.on_success.push(Rc::new(callback));
-		self
-	}
-
 	/// Registers a callback that runs after a failed mutation.
 	pub fn on_error<Callback>(mut self, callback: Callback) -> Self
 	where
@@ -199,28 +191,6 @@ where
 		self
 	}
 
-	#[doc(hidden)]
-	pub fn with_generated_form<Form, Deps, Prepare>(
-		self,
-		form: &crate::UseFormReturn<Form, Deps>,
-		prepare: Prepare,
-	) -> FormServerMutationBuilder<Form, Deps, Input, Output>
-	where
-		Form: crate::FormRuntimeSource,
-		Deps: Clone + PartialEq + 'static,
-		Prepare: Fn(
-				&crate::UseFormReturn<Form, Deps>,
-			) -> Result<Input, crate::FormValidationError<Form::Field>>
-			+ 'static,
-	{
-		FormServerMutationBuilder {
-			builder: self,
-			form: form.clone(),
-			prepare: Rc::new(prepare),
-			reset_form_on_success: false,
-		}
-	}
-
 	/// Builds the configured mutation handle.
 	pub fn build(self) -> ServerMutation<Input, Output> {
 		let ServerMutationBuilder {
@@ -235,8 +205,11 @@ where
 			redirect,
 			on_redirect_error,
 		} = self;
+		let last_success = crate::Signal::new(None);
+		let last_success_for_success = last_success;
 		let action = use_action(move |input: Input| (action_fn)(input))
 			.on_success(move |output| {
+				last_success_for_success.set(Some(output.clone()));
 				for callback in &before_success {
 					callback(output);
 				}
@@ -272,7 +245,45 @@ where
 			});
 		ServerMutation {
 			action,
+			last_success,
 			_input: PhantomData,
+		}
+	}
+}
+
+impl<Input, Output> ServerMutationBuilder<Input, Output>
+where
+	Input: 'static,
+	Output: 'static,
+{
+	/// Registers a callback that runs after a successful mutation.
+	pub fn on_success<Callback>(mut self, callback: Callback) -> Self
+	where
+		Callback: Fn(&Output) + 'static,
+	{
+		self.on_success.push(Rc::new(callback));
+		self
+	}
+
+	#[doc(hidden)]
+	pub fn with_generated_form<Form, Deps, Prepare>(
+		self,
+		form: &crate::UseFormReturn<Form, Deps>,
+		prepare: Prepare,
+	) -> FormServerMutationBuilder<Form, Deps, Input, Output>
+	where
+		Form: crate::FormRuntimeSource,
+		Deps: Clone + PartialEq + 'static,
+		Prepare: Fn(
+				&crate::UseFormReturn<Form, Deps>,
+			) -> Result<Input, crate::FormValidationError<Form::Field>>
+			+ 'static,
+	{
+		FormServerMutationBuilder {
+			builder: self,
+			form: form.clone(),
+			prepare: Rc::new(prepare),
+			reset_form_on_success: false,
 		}
 	}
 }
@@ -395,7 +406,7 @@ where
 
 	/// Returns the latest successful result, if any.
 	pub fn result(&self) -> Option<Output> {
-		self.action.result()
+		self.last_success.get()
 	}
 
 	/// Returns the latest error, if any.
@@ -405,7 +416,11 @@ where
 
 	/// Resets the mutation back to `Idle`.
 	pub fn reset(&self) {
+		if self.action.is_pending() {
+			return;
+		}
 		self.action.reset();
+		self.last_success.set(None);
 	}
 
 	#[cfg(test)]
@@ -518,14 +533,19 @@ where
 
 		#[cfg(wasm)]
 		{
-			if self.is_pending() {
+			let mut pending_guard =
+				crate::form_state::SubmitPendingGuard::new(self.form.form_state().is_submitting);
+			if self.mutation.is_pending() {
+				pending_guard.disarm();
 				return MutationDispatchOutcome::AlreadyPending;
 			}
 			match self.form.begin_submit_lifecycle() {
 				crate::UseFormSubmitOutcome::AlreadyPending => {
+					pending_guard.disarm();
 					return MutationDispatchOutcome::AlreadyPending;
 				}
 				crate::UseFormSubmitOutcome::ValidationFailed => {
+					pending_guard.disarm();
 					self.mutation.reset();
 					return MutationDispatchOutcome::ValidationFailed;
 				}
@@ -535,11 +555,16 @@ where
 				Ok(input) => input,
 				Err(error) => {
 					self.form.complete_mutation_validation_error(error);
+					pending_guard.disarm();
 					self.mutation.reset();
 					return MutationDispatchOutcome::ValidationFailed;
 				}
 			};
-			self.mutation.dispatch(input)
+			let outcome = self.mutation.dispatch(input);
+			if outcome == MutationDispatchOutcome::Dispatched {
+				pending_guard.disarm();
+			}
+			outcome
 		}
 	}
 }
@@ -770,6 +795,11 @@ mod tests {
 			assert_eq!(mutation.phase(), ActionPhase::Success(8));
 			assert_eq!(mutation.result(), Some(8));
 			assert!(mutation.is_success());
+			assert_eq!(mutation.result(), Some(8));
+
+			mutation.force_error_for_test(ServerFnError::application("failed"));
+
+			assert!(mutation.phase().is_error());
 			assert_eq!(mutation.result(), Some(8));
 
 			mutation.reset();

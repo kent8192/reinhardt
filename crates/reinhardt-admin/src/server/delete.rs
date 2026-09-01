@@ -12,7 +12,7 @@ use crate::core::database::canonicalize_pk_value;
 #[cfg(server)]
 use crate::core::history::insert_history_event;
 #[cfg(server)]
-use crate::core::{AdminDatabaseKey, AdminSiteKey};
+use crate::core::{AdminDatabaseKey, AdminQuery, AdminRequestContext, AdminSiteKey};
 use crate::types::MutationResponse;
 #[cfg(server)]
 use reinhardt_di::KeyedDepends;
@@ -115,7 +115,7 @@ where
 	let mut deleted_values = Vec::new();
 	for captured in captured_values {
 		let survived = db
-			.get_with_executor_for_update(
+			.get_with_executor(
 				transaction,
 				&captured.table_name,
 				&captured.pk_field,
@@ -176,6 +176,15 @@ pub async fn delete_record(
 	let table_name = model_admin.table_name().to_string();
 	let pk_field = model_admin.pk_field().to_string();
 	let object_id = canonicalize_pk_value(&table_name, &pk_field, &id);
+	let request_context = AdminRequestContext::new(http_request.into_inner());
+	let admin_query = model_admin
+		.get_queryset(
+			user.as_ref(),
+			&request_context,
+			AdminQuery::new(table_name.as_str()),
+		)
+		.await
+		.map_server_fn_error()?;
 
 	let actor = user.get_username().to_string();
 	let audit_user_id = auth.user_id().unwrap_or("unknown").to_string();
@@ -183,9 +192,13 @@ pub async fn delete_record(
 	let result: reinhardt_core::exception::Result<_> = async {
 		connection
 			.atomic_write(async |transaction| {
-				#[cfg(feature = "file-uploads")]
 				let parent_exists = db
-					.get_with_executor_for_update(transaction, &table_name, &pk_field, &object_id)
+					.get_admin_query_with_executor_for_update(
+						transaction,
+						&admin_query,
+						&pk_field,
+						&object_id,
+					)
 					.await?
 					.is_some();
 				#[cfg(feature = "file-uploads")]
@@ -202,9 +215,17 @@ pub async fn delete_record(
 					Vec::new()
 				};
 				#[cfg(feature = "file-uploads")]
-				let (affected, mut deleted_values) = db
-					.delete_with_executor_returning(transaction, &table_name, &pk_field, &object_id)
-					.await?;
+				let (affected, mut deleted_values) = if parent_exists {
+					db.delete_with_executor_returning(
+						transaction,
+						&table_name,
+						&pk_field,
+						&object_id,
+					)
+					.await?
+				} else {
+					(0, None)
+				};
 				#[cfg(feature = "file-uploads")]
 				let inline_deleted_values = if affected > 0 {
 					confirmed_inline_deleted_values(
@@ -225,9 +246,12 @@ pub async fn delete_record(
 					deleted_values = None;
 				}
 				#[cfg(not(feature = "file-uploads"))]
-				let affected = db
-					.delete_with_executor(transaction, &table_name, &pk_field, &object_id)
-					.await?;
+				let affected = if parent_exists {
+					db.delete_with_executor(transaction, &table_name, &pk_field, &object_id)
+						.await?
+				} else {
+					0
+				};
 				if affected > 0 {
 					let event = audit::new_history_event(
 						&actor,
@@ -356,6 +380,15 @@ pub async fn bulk_delete_records(
 	let pk_field = model_admin.pk_field().to_string();
 	let actor = user.get_username().to_string();
 	let audit_user_id = auth.user_id().unwrap_or("unknown").to_string();
+	let request_context = AdminRequestContext::new(http_request.into_inner());
+	let admin_query = model_admin
+		.get_queryset(
+			user.as_ref(),
+			&request_context,
+			AdminQuery::new(table_name.as_str()),
+		)
+		.await
+		.map_server_fn_error()?;
 
 	let ids = request.ids;
 	if ids.len() > MAX_BULK_DELETE_IDS {
@@ -377,17 +410,15 @@ pub async fn bulk_delete_records(
 				let mut affected = 0;
 				for id in &ids {
 					let object_id = canonicalize_pk_value(&table_name, &pk_field, id);
-					#[cfg(feature = "file-uploads")]
 					let parent_exists = db
-						.get_with_executor_for_update(
+						.get_admin_query_with_executor_for_update(
 							transaction,
-							&table_name,
+							&admin_query,
 							&pk_field,
 							&object_id,
 						)
 						.await?
 						.is_some();
-					#[cfg(feature = "file-uploads")]
 					if !parent_exists {
 						continue;
 					}

@@ -10,7 +10,7 @@ use crate::core::database::canonicalize_pk_value;
 #[cfg(server)]
 use crate::core::history::insert_history_event;
 #[cfg(server)]
-use crate::core::{AdminDatabaseKey, AdminFormMode, AdminSiteKey};
+use crate::core::{AdminDatabaseKey, AdminFormMode, AdminRequestContext, AdminSiteKey};
 #[cfg(server)]
 use reinhardt_di::KeyedDepends;
 #[cfg(server)]
@@ -111,6 +111,7 @@ pub async fn import_data(
 			.expect("primary key field map contains one entry")
 	};
 	let actor = user.get_username().to_string();
+	let request_context = AdminRequestContext::new(http_request.into_inner());
 
 	// Parse data based on format
 	// Sanitize error messages to avoid exposing internal details (schema, SQL, etc.)
@@ -188,6 +189,7 @@ pub async fn import_data(
 			let relation_values = validate_relation_values(
 				&auth,
 				user.as_ref(),
+				&request_context,
 				&site,
 				&db,
 				&model_admin,

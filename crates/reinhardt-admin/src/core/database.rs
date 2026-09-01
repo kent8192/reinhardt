@@ -1814,7 +1814,7 @@ fn extract_admin_list_total_count(
 		})
 }
 
-fn build_admin_query_condition(
+pub(crate) fn build_admin_query_condition(
 	query: &AdminQuery,
 	root_alias: Option<&str>,
 ) -> AdminResult<Option<Condition>> {
@@ -2234,20 +2234,34 @@ impl AdminDatabase {
 		offset: u64,
 		limit: u64,
 	) -> AdminResult<Vec<HashMap<String, serde_json::Value>>> {
+		let mut admin_query = AdminQuery::new(table_name);
+		if let Some(filter_condition) = filter_condition {
+			admin_query = admin_query.filter_condition(filter_condition.clone());
+		}
+		for filter in additional_filters {
+			admin_query = admin_query.filter(filter);
+		}
+		self.list_admin_query_ordered(&admin_query, ordering, offset, limit)
+			.await
+	}
+
+	pub(crate) async fn list_admin_query_ordered(
+		&self,
+		admin_query: &AdminQuery,
+		ordering: &[&str],
+		offset: u64,
+		limit: u64,
+	) -> AdminResult<Vec<HashMap<String, serde_json::Value>>> {
 		// SELECT * is intentional: admin panel operates on dynamic schemas where
 		// the column set is not known at compile time. Each ModelAdmin defines
 		// list_display fields, and column filtering is applied at the application
 		// layer after fetching all columns.
 		let mut query = Query::select()
-			.from(Alias::new(table_name))
+			.from(Alias::new(admin_query.table_name()))
 			.column(ColumnRef::Asterisk)
 			.to_owned();
-
-		let (combined, has_filter) =
-			build_combined_filter_condition(filter_condition, &additional_filters)?;
-
-		if has_filter {
-			query.cond_where(combined);
+		if let Some(condition) = build_admin_query_condition(admin_query, None)? {
+			query.cond_where(condition);
 		}
 
 		// Apply sorting in declaration order so callers can add a stable tie-breaker.
@@ -2527,6 +2541,24 @@ impl AdminDatabase {
 			.await
 	}
 
+	pub(crate) async fn get_admin_query(
+		&self,
+		admin_query: &AdminQuery,
+		pk_field: &str,
+		id: &str,
+	) -> AdminResult<Option<HashMap<String, serde_json::Value>>> {
+		let mut connection = self.connection;
+		self.get_with_executor_inner(
+			&mut connection,
+			admin_query.table_name(),
+			pk_field,
+			id,
+			false,
+			Some(admin_query),
+		)
+		.await
+	}
+
 	pub(crate) async fn get_with_executor<E>(
 		&self,
 		executor: &mut E,
@@ -2537,22 +2569,29 @@ impl AdminDatabase {
 	where
 		E: OrmExecutor,
 	{
-		self.get_with_executor_inner(executor, table_name, pk_field, id, false)
+		self.get_with_executor_inner(executor, table_name, pk_field, id, false, None)
 			.await
 	}
 
-	pub(crate) async fn get_with_executor_for_update<E>(
+	pub(crate) async fn get_admin_query_with_executor_for_update<E>(
 		&self,
 		executor: &mut E,
-		table_name: &str,
+		admin_query: &AdminQuery,
 		pk_field: &str,
 		id: &str,
 	) -> AdminResult<Option<HashMap<String, serde_json::Value>>>
 	where
 		E: OrmExecutor,
 	{
-		self.get_with_executor_inner(executor, table_name, pk_field, id, true)
-			.await
+		self.get_with_executor_inner(
+			executor,
+			admin_query.table_name(),
+			pk_field,
+			id,
+			true,
+			Some(admin_query),
+		)
+		.await
 	}
 
 	async fn get_with_executor_inner<E>(
@@ -2562,6 +2601,7 @@ impl AdminDatabase {
 		pk_field: &str,
 		id: &str,
 		lock_for_update: bool,
+		admin_query: Option<&AdminQuery>,
 	) -> AdminResult<Option<HashMap<String, serde_json::Value>>>
 	where
 		E: OrmExecutor,
@@ -2577,6 +2617,11 @@ impl AdminDatabase {
 			.and_where(Expr::col(Alias::new(pk_field)).eq(pk_value))
 			.limit(1)
 			.to_owned();
+		if let Some(admin_query) = admin_query
+			&& let Some(condition) = build_admin_query_condition(admin_query, None)?
+		{
+			query.cond_where(condition);
+		}
 		if lock_for_update
 			&& matches!(
 				executor.backend(),
@@ -2900,6 +2945,7 @@ impl AdminDatabase {
 	}
 
 	/// Updates a validated batch and runs follow-up work inside the same transaction.
+	#[cfg(test)]
 	pub(crate) async fn update_batch_with<F>(
 		&self,
 		table_name: &str,
@@ -2912,24 +2958,45 @@ impl AdminDatabase {
 				&'transaction mut AtomicTransaction,
 			) -> AdminResult<()>,
 	{
+		let admin_query = AdminQuery::new(table_name);
+		self.update_admin_query_batch_with(&admin_query, pk_field, mutations, after_updates)
+			.await
+	}
+
+	/// Updates a scoped batch and runs follow-up work inside the same transaction.
+	pub(crate) async fn update_admin_query_batch_with<F>(
+		&self,
+		admin_query: &AdminQuery,
+		pk_field: &str,
+		mutations: Vec<AdminBatchMutation>,
+		after_updates: F,
+	) -> Result<u64, AdminBatchAtomicError>
+	where
+		F: for<'transaction> std::ops::AsyncFnOnce(
+				&'transaction mut AtomicTransaction,
+			) -> AdminResult<()>,
+	{
+		let table_name = admin_query.table_name().to_owned();
+		let admin_query = admin_query.clone();
+		let pk_field = pk_field.to_owned();
 		let backend = OrmExecutor::backend(&self.connection);
 		let statements = mutations
 			.iter()
 			.map(|mutation| {
 				if mutation.json_null_fields.is_empty() {
 					return build_update_statement(
-						table_name,
-						pk_field,
+						&table_name,
+						&pk_field,
 						mutation.object_id(),
 						&mutation.data,
 						backend,
 					);
 				}
 				let (_, pk_value) =
-					canonicalize_admin_primary_key(table_name, pk_field, mutation.object_id())?;
+					canonicalize_admin_primary_key(&table_name, &pk_field, mutation.object_id())?;
 				build_update_statement_with_pk_value(
-					table_name,
-					pk_field,
+					&table_name,
+					&pk_field,
 					pk_value,
 					&mutation.data,
 					&mutation.json_null_fields,
@@ -2944,12 +3011,27 @@ impl AdminDatabase {
 				for (row_index, ((sql, params), mutation)) in
 					statements.into_iter().zip(&mutations).enumerate()
 				{
+					if self
+						.get_admin_query_with_executor_for_update(
+							transaction,
+							&admin_query,
+							&pk_field,
+							mutation.object_id(),
+						)
+						.await?
+						.is_none()
+					{
+						return Err(AdminBatchAtomicError::ZeroAffected {
+							row_index,
+							object_id: mutation.object_id().to_string(),
+						});
+					}
 					let result = OrmExecutor::execute(transaction, &sql, params).await?;
 					if result.rows_affected == 0 {
 						if backend == DatabaseBackend::MySql {
 							let (exists_sql, exists_params) = build_primary_key_exists_statement(
-								table_name,
-								pk_field,
+								&table_name,
+								&pk_field,
 								mutation.object_id(),
 								backend,
 							)?;
@@ -3784,10 +3866,11 @@ mod tests {
 
 		async fn fetch_all(
 			&mut self,
-			_sql: &str,
+			sql: &str,
 			_params: Vec<QueryValue>,
 		) -> Result<Vec<Row>, Error> {
-			unreachable!("mutation methods do not fetch all rows")
+			self.executed_sql.push(sql.to_string());
+			Ok(self.rows.drain(..).collect())
 		}
 
 		async fn fetch_optional(
@@ -3807,6 +3890,29 @@ mod tests {
 			.expect("SQLite connection should register for the test lifetime");
 		let database = AdminDatabase::new(lease.handle());
 		(database, lease)
+	}
+
+	#[tokio::test]
+	async fn scoped_admin_get_combines_queryset_and_primary_key() {
+		let (database, _lease) = test_admin_database().await;
+		let query = AdminQuery::new("records").filter(Filter::new(
+			"tenant_id",
+			FilterOperator::Eq,
+			FilterValue::Integer(7),
+		));
+		let mut executor = MutationExecutor::new([primary_key_row(QueryValue::Int(42))]);
+
+		let result = database
+			.get_admin_query_with_executor_for_update(&mut executor, &query, "id", "42")
+			.await
+			.expect("scoped read should execute");
+
+		assert!(result.is_some());
+		assert_eq!(executor.executed_sql.len(), 1);
+		assert_eq!(
+			executor.executed_sql[0],
+			"SELECT * FROM \"records\" WHERE \"id\" = $1 AND \"tenant_id\" = $2 LIMIT $3 FOR UPDATE"
+		);
 	}
 
 	fn primary_key_row(value: QueryValue) -> Row {
@@ -4115,6 +4221,47 @@ mod tests {
 		assert_eq!(updated, 1);
 		assert_eq!(rows.len(), 1);
 		assert_eq!(rows[0].data.get("status"), Some(&serde_json::Value::Null));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn scoped_batch_update_rolls_back_when_any_object_is_out_of_scope() {
+		// Arrange
+		let (_lease, connection, db) =
+			batch_sqlite_database(&[(1, "allowed"), (2, "blocked")]).await;
+		let query = AdminQuery::new("batch_records").filter(Filter::new(
+			"name",
+			FilterOperator::Eq,
+			FilterValue::String("allowed".to_owned()),
+		));
+		let mutations = vec![
+			AdminBatchMutation::new(
+				"1".to_owned(),
+				HashMap::from([("status".to_owned(), serde_json::json!("updated"))]),
+			),
+			AdminBatchMutation::new(
+				"2".to_owned(),
+				HashMap::from([("status".to_owned(), serde_json::json!("updated"))]),
+			),
+		];
+
+		// Act
+		let result = db
+			.update_admin_query_batch_with(&query, "id", mutations, async |_| Ok(()))
+			.await;
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(AdminBatchAtomicError::ZeroAffected { row_index: 1, .. })
+		));
+		let rows = connection
+			.query("SELECT status FROM batch_records ORDER BY id", Vec::new())
+			.await
+			.expect("read records after scoped rollback");
+		assert_eq!(rows.len(), 2);
+		assert_eq!(rows[0].data.get("status"), Some(&serde_json::Value::Null));
+		assert_eq!(rows[1].data.get("status"), Some(&serde_json::Value::Null));
 	}
 
 	#[rstest]

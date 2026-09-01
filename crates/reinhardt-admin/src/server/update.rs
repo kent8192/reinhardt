@@ -11,7 +11,7 @@ use crate::core::database::canonicalize_pk_value;
 #[cfg(server)]
 use crate::core::history::insert_history_event;
 #[cfg(server)]
-use crate::core::{AdminDatabaseKey, AdminSiteKey};
+use crate::core::{AdminDatabaseKey, AdminQuery, AdminRequestContext, AdminSiteKey};
 use crate::types::MutationResponse;
 #[cfg(server)]
 use reinhardt_di::KeyedDepends;
@@ -177,6 +177,15 @@ pub(crate) async fn update_record_with_trusted_file_fields(
 	let table_name = model_admin.table_name().to_string();
 	let pk_field = model_admin.pk_field().to_string();
 	let object_id = canonicalize_pk_value(&table_name, &pk_field, &id);
+	let request_context = AdminRequestContext::new(http_request.into_inner());
+	let admin_query = model_admin
+		.get_queryset(
+			user.as_ref(),
+			&request_context,
+			AdminQuery::new(table_name.as_str()),
+		)
+		.await
+		.map_server_fn_error()?;
 	let inlines = model_admin.inlines();
 	let mut request = request;
 	let mut inline_mutations = if inlines.is_empty() {
@@ -194,6 +203,7 @@ pub(crate) async fn update_record_with_trusted_file_fields(
 	)?;
 	let descriptors = resolve_relations(&site, model_admin.as_ref()).map_server_fn_error()?;
 	let (mut data, selections) = split_relation_values(data, &descriptors).map_server_fn_error()?;
+	let mut relation_queries = Vec::with_capacity(selections.len());
 	for selection in &selections {
 		auth.require_model_permission(
 			selection.descriptor.target_admin.as_ref(),
@@ -201,9 +211,29 @@ pub(crate) async fn update_record_with_trusted_file_fields(
 			ModelPermission::View,
 		)
 		.await?;
+		relation_queries.push(
+			selection
+				.descriptor
+				.target_admin
+				.get_queryset(
+					user.as_ref(),
+					&request_context,
+					AdminQuery::new(selection.descriptor.target_admin.table_name()),
+				)
+				.await
+				.map_server_fn_error()?,
+		);
 	}
-	let relation_values =
-		validate_relation_values(&auth, user.as_ref(), &site, &db, &model_admin, &mut data).await?;
+	let relation_values = validate_relation_values(
+		&auth,
+		user.as_ref(),
+		&request_context,
+		&site,
+		&db,
+		&model_admin,
+		&mut data,
+	)
+	.await?;
 
 	// Sanitize string values to prevent stored XSS
 	let mut sanitized_data = data;
@@ -232,11 +262,44 @@ pub(crate) async fn update_record_with_trusted_file_fields(
 	let audit_user_id = auth.user_id().unwrap_or("unknown").to_string();
 	let mut connection = *db.connection();
 
-	if !inlines.is_empty() {
+	let inline_scopes = if inlines.is_empty() {
+		HashMap::new()
+	} else {
+		let mut unchanged_scope_queries = HashMap::new();
+		for inline in &inlines {
+			if !inline_mutations
+				.iter()
+				.any(|mutation| mutation.key == inline.key() && !mutation.rows.is_empty())
+			{
+				continue;
+			}
+			let child_admin = site
+				.get_model_admin_by_table_name(inline.adapter().table_name())
+				.map_server_fn_error()?;
+			inline
+				.validate_child_table(child_admin.table_name())
+				.map_server_fn_error()?;
+			auth.require_model_permission(
+				child_admin.as_ref(),
+				user.as_ref(),
+				ModelPermission::View,
+			)
+			.await?;
+			let query = child_admin
+				.get_queryset(
+					user.as_ref(),
+					&request_context,
+					AdminQuery::new(child_admin.table_name()),
+				)
+				.await
+				.map_server_fn_error()?;
+			unchanged_scope_queries.insert(inline.key().to_owned(), query);
+		}
 		remove_unchanged_inline_mutations(
 			&inlines,
 			&object_id,
 			&mut inline_mutations,
+			&unchanged_scope_queries,
 			&mut connection,
 		)
 		.await
@@ -245,17 +308,23 @@ pub(crate) async fn update_record_with_trusted_file_fields(
 			&auth,
 			site.as_ref(),
 			user.as_ref(),
+			&request_context,
 			&inlines,
 			&inline_mutations,
 		)
-		.await?;
-	}
+		.await?
+	};
 
 	let result: Result<_, super::inline::InlineTransactionError> = async {
 		connection
 			.atomic_write(async |transaction| {
 				let current_data = db
-					.get_with_executor_for_update(transaction, &table_name, &pk_field, &object_id)
+					.get_admin_query_with_executor_for_update(
+						transaction,
+						&admin_query,
+						&pk_field,
+						&object_id,
+					)
 					.await?;
 				let Some(current_data) = current_data else {
 					return Err(crate::types::AdminError::ModelNotRegistered(format!(
@@ -270,12 +339,20 @@ pub(crate) async fn update_record_with_trusted_file_fields(
 						.map_err(reinhardt_core::exception::Error::from)?;
 				}
 				let mut relation_changed_fields = Vec::new();
-				for selection in &selections {
+				for (selection, relation_query) in selections.iter().zip(&relation_queries) {
 					let source_pk = relation_value(
 						&selection.descriptor.source_metadata,
 						&selection.descriptor.source_pk_field,
 						&object_id,
 					)
+					.map_err(reinhardt_core::exception::Error::from)?;
+					validate_relation_ids(
+						transaction,
+						&selection.descriptor,
+						&selection.ids,
+						relation_query,
+					)
+					.await
 					.map_err(reinhardt_core::exception::Error::from)?;
 					if selection.ids.len() > MAX_RELATION_SELECTIONS {
 						let unchanged = relation_selection_is_unchanged(
@@ -297,9 +374,6 @@ pub(crate) async fn update_record_with_trusted_file_fields(
 						}
 						continue;
 					}
-					validate_relation_ids(transaction, &selection.descriptor, &selection.ids)
-						.await
-						.map_err(reinhardt_core::exception::Error::from)?;
 					if sync_relation_ids(
 						transaction,
 						&selection.descriptor,
@@ -332,9 +406,15 @@ pub(crate) async fn update_record_with_trusted_file_fields(
 					)
 					.await?
 				};
-				let outcomes =
-					save_inline_mutations(&inlines, &object_id, inline_mutations, transaction)
-						.await?;
+				let outcomes = save_inline_mutations(
+					&db,
+					&inlines,
+					&inline_scopes,
+					&object_id,
+					inline_mutations,
+					transaction,
+				)
+				.await?;
 				if !changed_fields.is_empty() {
 					let event = audit::new_history_event(
 						&actor,

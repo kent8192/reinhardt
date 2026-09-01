@@ -485,7 +485,8 @@ impl FilesystemRepository {
 			""
 		};
 		Ok(format!(
-			"// reinhardt-migration-source: 1\n{header}{formatted}"
+			"// reinhardt-migration-source: {}\n{header}{formatted}",
+			crate::migrations::CURRENT_SOURCE_FORMAT_VERSION
 		))
 	}
 
@@ -643,6 +644,12 @@ impl FilesystemRepository {
 
 	fn validate_schema_value(context: &str, value: &Value) -> Result<()> {
 		match value {
+			Value::Float(Some(value)) if !value.is_finite() => {
+				Self::unsupported_rendering(format!("{context}.SchemaExpr.Value::Float"))
+			}
+			Value::Double(Some(value)) if !value.is_finite() => {
+				Self::unsupported_rendering(format!("{context}.SchemaExpr.Value::Double"))
+			}
 			Value::Bool(_)
 			| Value::TinyInt(_)
 			| Value::SmallInt(_)
@@ -1167,6 +1174,80 @@ mod tests {
 			partition: None,
 			interleave_in_parent: None,
 		})
+	}
+
+	#[test]
+	fn render_uses_current_source_format_version() {
+		let repository = FilesystemRepository::new(TempDir::new().unwrap().path());
+
+		let rendered = repository
+			.render(
+				&Migration::new("0001_initial", "polls"),
+				MigrationRenderOptions {
+					include_header: false,
+				},
+			)
+			.unwrap();
+
+		let expected_marker = format!(
+			"// reinhardt-migration-source: {}",
+			crate::migrations::CURRENT_SOURCE_FORMAT_VERSION
+		);
+		assert_eq!(rendered.lines().next(), Some(expected_marker.as_str()));
+	}
+
+	#[rstest]
+	#[case::float_nan(
+		Value::Float(Some(f32::NAN)),
+		"operations[0].CreateTable.GeneratedColumnDefinition.SchemaExpr.Value::Float"
+	)]
+	#[case::float_positive_infinity(
+		Value::Float(Some(f32::INFINITY)),
+		"operations[0].CreateTable.GeneratedColumnDefinition.SchemaExpr.Value::Float"
+	)]
+	#[case::float_negative_infinity(
+		Value::Float(Some(f32::NEG_INFINITY)),
+		"operations[0].CreateTable.GeneratedColumnDefinition.SchemaExpr.Value::Float"
+	)]
+	#[case::double_nan(
+		Value::Double(Some(f64::NAN)),
+		"operations[0].CreateTable.GeneratedColumnDefinition.SchemaExpr.Value::Double"
+	)]
+	#[case::double_positive_infinity(
+		Value::Double(Some(f64::INFINITY)),
+		"operations[0].CreateTable.GeneratedColumnDefinition.SchemaExpr.Value::Double"
+	)]
+	#[case::double_negative_infinity(
+		Value::Double(Some(f64::NEG_INFINITY)),
+		"operations[0].CreateTable.GeneratedColumnDefinition.SchemaExpr.Value::Double"
+	)]
+	fn render_rejects_non_finite_generated_column_literals(
+		#[case] value: Value,
+		#[case] expected_operation: &str,
+	) {
+		let repository = FilesystemRepository::new(TempDir::new().unwrap().path());
+		let migration = migration_with_generated_column(GeneratedColumnDefinition::from_parts(
+			Some(Box::new(SchemaExpr::Value(value))),
+			None,
+			None,
+			GeneratedStorage::Stored,
+		));
+
+		let error = repository
+			.render(
+				&migration,
+				MigrationRenderOptions {
+					include_header: false,
+				},
+			)
+			.unwrap_err();
+
+		match error {
+			MigrationError::UnsupportedMigrationRendering { operation } => {
+				assert_eq!(operation, expected_operation);
+			}
+			other => panic!("expected unsupported rendering error, got {other}"),
+		}
 	}
 
 	#[test]

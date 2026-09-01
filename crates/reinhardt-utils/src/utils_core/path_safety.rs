@@ -72,11 +72,6 @@ pub fn safe_path_join(base: &Path, user_input: &str) -> Result<PathBuf, PathTrav
 		}
 	}
 
-	// Also catch encoded or obfuscated `..` that Component might normalize away
-	if user_input.contains("..") {
-		return Err(PathTraversalError::ParentTraversal);
-	}
-
 	// Stage 2: Join and canonicalize
 	let joined = base.join(user_input);
 	let canonical_base = safe_canonicalize(base)?;
@@ -103,8 +98,10 @@ fn safe_canonicalize(path: &Path) -> Result<PathBuf, PathTraversalError> {
 	let mut current = path.to_path_buf();
 
 	let resolved = loop {
-		if current.exists() {
-			break current.canonicalize()?;
+		match std::fs::symlink_metadata(&current) {
+			Ok(_) => break current.canonicalize()?,
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+			Err(error) => return Err(error.into()),
 		}
 		if let Some(file_name) = current.file_name() {
 			remaining.push(file_name.to_os_string());
@@ -238,15 +235,17 @@ mod tests {
 	}
 
 	#[rstest]
-	fn test_safe_path_join_rejects_double_dot_in_component() {
+	fn test_safe_path_join_allows_double_dots_inside_names() {
 		// Arrange
 		let base = create_test_dir();
 
 		// Act
-		let result = safe_path_join(&base, "..hidden");
+		let hidden = safe_path_join(&base, "..hidden");
+		let backup = safe_path_join(&base, "report..bak");
 
 		// Assert
-		assert!(matches!(result, Err(PathTraversalError::ParentTraversal)));
+		assert!(hidden.is_ok());
+		assert!(backup.is_ok());
 		cleanup_test_dir(&base);
 	}
 

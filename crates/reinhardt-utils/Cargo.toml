@@ -71,6 +71,9 @@ chrono-tz = { workspace = true }
 inventory = "0.3"
 reqwest = { workspace = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+cap-std = "3.4.6"
+
 [features]
 default = []
 

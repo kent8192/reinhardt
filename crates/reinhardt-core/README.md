@@ -389,6 +389,7 @@ use reinhardt_core::signals::Signal;
 - **HTML Sanitization**: `sanitize_html()` for basic HTML input sanitization
 - **XSS Pattern Detection**: `detect_xss_patterns()` detects dangerous patterns (script tags, event handlers, etc.)
 - **URL Validation**: `is_safe_url()` validates URLs and allows only safe protocols (http, https, mailto, ftp)
+- **Safe Page Elements**: `PageElement` validates tag and attribute names and rejects event-handler and unsafe URL attributes
 - **Safe Output**: Prevents script injection in user-generated content across multiple contexts
 
 #### Security Headers

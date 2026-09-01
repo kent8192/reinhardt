@@ -6,12 +6,17 @@ use super::file::{FileMetadata, StoredFile};
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::{Arc, OnceLock};
+#[cfg(target_arch = "wasm32")]
 use tokio::fs;
 
 /// Local filesystem storage
 pub struct LocalStorage {
 	base_path: PathBuf,
 	base_url: String,
+	#[cfg(not(target_arch = "wasm32"))]
+	base_dir: Arc<OnceLock<Arc<cap_std::fs::Dir>>>,
 }
 
 impl LocalStorage {
@@ -29,6 +34,8 @@ impl LocalStorage {
 		Self {
 			base_path: base_path.into(),
 			base_url: base_url.into(),
+			#[cfg(not(target_arch = "wasm32"))]
+			base_dir: Arc::new(OnceLock::new()),
 		}
 	}
 	/// Ensure the base directory exists, creating it if necessary
@@ -49,12 +56,51 @@ impl LocalStorage {
 	/// # });
 	/// ```
 	pub async fn ensure_base_dir(&self) -> StorageResult<()> {
-		fs::create_dir_all(&self.base_path).await?;
-		Ok(())
+		#[cfg(not(target_arch = "wasm32"))]
+		{
+			self.with_base_dir(true, |_| Ok(())).await
+		}
+		#[cfg(target_arch = "wasm32")]
+		{
+			fs::create_dir_all(&self.base_path).await?;
+			Ok(())
+		}
 	}
 
-	fn full_path(&self, path: &str) -> PathBuf {
-		self.base_path.join(path)
+	#[cfg(target_arch = "wasm32")]
+	fn full_path(&self, path: &str) -> StorageResult<PathBuf> {
+		Self::validate_path(path)?;
+		crate::safe_path_join(&self.base_path, path)
+			.map_err(|error| StorageError::InvalidPath(error.to_string()))
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	async fn with_base_dir<T, F>(&self, create: bool, operation: F) -> StorageResult<T>
+	where
+		T: Send + 'static,
+		F: FnOnce(cap_std::fs::Dir) -> StorageResult<T> + Send + 'static,
+	{
+		let base_path = self.base_path.clone();
+		let base_dir = self.base_dir.clone();
+		tokio::task::spawn_blocking(move || {
+			if base_dir.get().is_none() {
+				if create {
+					std::fs::create_dir_all(&base_path)?;
+				}
+				let opened = Arc::new(cap_std::fs::Dir::open_ambient_dir(
+					&base_path,
+					cap_std::ambient_authority(),
+				)?);
+				let _ = base_dir.set(opened);
+			}
+			let directory = base_dir
+				.get()
+				.expect("storage directory is initialized")
+				.try_clone()?;
+			operation(directory)
+		})
+		.await
+		.map_err(|error| StorageError::Io(std::io::Error::other(error.to_string())))?
 	}
 
 	/// Validate path to prevent directory traversal attacks
@@ -99,107 +145,237 @@ impl LocalStorage {
 #[async_trait]
 impl Storage for LocalStorage {
 	async fn save(&self, path: &str, content: &[u8]) -> StorageResult<FileMetadata> {
-		// Validate path to prevent directory traversal
-		Self::validate_path(path)?;
-
-		let full_path = self.full_path(path);
-
-		// Create parent directories if needed
-		if let Some(parent) = full_path.parent() {
-			fs::create_dir_all(parent).await?;
+		#[cfg(not(target_arch = "wasm32"))]
+		{
+			Self::validate_path(path)?;
+			let relative_path = PathBuf::from(path);
+			let stored_path = path.to_string();
+			let content = content.to_vec();
+			return self
+				.with_base_dir(true, move |directory| {
+					use std::io::Write;
+					if let Some(parent) = relative_path.parent()
+						&& !parent.as_os_str().is_empty()
+					{
+						directory.create_dir_all(parent)?;
+					}
+					let mut file = directory.create(&relative_path)?;
+					file.write_all(&content)?;
+					let size = file.metadata()?.len();
+					Ok(FileMetadata::new(stored_path, size)
+						.with_checksum(Self::compute_checksum(&content)))
+				})
+				.await;
 		}
+		#[cfg(target_arch = "wasm32")]
+		{
+			let full_path = self.full_path(path)?;
 
-		// Write file
-		fs::write(&full_path, content).await?;
+			// Create parent directories if needed
+			if let Some(parent) = full_path.parent() {
+				fs::create_dir_all(parent).await?;
+			}
 
-		// Get file metadata
-		let file_meta = fs::metadata(&full_path).await?;
-		let size = file_meta.len();
-		let checksum = Self::compute_checksum(content);
+			// Write file
+			fs::write(&full_path, content).await?;
 
-		Ok(FileMetadata::new(path.to_string(), size).with_checksum(checksum))
+			// Get file metadata
+			let file_meta = fs::metadata(&full_path).await?;
+			let size = file_meta.len();
+			let checksum = Self::compute_checksum(content);
+
+			Ok(FileMetadata::new(path.to_string(), size).with_checksum(checksum))
+		}
 	}
 
 	async fn read(&self, path: &str) -> StorageResult<StoredFile> {
-		// Validate path to prevent directory traversal
-		Self::validate_path(path)?;
-
-		let full_path = self.full_path(path);
-
-		if !full_path.exists() {
-			return Err(StorageError::NotFound(path.to_string()));
+		#[cfg(not(target_arch = "wasm32"))]
+		{
+			Self::validate_path(path)?;
+			let relative_path = PathBuf::from(path);
+			let stored_path = path.to_string();
+			return self
+				.with_base_dir(false, move |directory| {
+					use std::io::Read;
+					let mut file = directory.open(&relative_path).map_err(|error| {
+						if error.kind() == std::io::ErrorKind::NotFound {
+							StorageError::NotFound(stored_path.clone())
+						} else {
+							StorageError::Io(error)
+						}
+					})?;
+					let mut content = Vec::new();
+					file.read_to_end(&mut content)?;
+					let metadata = FileMetadata::new(stored_path, file.metadata()?.len());
+					Ok(StoredFile::new(metadata, content))
+				})
+				.await;
 		}
+		#[cfg(target_arch = "wasm32")]
+		{
+			let full_path = self.full_path(path)?;
 
-		let content = fs::read(&full_path).await?;
-		let file_meta = fs::metadata(&full_path).await?;
-		let size = file_meta.len();
+			if !full_path.exists() {
+				return Err(StorageError::NotFound(path.to_string()));
+			}
 
-		let metadata = FileMetadata::new(path.to_string(), size);
-		Ok(StoredFile::new(metadata, content))
+			let content = fs::read(&full_path).await?;
+			let file_meta = fs::metadata(&full_path).await?;
+			let size = file_meta.len();
+
+			let metadata = FileMetadata::new(path.to_string(), size);
+			Ok(StoredFile::new(metadata, content))
+		}
 	}
 
 	async fn delete(&self, path: &str) -> StorageResult<()> {
-		// Validate path to prevent directory traversal
-		Self::validate_path(path)?;
-
-		let full_path = self.full_path(path);
-
-		if !full_path.exists() {
-			return Err(StorageError::NotFound(path.to_string()));
+		#[cfg(not(target_arch = "wasm32"))]
+		{
+			Self::validate_path(path)?;
+			let relative_path = PathBuf::from(path);
+			let stored_path = path.to_string();
+			return self
+				.with_base_dir(false, move |directory| {
+					directory.remove_file(relative_path).map_err(|error| {
+						if error.kind() == std::io::ErrorKind::NotFound {
+							StorageError::NotFound(stored_path)
+						} else {
+							StorageError::Io(error)
+						}
+					})
+				})
+				.await;
 		}
+		#[cfg(target_arch = "wasm32")]
+		{
+			let full_path = self.full_path(path)?;
 
-		fs::remove_file(&full_path).await?;
-		Ok(())
+			if !full_path.exists() {
+				return Err(StorageError::NotFound(path.to_string()));
+			}
+
+			fs::remove_file(&full_path).await?;
+			Ok(())
+		}
 	}
 
 	async fn exists(&self, path: &str) -> StorageResult<bool> {
-		// Validate path to prevent directory traversal
-		Self::validate_path(path)?;
-
-		let full_path = self.full_path(path);
-		Ok(full_path.exists())
+		#[cfg(not(target_arch = "wasm32"))]
+		{
+			Self::validate_path(path)?;
+			let relative_path = PathBuf::from(path);
+			return self
+				.with_base_dir(false, move |directory| {
+					match directory.metadata(relative_path) {
+						Ok(_) => Ok(true),
+						Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+						Err(error) => Err(error.into()),
+					}
+				})
+				.await;
+		}
+		#[cfg(target_arch = "wasm32")]
+		{
+			let full_path = self.full_path(path)?;
+			Ok(full_path.exists())
+		}
 	}
 
 	async fn metadata(&self, path: &str) -> StorageResult<FileMetadata> {
-		// Validate path to prevent directory traversal
-		Self::validate_path(path)?;
-
-		let full_path = self.full_path(path);
-
-		if !full_path.exists() {
-			return Err(StorageError::NotFound(path.to_string()));
+		#[cfg(not(target_arch = "wasm32"))]
+		{
+			Self::validate_path(path)?;
+			let relative_path = PathBuf::from(path);
+			let stored_path = path.to_string();
+			return self
+				.with_base_dir(false, move |directory| {
+					let file = directory.open(relative_path).map_err(|error| {
+						if error.kind() == std::io::ErrorKind::NotFound {
+							StorageError::NotFound(stored_path.clone())
+						} else {
+							StorageError::Io(error)
+						}
+					})?;
+					Ok(FileMetadata::new(stored_path, file.metadata()?.len()))
+				})
+				.await;
 		}
+		#[cfg(target_arch = "wasm32")]
+		{
+			let full_path = self.full_path(path)?;
 
-		let file_meta = fs::metadata(&full_path).await?;
-		let size = file_meta.len();
+			if !full_path.exists() {
+				return Err(StorageError::NotFound(path.to_string()));
+			}
 
-		Ok(FileMetadata::new(path.to_string(), size))
+			let file_meta = fs::metadata(&full_path).await?;
+			let size = file_meta.len();
+
+			Ok(FileMetadata::new(path.to_string(), size))
+		}
 	}
 
 	async fn list(&self, path: &str) -> StorageResult<Vec<FileMetadata>> {
-		// Validate path to prevent directory traversal
-		// Empty path is allowed to list the base directory
-		if !path.is_empty() {
-			Self::validate_path(path)?;
-		}
-
-		let full_path = self.full_path(path);
-		let mut entries = fs::read_dir(&full_path).await?;
-		let mut results = Vec::new();
-
-		while let Some(entry) = entries.next_entry().await? {
-			let metadata = entry.metadata().await?;
-			if metadata.is_file() {
-				let file_name = entry.file_name().to_string_lossy().to_string();
-				let relative_path = Path::new(path).join(&file_name);
-				results.push(FileMetadata::new(
-					relative_path.to_string_lossy().to_string(),
-					metadata.len(),
-				));
+		#[cfg(not(target_arch = "wasm32"))]
+		{
+			if !path.is_empty() {
+				Self::validate_path(path)?;
 			}
+			let relative_path = if path.is_empty() {
+				PathBuf::from(".")
+			} else {
+				PathBuf::from(path)
+			};
+			let listed_path = path.to_string();
+			return self
+				.with_base_dir(false, move |directory| {
+					let listed_directory = directory.open_dir(relative_path)?;
+					let mut results = Vec::new();
+					for entry in listed_directory.entries()? {
+						let entry = entry?;
+						let metadata = entry.metadata()?;
+						if metadata.is_file() {
+							let relative_path = Path::new(&listed_path).join(entry.file_name());
+							results.push(FileMetadata::new(
+								relative_path.to_string_lossy().to_string(),
+								metadata.len(),
+							));
+						}
+					}
+					Ok(results)
+				})
+				.await;
 		}
+		#[cfg(target_arch = "wasm32")]
+		{
+			// Validate path to prevent directory traversal
+			// Empty path is allowed to list the base directory
+			if !path.is_empty() {
+				Self::validate_path(path)?;
+			}
 
-		Ok(results)
+			let full_path = if path.is_empty() {
+				self.base_path.canonicalize()?
+			} else {
+				self.full_path(path)?
+			};
+			let mut entries = fs::read_dir(&full_path).await?;
+			let mut results = Vec::new();
+
+			while let Some(entry) = entries.next_entry().await? {
+				let metadata = entry.metadata().await?;
+				if metadata.is_file() {
+					let file_name = entry.file_name().to_string_lossy().to_string();
+					let relative_path = Path::new(path).join(&file_name);
+					results.push(FileMetadata::new(
+						relative_path.to_string_lossy().to_string(),
+						metadata.len(),
+					));
+				}
+			}
+
+			Ok(results)
+		}
 	}
 
 	fn url(&self, path: &str) -> String {
@@ -215,51 +391,84 @@ impl Storage for LocalStorage {
 	}
 
 	async fn get_accessed_time(&self, path: &str) -> StorageResult<chrono::DateTime<chrono::Utc>> {
-		// Validate path to prevent directory traversal
-		Self::validate_path(path)?;
-
-		let full_path = self.full_path(path);
-
-		if !full_path.exists() {
-			return Err(StorageError::NotFound(path.to_string()));
+		#[cfg(not(target_arch = "wasm32"))]
+		{
+			Self::validate_path(path)?;
+			let relative_path = PathBuf::from(path);
+			return self
+				.with_base_dir(false, move |directory| {
+					let accessed = directory.open(relative_path)?.metadata()?.accessed()?;
+					Ok(accessed.into_std().into())
+				})
+				.await;
 		}
+		#[cfg(target_arch = "wasm32")]
+		{
+			let full_path = self.full_path(path)?;
 
-		let file_meta = fs::metadata(&full_path).await?;
-		let accessed = file_meta.accessed()?;
-		let datetime: chrono::DateTime<chrono::Utc> = accessed.into();
-		Ok(datetime)
+			if !full_path.exists() {
+				return Err(StorageError::NotFound(path.to_string()));
+			}
+
+			let file_meta = fs::metadata(&full_path).await?;
+			let accessed = file_meta.accessed()?;
+			let datetime: chrono::DateTime<chrono::Utc> = accessed.into();
+			Ok(datetime)
+		}
 	}
 
 	async fn get_created_time(&self, path: &str) -> StorageResult<chrono::DateTime<chrono::Utc>> {
-		// Validate path to prevent directory traversal
-		Self::validate_path(path)?;
-
-		let full_path = self.full_path(path);
-
-		if !full_path.exists() {
-			return Err(StorageError::NotFound(path.to_string()));
+		#[cfg(not(target_arch = "wasm32"))]
+		{
+			Self::validate_path(path)?;
+			let relative_path = PathBuf::from(path);
+			return self
+				.with_base_dir(false, move |directory| {
+					let created = directory.open(relative_path)?.metadata()?.created()?;
+					Ok(created.into_std().into())
+				})
+				.await;
 		}
+		#[cfg(target_arch = "wasm32")]
+		{
+			let full_path = self.full_path(path)?;
 
-		let file_meta = fs::metadata(&full_path).await?;
-		let created = file_meta.created()?;
-		let datetime: chrono::DateTime<chrono::Utc> = created.into();
-		Ok(datetime)
+			if !full_path.exists() {
+				return Err(StorageError::NotFound(path.to_string()));
+			}
+
+			let file_meta = fs::metadata(&full_path).await?;
+			let created = file_meta.created()?;
+			let datetime: chrono::DateTime<chrono::Utc> = created.into();
+			Ok(datetime)
+		}
 	}
 
 	async fn get_modified_time(&self, path: &str) -> StorageResult<chrono::DateTime<chrono::Utc>> {
-		// Validate path to prevent directory traversal
-		Self::validate_path(path)?;
-
-		let full_path = self.full_path(path);
-
-		if !full_path.exists() {
-			return Err(StorageError::NotFound(path.to_string()));
+		#[cfg(not(target_arch = "wasm32"))]
+		{
+			Self::validate_path(path)?;
+			let relative_path = PathBuf::from(path);
+			return self
+				.with_base_dir(false, move |directory| {
+					let modified = directory.open(relative_path)?.metadata()?.modified()?;
+					Ok(modified.into_std().into())
+				})
+				.await;
 		}
+		#[cfg(target_arch = "wasm32")]
+		{
+			let full_path = self.full_path(path)?;
 
-		let file_meta = fs::metadata(&full_path).await?;
-		let modified = file_meta.modified()?;
-		let datetime: chrono::DateTime<chrono::Utc> = modified.into();
-		Ok(datetime)
+			if !full_path.exists() {
+				return Err(StorageError::NotFound(path.to_string()));
+			}
+
+			let file_meta = fs::metadata(&full_path).await?;
+			let modified = file_meta.modified()?;
+			let datetime: chrono::DateTime<chrono::Utc> = modified.into();
+			Ok(datetime)
+		}
 	}
 }
 
@@ -572,6 +781,71 @@ mod tests {
 		let result = storage.save("/etc/passwd", b"test").await;
 		assert!(result.is_err());
 		assert!(matches!(result.unwrap_err(), StorageError::InvalidPath(_)));
+	}
+
+	#[cfg(unix)]
+	#[tokio::test]
+	async fn storage_rejects_symlinks_that_escape_the_base_directory() {
+		use std::os::unix::fs::symlink;
+
+		let (storage, temp_dir) = create_test_storage().await;
+		let outside = TempDir::new().expect("outside directory should be created");
+		tokio::fs::write(outside.path().join("secret.txt"), b"secret")
+			.await
+			.expect("outside fixture should be written");
+		symlink(outside.path(), temp_dir.path().join("escape"))
+			.expect("test symlink should be created");
+
+		let read_result = storage.read("escape/secret.txt").await;
+		let save_result = storage.save("escape/new.txt", b"outside write").await;
+
+		assert!(read_result.is_err());
+		assert!(save_result.is_err());
+		assert!(!outside.path().join("new.txt").exists());
+	}
+
+	#[cfg(unix)]
+	#[tokio::test]
+	async fn storage_rejects_broken_symlink_writes_outside_the_base_directory() {
+		use std::os::unix::fs::symlink;
+
+		let (storage, temp_dir) = create_test_storage().await;
+		let outside = TempDir::new().expect("outside directory should be created");
+		let outside_file = outside.path().join("new.txt");
+		symlink(&outside_file, temp_dir.path().join("escape.txt"))
+			.expect("test symlink should be created");
+
+		assert!(storage.save("escape.txt", b"outside write").await.is_err());
+		assert!(!outside_file.exists());
+	}
+
+	#[cfg(unix)]
+	#[tokio::test]
+	async fn storage_reuses_the_initialized_root_after_path_replacement() {
+		use std::os::unix::fs::symlink;
+
+		let temp = TempDir::new().expect("temporary directory should be created");
+		let base = temp.path().join("storage");
+		let moved = temp.path().join("moved");
+		let outside = TempDir::new().expect("outside directory should be created");
+		let storage = LocalStorage::new(&base, "http://localhost/media");
+		storage
+			.ensure_base_dir()
+			.await
+			.expect("storage root should be initialized");
+		std::fs::rename(&base, &moved).expect("storage root should be moved");
+		symlink(outside.path(), &base).expect("replacement symlink should be created");
+
+		storage
+			.save("trusted.txt", b"trusted")
+			.await
+			.expect("the retained root should remain writable");
+
+		assert_eq!(
+			std::fs::read(moved.join("trusted.txt")).expect("retained root file should exist"),
+			b"trusted"
+		);
+		assert!(!outside.path().join("trusted.txt").exists());
 	}
 
 	#[tokio::test]

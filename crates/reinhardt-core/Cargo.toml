@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-core"
-version = "0.4.0-alpha.12"
+version = "0.4.0-alpha.13"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -106,8 +106,9 @@ compressed-parsers = ["parsers", "dep:alloc-stdlib", "dep:brotli-decompressor", 
 pagination = ["serde"]
 reactive = []
 
-# Page types feature
-page = ["types", "reactive", "dep:reinhardt-event-catalog"]
+# Page types feature. HTML attribute sanitization calls
+# `crate::security::xss::is_safe_url`, so `page` enables `security`.
+page = ["types", "reactive", "security", "dep:reinhardt-event-catalog"]
 page-hot-reload = ["page"]
 
 # External dependency features

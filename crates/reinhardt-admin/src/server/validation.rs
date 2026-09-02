@@ -26,6 +26,23 @@ pub(crate) fn retain_allowed_fields<T: AsRef<str>>(
 	});
 }
 
+pub(crate) fn retain_allowed_fields_with_aliases<T: AsRef<str>>(
+	data: &mut HashMap<String, serde_json::Value>,
+	allowed_fields: &[T],
+	aliases: &[(String, String)],
+) {
+	data.retain(|field, _| {
+		allowed_fields.iter().any(|allowed| {
+			let allowed = allowed.as_ref();
+			field == allowed
+				|| aliases.iter().any(|(logical, physical)| {
+					(field == logical && allowed == physical)
+						|| (field == physical && allowed == logical)
+				})
+		})
+	});
+}
+
 /// Maximum number of fields in a mutation request
 const MAX_FIELDS: usize = 100;
 
@@ -335,6 +352,22 @@ mod tests {
 		assert_eq!(
 			data,
 			HashMap::from([("name".to_string(), serde_json::json!("visible"))])
+		);
+	}
+
+	#[rstest]
+	fn retain_allowed_fields_with_aliases_preserves_configured_database_column() {
+		let mut data = HashMap::from([
+			("headline_col".to_string(), serde_json::json!("Visible")),
+			("secret_col".to_string(), serde_json::json!("hidden")),
+		]);
+		let aliases = vec![("headline".to_string(), "headline_col".to_string())];
+
+		retain_allowed_fields_with_aliases(&mut data, &["headline"], &aliases);
+
+		assert_eq!(
+			data,
+			HashMap::from([("headline_col".to_string(), serde_json::json!("Visible"))])
 		);
 	}
 

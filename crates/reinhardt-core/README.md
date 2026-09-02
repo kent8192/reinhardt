@@ -94,7 +94,7 @@ Add this to your `Cargo.toml`:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt-core = "0.4.0-alpha.12"
+reinhardt-core = "0.4.0-alpha.13"
 ```
 
 ### Optional Features
@@ -104,7 +104,7 @@ Enable specific modules based on your needs:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt-core = { version = "0.4.0-alpha.12", features = ["signals", "macros", "security"] }
+reinhardt-core = { version = "0.4.0-alpha.13", features = ["signals", "macros", "security"] }
 ```
 
 Available features:
@@ -120,7 +120,7 @@ Available features:
 - `negotiation`: Content negotiation
 - `parsers`: Request body parsers
 - `pagination`: Pagination strategies
-- `page`: Page types (requires `types`)
+- `page`: Page types (requires `types`, `reactive`, and `security`)
 - `reactive`: Reactive types
 
 ## Usage

@@ -8901,10 +8901,7 @@ impl MigrationAutodetector {
 			// Create FK constraints for the intermediate table
 			let constraints = vec![
 				super::operations::Constraint::ForeignKey {
-					name: crate::naming::foreign_key_constraint_name(
-						through_table,
-						&source_column,
-					),
+					name: crate::naming::foreign_key_constraint_name(through_table, &source_column),
 					columns: vec![source_column.clone()],
 					referenced_table: source_table.clone(),
 					referenced_columns: vec!["id".to_string()],
@@ -8913,10 +8910,7 @@ impl MigrationAutodetector {
 					deferrable: None,
 				},
 				super::operations::Constraint::ForeignKey {
-					name: crate::naming::foreign_key_constraint_name(
-						through_table,
-						&target_column,
-					),
+					name: crate::naming::foreign_key_constraint_name(through_table, &target_column),
 					columns: vec![target_column.clone()],
 					referenced_table: target_table,
 					referenced_columns: vec!["id".to_string()],

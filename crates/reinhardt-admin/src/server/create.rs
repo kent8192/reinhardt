@@ -9,7 +9,7 @@ use crate::adapters::{AdminDatabase, AdminSite};
 #[cfg(server)]
 use crate::core::history::insert_history_event;
 #[cfg(server)]
-use crate::core::{AdminDatabaseKey, AdminSiteKey};
+use crate::core::{AdminDatabaseKey, AdminQuery, AdminRequestContext, AdminSiteKey};
 use crate::types::MutationResponse;
 #[cfg(server)]
 use reinhardt_di::KeyedDepends;
@@ -17,7 +17,7 @@ use reinhardt_di::KeyedDepends;
 use reinhardt_pages::server_fn::ServerFnRequest;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 #[cfg(server)]
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[cfg(server)]
 use super::audit;
@@ -172,6 +172,8 @@ pub(crate) async fn create_record_with_trusted_file_fields(
 	)?;
 	let descriptors = resolve_relations(&site, model_admin.as_ref()).map_server_fn_error()?;
 	let (mut data, selections) = split_relation_values(data, &descriptors).map_server_fn_error()?;
+	let request_context = AdminRequestContext::new(http_request.into_inner());
+	let mut relation_queries = Vec::with_capacity(selections.len());
 	for selection in &selections {
 		auth.require_model_permission(
 			selection.descriptor.target_admin.as_ref(),
@@ -179,9 +181,29 @@ pub(crate) async fn create_record_with_trusted_file_fields(
 			ModelPermission::View,
 		)
 		.await?;
+		relation_queries.push(
+			selection
+				.descriptor
+				.target_admin
+				.get_queryset(
+					user.as_ref(),
+					&request_context,
+					AdminQuery::new(selection.descriptor.target_admin.table_name()),
+				)
+				.await
+				.map_server_fn_error()?,
+		);
 	}
-	let relation_values =
-		validate_relation_values(&auth, user.as_ref(), &site, &db, &model_admin, &mut data).await?;
+	let relation_values = validate_relation_values(
+		&auth,
+		user.as_ref(),
+		&request_context,
+		&site,
+		&db,
+		&model_admin,
+		&mut data,
+	)
+	.await?;
 
 	// Sanitize string values to prevent stored XSS
 	let mut sanitized_data = data;
@@ -209,16 +231,19 @@ pub(crate) async fn create_record_with_trusted_file_fields(
 	inject_auto_timestamps(&mut sanitized_data, &table_name);
 	translate_logical_field_names(&table_name, &mut sanitized_data).map_server_fn_error()?;
 
-	if !inlines.is_empty() {
+	let inline_scopes = if inlines.is_empty() {
+		HashMap::new()
+	} else {
 		preflight_inline_permissions(
 			&auth,
 			site.as_ref(),
 			user.as_ref(),
+			&request_context,
 			&inlines,
 			&inline_mutations,
 		)
-		.await?;
-	}
+		.await?
+	};
 
 	let actor = user.get_username().to_string();
 	let audit_user_id = auth.user_id().unwrap_or("unknown").to_string();
@@ -235,16 +260,21 @@ pub(crate) async fn create_record_with_trusted_file_fields(
 					)
 					.await?;
 				let (object_id, _) = created_parent_identity(&created, &table_name, &pk_field)?;
-				for selection in &selections {
+				for (selection, relation_query) in selections.iter().zip(&relation_queries) {
 					let source_pk = relation_value(
 						&selection.descriptor.source_metadata,
 						&selection.descriptor.source_pk_field,
 						&object_id,
 					)
 					.map_err(reinhardt_core::exception::Error::from)?;
-					validate_relation_ids(transaction, &selection.descriptor, &selection.ids)
-						.await
-						.map_err(reinhardt_core::exception::Error::from)?;
+					validate_relation_ids(
+						transaction,
+						&selection.descriptor,
+						&selection.ids,
+						relation_query,
+					)
+					.await
+					.map_err(reinhardt_core::exception::Error::from)?;
 					let _ = sync_relation_ids(
 						transaction,
 						&selection.descriptor,
@@ -254,9 +284,15 @@ pub(crate) async fn create_record_with_trusted_file_fields(
 					.await
 					.map_err(reinhardt_core::exception::Error::from)?;
 				}
-				let outcomes =
-					save_inline_mutations(&inlines, &object_id, inline_mutations, transaction)
-						.await?;
+				let outcomes = save_inline_mutations(
+					&db,
+					&inlines,
+					&inline_scopes,
+					&object_id,
+					inline_mutations,
+					transaction,
+				)
+				.await?;
 				if created.affected > 0 {
 					let mut changed_fields = sanitized_data.keys().cloned().collect::<Vec<_>>();
 					changed_fields.extend(

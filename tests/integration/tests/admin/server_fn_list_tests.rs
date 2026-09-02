@@ -460,6 +460,11 @@ async fn test_get_list_select_related_uses_custom_to_field_physical_columns() {
 		AllPermissionsModelAdmin::list_select_related_to_field_model(),
 	)
 	.expect("Failed to register custom to_field list admin");
+	site.register(
+		"AdminListSelectRelatedToFieldTarget",
+		AllPermissionsModelAdmin::list_select_related_to_field_target_model(),
+	)
+	.expect("Failed to register custom to_field target admin");
 	let site = KeyedDepends::<AdminSiteKey, AdminSite>::from_value(site);
 
 	// Act
@@ -487,14 +492,10 @@ async fn test_get_list_select_related_uses_custom_to_field_physical_columns() {
 		vec![HashMap::from([
 			("id".to_string(), json!(41)),
 			(
-				"source_target_slug_column_5992".to_string(),
-				json!("target-slug-7"),
-			),
-			(
 				"target".to_string(),
 				json!({
 					"id": 7,
-					"target_slug_column_5992": "target-slug-7"
+					"slug": "target-slug-7"
 				}),
 			),
 		])]

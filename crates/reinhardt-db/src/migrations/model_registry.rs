@@ -279,11 +279,16 @@ impl ModelMetadata {
 		let unique_columns = self
 			.fields
 			.iter()
-			.filter(|&(field_name, field_meta)| (field_meta.params.get("unique").map(String::as_str) == Some("true"))).map(|(field_name, field_meta)| field_meta
-						.params
-						.get("db_column")
-						.cloned()
-						.unwrap_or_else(|| field_name.clone()))
+			.filter(|&(_, field_meta)| {
+				field_meta.params.get("unique").map(String::as_str) == Some("true")
+			})
+			.map(|(field_name, field_meta)| {
+				field_meta
+					.params
+					.get("db_column")
+					.cloned()
+					.unwrap_or_else(|| field_name.clone())
+			})
 			.filter(|column_name| {
 				!self.constraints.iter().any(|constraint| {
 					constraint.constraint_type.eq_ignore_ascii_case("unique")

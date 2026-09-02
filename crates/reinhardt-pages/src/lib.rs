@@ -336,15 +336,15 @@
 //!
 //! ```rust,ignore
 //! let server_error = ServerFnError::try_from_model_error_with::<User, _>(
-//! 	error,
-//! 	|database_error, _fields| {
-//! 		(database_error.constraint() == Some("users_email_unique"))
-//! 			.then(|| "This email is already registered".to_owned())
-//! 	},
+//!     error,
+//!     |database_error, _fields| {
+//!         (database_error.constraint() == Some("users_email_unique"))
+//!             .then(|| "This email is already registered".to_owned())
+//!     },
 //! )
 //! .unwrap_or_else(|error| {
-//! 	tracing::error!(error = %error, "user write failed");
-//! 	ServerFnError::application("Failed to save user")
+//!     tracing::error!(error = %error, "user write failed");
+//!     ServerFnError::application("Failed to save user")
 //! });
 //! ```
 //!

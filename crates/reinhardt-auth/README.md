@@ -15,11 +15,11 @@ Add `reinhardt` to your `Cargo.toml`:
 <!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.3.15", features = ["auth"] }
+reinhardt = { version = "0.3.16", features = ["auth"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.3.15", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.3.15", features = ["full"] }      # All features
+# reinhardt = { version = "0.3.16", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.3.16", features = ["full"] }      # All features
 ```
 
 Then import authentication features:

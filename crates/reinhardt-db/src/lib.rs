@@ -25,8 +25,8 @@
 //! use reinhardt_db::DatabaseError;
 //!
 //! let error = DatabaseError::new(
-//! 	DatabaseErrorKind::UniqueViolation,
-//! 	"duplicate key",
+//!     DatabaseErrorKind::UniqueViolation,
+//!     "duplicate key",
 //! )
 //! .with_code("23505")
 //! .with_constraint("users_email_key")

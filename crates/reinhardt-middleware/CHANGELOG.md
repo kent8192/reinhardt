@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.4.0-alpha.12...reinhardt-middleware@v0.4.0-alpha.13) - 2026-09-02
+
+### Security
+
+- *(middleware)* prevent private cache replay
+
+### Testing
+
+- *(middleware)* cover authenticated cache bypass order
+
 ## [0.4.0-alpha.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.4.0-alpha.11...reinhardt-middleware@v0.4.0-alpha.12) - 2026-08-30
 
 ### Added

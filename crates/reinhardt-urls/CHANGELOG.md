@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.3.15...reinhardt-urls@v0.3.16) - 2026-09-02
+
+### Testing
+
+- *(urls)* enforce inactive WASM server routing
+
 ## [0.3.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.3.9...reinhardt-urls@v0.3.10) - 2026-08-22
 
 ### Security

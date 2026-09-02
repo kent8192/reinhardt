@@ -17,7 +17,8 @@ use super::autodetector::{
 };
 use super::{ConstraintDefinition, GeneratedColumnDefinition};
 use crate::field_domain::FieldDomain;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use crate::naming::{enum_domain_constraint_name, generated_unique_constraint_names};
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
 
 #[cfg_attr(doc, aquamarine::aquamarine)]
@@ -78,8 +79,6 @@ pub struct ModelMetadata {
 }
 
 impl ModelMetadata {
-	const MAX_CONSTRAINT_IDENTIFIER_BYTES: usize = 63;
-
 	/// Creates a new instance.
 	pub fn new(
 		app_label: impl Into<String>,
@@ -121,56 +120,9 @@ impl ModelMetadata {
 
 	/// Adds the typed enum-domain constraint for a database column.
 	pub fn add_enum_domain_constraint(&mut self, column: &str, domain: FieldDomain) {
-		let name = super::operations::truncate_identifier_with_hash(&format!(
-			"{}_{}_model_enum_check",
-			self.table_name, column
-		));
+		let name = enum_domain_constraint_name(&self.table_name, column);
 		self.constraints
 			.push(ConstraintDefinition::enum_domain(name, column, domain));
-	}
-
-	fn synthesized_unique_constraint_name(
-		&self,
-		field_name: &str,
-		generated_names: &HashSet<String>,
-		existing_constraints: &[ConstraintDefinition],
-	) -> String {
-		// The raw tuple digest is required because concatenated safe fragments do
-		// not preserve table/field boundaries and normalized field names can
-		// collide. It also makes the name independent of field iteration order.
-		let tuple_digest =
-			stable_constraint_name_hash(&format!("{}\0{}", self.table_name, field_name));
-		let base_name = bounded_constraint_identifier(&format!(
-			"{}_{}_uniq_{tuple_digest:08x}",
-			safe_constraint_table_fragment(&self.table_name),
-			safe_constraint_name_fragment(field_name)
-		));
-		let is_taken = |candidate: &str| {
-			self.constraints
-				.iter()
-				.any(|constraint| constraint.name.eq_ignore_ascii_case(candidate))
-				|| existing_constraints
-					.iter()
-					.any(|constraint| constraint.name.eq_ignore_ascii_case(candidate))
-				|| generated_names
-					.iter()
-					.any(|name| name.eq_ignore_ascii_case(candidate))
-		};
-		if !is_taken(&base_name) {
-			return base_name;
-		}
-
-		let field_digest = stable_constraint_name_hash(field_name);
-		let mut candidate =
-			bounded_constraint_identifier(&format!("{base_name}_field_{field_digest:08x}"));
-		let mut suffix = 2;
-		while is_taken(&candidate) {
-			candidate = bounded_constraint_identifier(&format!(
-				"{base_name}_field_{field_digest:08x}_{suffix}"
-			));
-			suffix += 1;
-		}
-		candidate
 	}
 
 	/// Returns constraints registered by the `#[model(...)]` macro, such as
@@ -324,45 +276,48 @@ impl ModelMetadata {
 		// Generate named Unique constraints from field params. The field-level
 		// `unique` flag is consumed above so the same declaration cannot be
 		// emitted both inline and as a table constraint.
-		let mut generated_unique_constraint_names = HashSet::new();
-		let mut unique_fields = self
+		let unique_columns = self
 			.fields
 			.iter()
-			.filter(|(_, field_meta)| {
+			.filter(|&(_, field_meta)| {
 				field_meta.params.get("unique").map(String::as_str) == Some("true")
 			})
-			.collect::<Vec<_>>();
-		unique_fields.sort_unstable_by_key(|(left, _)| *left);
-		for (field_name, field_meta) in unique_fields {
-			if field_meta.params.get("unique").map(String::as_str) == Some("true") {
-				let column_name = field_meta
+			.map(|(field_name, field_meta)| {
+				field_meta
 					.params
 					.get("db_column")
-					.map_or(field_name, |name| name);
-				// Prefer a model-level declaration when it explicitly names the
-				// single-column constraint. This keeps one physical constraint and
-				// preserves the declared name.
-				if self.constraints.iter().any(|constraint| {
+					.cloned()
+					.unwrap_or_else(|| field_name.clone())
+			})
+			.filter(|column_name| {
+				!self.constraints.iter().any(|constraint| {
 					constraint.constraint_type.eq_ignore_ascii_case("unique")
 						&& constraint.fields.len() == 1
-						&& constraint.fields[0].as_str() == column_name.as_str()
-				}) {
-					continue;
-				}
-				let constraint = ConstraintDefinition {
-					name: self.synthesized_unique_constraint_name(
-						column_name,
-						&generated_unique_constraint_names,
-						&model_state.constraints,
-					),
-					constraint_type: "unique".to_string(),
-					fields: vec![column_name.clone()],
-					expression: None,
-					foreign_key_info: None,
-				};
-				generated_unique_constraint_names.insert(constraint.name.clone());
-				model_state.constraints.push(constraint);
-			}
+						&& constraint.fields[0] == *column_name
+				})
+			})
+			.collect::<Vec<_>>();
+		let reserved = self
+			.constraints
+			.iter()
+			.map(|constraint| constraint.name.clone())
+			.chain(
+				model_state
+					.constraints
+					.iter()
+					.map(|constraint| constraint.name.clone()),
+			)
+			.collect::<Vec<_>>();
+		for (name, column_name) in
+			generated_unique_constraint_names(&self.table_name, &unique_columns, &reserved)
+		{
+			model_state.constraints.push(ConstraintDefinition {
+				name,
+				constraint_type: "unique".to_string(),
+				fields: vec![column_name],
+				expression: None,
+				foreign_key_info: None,
+			});
 		}
 
 		// Copy model-level constraints declared via #[model(unique_together = ...)]
@@ -381,10 +336,7 @@ impl ModelMetadata {
 				.get("db_column")
 				.map(String::as_str)
 				.unwrap_or(name);
-			let constraint_name = super::operations::truncate_identifier_with_hash(&format!(
-				"{}_{}_model_enum_check",
-				self.table_name, column
-			));
+			let constraint_name = enum_domain_constraint_name(&self.table_name, column);
 			if !model_state
 				.constraints
 				.iter()
@@ -402,59 +354,6 @@ impl ModelMetadata {
 
 		model_state
 	}
-}
-
-fn safe_constraint_name_fragment(value: &str) -> String {
-	let mut fragment = String::with_capacity(value.len());
-	for character in value.chars() {
-		if character.is_ascii_alphanumeric() || character == '_' {
-			fragment.push(character.to_ascii_lowercase());
-		} else {
-			fragment.push('_');
-		}
-	}
-
-	if fragment.is_empty() {
-		fragment.push_str("table");
-	} else if fragment
-		.as_bytes()
-		.first()
-		.is_some_and(|character| character.is_ascii_digit())
-	{
-		fragment.insert_str(0, "table_");
-	}
-	fragment
-}
-
-fn safe_constraint_table_fragment(value: &str) -> String {
-	let fragment = safe_constraint_name_fragment(value);
-	if fragment == value {
-		return fragment;
-	}
-	format!("{fragment}_{:08x}", stable_constraint_name_hash(value))
-}
-
-fn stable_constraint_name_hash(value: &str) -> u32 {
-	let mut hash = 0x811c9dc5_u32;
-	for byte in value.bytes() {
-		hash ^= u32::from(byte);
-		hash = hash.wrapping_mul(0x01000193);
-	}
-	hash
-}
-
-fn bounded_constraint_identifier(value: &str) -> String {
-	if value.len() <= ModelMetadata::MAX_CONSTRAINT_IDENTIFIER_BYTES {
-		return value.to_owned();
-	}
-
-	let suffix = format!("_{:08x}", stable_constraint_name_hash(value));
-	let prefix_len = ModelMetadata::MAX_CONSTRAINT_IDENTIFIER_BYTES - suffix.len();
-	let mut end = prefix_len;
-	while !value.is_char_boundary(end) {
-		end -= 1;
-	}
-	format!("{}{}", &value[..end], suffix)
 }
 
 /// Field metadata for registration
@@ -1019,6 +918,7 @@ mod tests {
 	use crate::migrations::autodetector::{ForeignKeyInfo, MigrationAutodetector, ProjectState};
 	use crate::migrations::operations::{Constraint, Operation, SqlDialect};
 	use crate::migrations::{FieldType, GeneratedStorage, SchemaExpr};
+	use crate::naming::stable_constraint_name_hash;
 	use rstest::rstest;
 
 	#[test]
@@ -1805,9 +1705,11 @@ mod tests {
 
 		// Assert
 		assert_eq!(constraints.len(), 2);
-		assert!(constraints.iter().all(|constraint| {
-			constraint.name.len() <= ModelMetadata::MAX_CONSTRAINT_IDENTIFIER_BYTES
-		}));
+		assert!(
+			constraints
+				.iter()
+				.all(|constraint| constraint.name.len() <= 63)
+		);
 		assert_ne!(constraints[0].name, constraints[1].name);
 	}
 

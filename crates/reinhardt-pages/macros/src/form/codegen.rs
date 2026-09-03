@@ -6894,27 +6894,6 @@ fn generate_field_view(
 	} else {
 		control_binding
 	};
-	let hydration_preference = quote! {
-		.prefer_source_on_hydration({
-			let explicitly_reset = self.__explicitly_reset.clone();
-			move || explicitly_reset.get()
-		})
-	};
-	let radio_binding = if let Some(radio_signal) = signal_ident
-		&& matches!(field.widget, TypedWidget::RadioSelect)
-		&& is_string_valued_field(&field.field_type)
-	{
-		quote! {
-			.control_binding(
-				#pages_crate::component::ControlBinding::radio(
-					#radio_signal.clone(), choice_value.to_string(),
-				)
-				#hydration_preference
-			)
-		}
-	} else {
-		event_listener.clone()
-	};
 
 	// Generate input element based on widget type
 	let input_element = match &field.widget {
@@ -7170,10 +7149,38 @@ fn generate_field_view(
 					)
 				}
 			});
+			// Clone the reset flag before the reactive move closure so
+			// `into_page(self)` does not partially move `__explicitly_reset`.
+			let radio_binding = if let Some(radio_signal) = signal_ident
+				&& is_string_valued_field(&field.field_type)
+			{
+				quote! {
+					.control_binding(
+						#pages_crate::component::ControlBinding::radio(
+							#radio_signal.clone(), choice_value.to_string(),
+						)
+						.prefer_source_on_hydration({
+							let explicitly_reset = __explicitly_reset.clone();
+							move || explicitly_reset.get()
+						})
+					)
+				}
+			} else {
+				event_listener.clone()
+			};
+			let explicitly_reset_binding =
+				if signal_ident.is_some() && is_string_valued_field(&field.field_type) {
+					quote! {
+						let __explicitly_reset = self.__explicitly_reset.clone();
+					}
+				} else {
+					TokenStream::new()
+				};
 			quote! {
 					{
 						let __choices_signal = self.#choices_name.clone();
 						let __choice_items_signal = self.#choice_items_name.clone();
+						#explicitly_reset_binding
 						#pages_crate::component::Page::reactive(move || {
 							let __choice_items = __choice_items_signal.get();
 							let __choices: ::std::vec::Vec<_> = __choices_signal

@@ -1067,6 +1067,54 @@ async fn server_fn_relation_get_fields_uses_physical_names_and_permission_aware_
 #[rstest]
 #[tokio::test]
 #[serial(admin_relation_server_fn)]
+async fn server_fn_relation_get_fields_preserves_physical_values_for_logical_form_fields(
+	#[future] relation_logical_fields_context: ServerFnContext,
+) {
+	// Arrange
+	let (site, db, _connection_lease) = relation_logical_fields_context.await;
+
+	// Act
+	let response = get_fields(
+		"AdminRelationSourceModel".to_string(),
+		Some("1".to_string()),
+		site,
+		db,
+		make_staff_request(),
+		make_auth_user(),
+	)
+	.await
+	.expect("logical relation fields should preserve physical database values");
+	let target = response
+		.fields
+		.into_iter()
+		.find(|field| field.name == "target_key")
+		.expect("target relation field should be present");
+
+	// Assert
+	assert_eq!(
+		response
+			.values
+			.as_ref()
+			.and_then(|values| values.get("target")),
+		Some(&json!(1))
+	);
+	assert_eq!(
+		target.field_type,
+		FieldType::Relation {
+			field_name: "target".to_string(),
+			widget: RelationWidget::Autocomplete,
+			selected: Some(RelationOption {
+				id: "1".to_string(),
+				label: "Alpha Writer (writer-001)".to_string(),
+			}),
+			readonly: false,
+		}
+	);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(admin_relation_server_fn)]
 async fn server_fn_relation_get_fields_rejects_invalid_full_configuration(
 	#[future] relation_invalid_config_context: ServerFnContext,
 ) {

@@ -63,7 +63,14 @@ impl FilesystemSource {
 				e
 			)))
 		})?;
-		super::super::source_format::validate_source_version(&content)?;
+		super::super::source_format::validate_source_version(&content).map_err(
+			|error| match error {
+				MigrationError::InvalidMigration(message) => MigrationError::InvalidMigration(
+					format!("Failed to parse {}: {message}", path.display()),
+				),
+				other => other,
+			},
+		)?;
 
 		// Parse with syn
 		let ast: File = syn::parse_file(&content).map_err(|e| {

@@ -686,7 +686,6 @@ where
 		})
 	});
 
-	#[cfg(feature = "chrono")]
 	{
 		downcast!(chrono::NaiveDate, |value: chrono::NaiveDate| {
 			serde_json::Value::String(value.to_string())
@@ -732,7 +731,6 @@ where
 		});
 	}
 
-	#[cfg(feature = "uuid")]
 	{
 		downcast!(uuid::Uuid, |value: uuid::Uuid| {
 			serde_json::Value::String(value.to_string())
@@ -1241,7 +1239,6 @@ mod tests {
 		);
 	}
 
-	#[cfg(feature = "chrono")]
 	#[test]
 	fn native_chrono_values_convert_to_form_strings() {
 		use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
@@ -1262,7 +1259,6 @@ mod tests {
 		);
 	}
 
-	#[cfg(feature = "uuid")]
 	#[test]
 	fn native_uuid_values_convert_to_form_strings() {
 		let uuid = uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000042").unwrap();

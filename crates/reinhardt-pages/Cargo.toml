@@ -23,8 +23,11 @@ pages-full = ["msgpack", "web-sys-full"]
 static = []
 urls = []
 debug-hooks = []
-uuid = ["dep:uuid"]
-chrono = ["dep:chrono"]
+# Named model-form contracts always need these crates, so they are required
+# dependencies. These features remain as compatibility markers: `dep:uuid`
+# and `dep:chrono` are invalid once the crates are no longer optional.
+uuid = []
+chrono = []
 ast = []
 # Enables the `tests/integration/spa_navigation_e2e_test.rs` integration
 # test (Refs #4088). This is a marker feature: the actual test deps

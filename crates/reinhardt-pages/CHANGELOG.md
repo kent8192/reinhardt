@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- *(pages)* keep uuid and chrono available for named model-form contracts
+
 ## [0.4.0-alpha.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.4.0-alpha.12...reinhardt-pages@v0.4.0-alpha.13) - 2026-09-02
 
 ### Fixed

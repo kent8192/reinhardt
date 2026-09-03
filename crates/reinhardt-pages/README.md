@@ -1378,8 +1378,8 @@ fn counter() -> View {
 | `static` | Static file serving |
 | `urls` | URL routing integration |
 | `debug-hooks` | Debug hooks for development |
-| `uuid` | UUID type support |
-| `chrono` | Chrono date/time type support |
+| `uuid` | Compatibility marker; UUID types are always available for named model-form contracts |
+| `chrono` | Compatibility marker; Chrono types are always available for named model-form contracts |
 | `ast` | AST processing support |
 | `web-sys-full` | All required web-sys features for WASM applications |
 

@@ -571,6 +571,11 @@ impl FilesystemRepository {
 				"{context}: conflicting expression representations"
 			));
 		}
+		// Validate typed expressions before token parse so unsupported values
+		// are attributed to SchemaExpr.Value rather than opaque token failures.
+		if let Some(expression) = generated.expr.as_deref() {
+			Self::validate_schema_expr(&context, expression)?;
+		}
 		let token_expression = if let Some(tokens) = generated.expr_tokens.as_deref() {
 			let Some(expression) = ast_parser::parse_schema_expr_tokens(tokens) else {
 				return Self::unsupported_rendering(format!("{context}.expr_tokens"));
@@ -579,9 +584,6 @@ impl FilesystemRepository {
 		} else {
 			None
 		};
-		if let Some(expression) = generated.expr.as_deref() {
-			Self::validate_schema_expr(&context, expression)?;
-		}
 		if let Some(token_expression) = token_expression.as_ref() {
 			Self::validate_schema_expr(&context, token_expression)?;
 			if generated

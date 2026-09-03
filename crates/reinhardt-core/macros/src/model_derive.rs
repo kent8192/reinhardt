@@ -7102,8 +7102,11 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 				let unique_columns = vec![#(#generated_unique_physical_columns.to_string()),*];
 				let mut reserved = vec![#(#declared_constraint_names.to_string()),*];
 				reserved.extend([#(#generated_foreign_key_names),*]);
+				// Inherent `field_{name}` accessors such as `field_metadata()` for a
+				// model field named `metadata` shadow `Self::field_metadata()`. Use
+				// UFCS so constraint lookup keeps the Model trait method.
 				reserved.extend(
-					Self::field_metadata()
+					<Self as #orm_crate::Model>::field_metadata()
 						.into_iter()
 						.filter(|field| field.domain.is_some())
 						.map(|field| #orm_crate::naming::enum_domain_constraint_name(
@@ -12361,6 +12364,31 @@ mod tests {
 				.map(ToString::to_string)
 				.collect::<Vec<_>>(),
 			vec!["name", "api_url"]
+		);
+	}
+
+	#[test]
+	fn constraint_lookup_uses_model_field_metadata_when_a_field_is_named_metadata() {
+		let input = quote! {
+			#[model(app_label = "forms", table_name = "documents")]
+			pub struct Document {
+				#[field(primary_key = true)]
+				pub id: i64,
+				pub metadata: serde_json::Value,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+		let output_str = output.to_string();
+
+		assert!(output_str.contains("pub const fn field_metadata"));
+		assert!(
+			output_str.contains("< Self as") && output_str.contains(":: field_metadata ()"),
+			"constraint lookup should use UFCS so a `metadata` field accessor cannot shadow Model::field_metadata: {output_str}"
+		);
+		assert!(
+			!output_str.contains("Self :: field_metadata ()"),
+			"constraint lookup must not call the inherent field_metadata accessor"
 		);
 	}
 

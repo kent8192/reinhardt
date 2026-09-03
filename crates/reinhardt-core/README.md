@@ -94,7 +94,7 @@ Add this to your `Cargo.toml`:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt-core = "0.4.0-alpha.12"
+reinhardt-core = "0.4.0-alpha.13"
 ```
 
 ### Optional Features
@@ -104,7 +104,7 @@ Enable specific modules based on your needs:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt-core = { version = "0.4.0-alpha.12", features = ["signals", "macros", "security"] }
+reinhardt-core = { version = "0.4.0-alpha.13", features = ["signals", "macros", "security"] }
 ```
 
 Available features:
@@ -120,7 +120,11 @@ Available features:
 - `negotiation`: Content negotiation
 - `parsers`: Request body parsers
 - `pagination`: Pagination strategies
+<<<<<<< HEAD
 - `page`: Page types (requires `types` and `security`)
+=======
+- `page`: Page types (requires `types`, `reactive`, and `security`)
+>>>>>>> origin/develop/0.4.0
 - `reactive`: Reactive types
 - `serde`: Compatibility feature; `serde` is always available because the
   target-neutral model-form contract names its serialization traits directly.
@@ -167,6 +171,34 @@ fn validate_user(authenticated: bool, authorized: bool) -> Result<()> {
     Ok(())
 }
 ```
+
+### Database Constraint Metadata
+
+`DatabaseError::code()` is a driver or database error code. Constraint
+violations can additionally retain structured object metadata through
+`constraint()`, `table()`, and `columns()`:
+
+```rust
+use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind};
+
+let error = DatabaseError::new(
+	DatabaseErrorKind::UniqueViolation,
+	"duplicate key",
+)
+.with_code("23505")
+.with_constraint("users_email_key")
+.with_table("users")
+.with_columns(["email"]);
+
+assert_eq!(error.constraint(), Some("users_email_key"));
+assert_eq!(error.table(), Some("users"));
+assert_eq!(error.columns(), ["email"]);
+```
+
+The message is diagnostic-only. Do not parse SQLx messages to discover a
+constraint, table, or column, and do not expose them to clients. PostgreSQL
+currently supplies these object identifiers; MySQL and SQLite normally expose
+only the portable error kind through SQLx.
 
 ### Application HTTP Errors
 

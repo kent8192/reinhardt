@@ -7,9 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+<<<<<<< HEAD
 ### Fixed
 
 - *(macros)* reject named form fields that generate reserved `Self` variants
+=======
+## [0.4.0-alpha.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.4.0-alpha.12...reinhardt-core@v0.4.0-alpha.13) - 2026-09-02
+
+### Fixed
+
+- *(core)* validate rendered element contexts
+- *(pages)* reject executable elements in all renderers
+- *(pages)* enforce safe rendering boundaries
+- *(core)* validate batch boolean attributes
+- *(core)* enable security with page feature
+
+### Testing
+
+- *(core)* align namespace sanitization expectation
+>>>>>>> origin/develop/0.4.0
 
 ## [0.4.0-alpha.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.4.0-alpha.10...reinhardt-core@v0.4.0-alpha.11) - 2026-08-27
 

@@ -6838,6 +6838,76 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			}
 		}
 	};
+	let check_constraint_field_arms = check_constraint_names.iter().map(|name| {
+		quote! { #name => return Some(Vec::new()), }
+	});
+	let declared_unique_constraint_field_arms = unique_constraint_names
+		.iter()
+		.zip(unique_constraint_logical_field_lists.iter())
+		.map(|(name, fields)| {
+			quote! { #name => return Some(vec![#(#fields),*]), }
+		});
+	let declared_constraint_names = check_constraint_names
+		.iter()
+		.chain(unique_constraint_names.iter())
+		.collect::<Vec<_>>();
+	let generated_foreign_key_names = fk_field_infos.iter().map(|fk_info| {
+		let column = &fk_info.id_column_name;
+		quote! {
+			#orm_crate::naming::foreign_key_constraint_name(Self::table_name(), #column)
+		}
+	});
+	let foreign_key_constraint_lookups = fk_field_infos.iter().map(|fk_info| {
+		let column = &fk_info.id_column_name;
+		let logical_field = format!("{}_id", fk_info.field_name);
+		quote! {
+			if constraint == #orm_crate::naming::foreign_key_constraint_name(Self::table_name(), #column) {
+				return Some(vec![#logical_field]);
+			}
+		}
+	});
+	let generated_unique_fields = field_infos
+		.iter()
+		.filter(|field| is_regular_persisted_field(field) && field.config.unique == Some(true))
+		.map(|field| {
+			(
+				field
+					.config
+					.db_column
+					.clone()
+					.unwrap_or_else(|| field.name.to_string()),
+				field.name.to_string(),
+			)
+		})
+		.chain(
+			fk_field_infos
+				.iter()
+				.filter(|fk_info| fk_info.is_one_to_one)
+				.map(|fk_info| {
+					(
+						fk_info.id_column_name.clone(),
+						format!("{}_id", fk_info.field_name),
+					)
+				}),
+		)
+		.filter(|(column, _)| {
+			!unique_constraints.iter().any(|constraint| {
+				constraint.column_names.len() == 1 && constraint.column_names[0] == *column
+			})
+		})
+		.collect::<Vec<_>>();
+	let generated_unique_physical_columns =
+		generated_unique_fields.iter().map(|(column, _)| column);
+	let generated_unique_constraint_lookups =
+		generated_unique_fields.iter().map(|(column, field)| {
+			quote! {
+				if generated.iter().any(|(name, generated_column)| {
+					name == constraint && generated_column == #column
+				}) {
+					return Some(vec![#field]);
+				}
+			}
+		});
 
 	// Generate the Model implementation
 	let expanded = quote! {
@@ -7018,6 +7088,37 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 					});
 				)*
 				constraints
+			}
+
+			fn constraint_fields(constraint: &str) -> Option<Vec<&'static str>> {
+				match constraint {
+					#(#check_constraint_field_arms)*
+					#(#declared_unique_constraint_field_arms)*
+					_ => {}
+				}
+
+				#(#foreign_key_constraint_lookups)*
+
+				let unique_columns = vec![#(#generated_unique_physical_columns.to_string()),*];
+				let mut reserved = vec![#(#declared_constraint_names.to_string()),*];
+				reserved.extend([#(#generated_foreign_key_names),*]);
+				reserved.extend(
+					Self::field_metadata()
+						.into_iter()
+						.filter(|field| field.domain.is_some())
+						.map(|field| #orm_crate::naming::enum_domain_constraint_name(
+							Self::table_name(),
+							field.db_column.as_deref().unwrap_or(&field.name),
+						)),
+				);
+				let generated = #orm_crate::naming::generated_unique_constraint_names(
+					Self::table_name(),
+					&unique_columns,
+					&reserved,
+				);
+				#(#generated_unique_constraint_lookups)*
+
+				None
 			}
 
 			fn generated_field_names() -> &'static [&'static str] {
@@ -7949,7 +8050,13 @@ fn generate_field_metadata(
 
 	// Generate _id field metadata for ForeignKeyField and OneToOneField
 	for fk_info in fk_field_infos {
-		let name = &fk_info.id_column_name;
+		let name = format!("{}_id", fk_info.field_name);
+		let db_column = if name == fk_info.id_column_name {
+			quote! { None }
+		} else {
+			let column = &fk_info.id_column_name;
+			quote! { Some(#column.to_string()) }
+		};
 		let target_type = &fk_info.target_type;
 		let nullable = fk_info.rel_attr.null.unwrap_or(false);
 		let unique = fk_info.is_one_to_one; // OneToOne fields have UNIQUE constraint
@@ -7991,7 +8098,7 @@ fn generate_field_metadata(
 					editable: true,
 					default: None,
 					db_default: None,
-					db_column: None,
+					db_column: #db_column,
 					choices: None,
 					attributes,
 				}
@@ -8417,7 +8524,12 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 	let mut fk_id_registrations = Vec::new();
 	for fk_info in fk_field_infos {
 		let id_column_name = &fk_info.id_column_name;
+<<<<<<< HEAD
 		let rust_field_name = ident_to_wire_name(&fk_info.field_name);
+=======
+		let rust_field_name = fk_info.field_name.to_string();
+		let logical_field_name = format!("{}_id", fk_info.field_name);
+>>>>>>> origin/develop/0.4.0
 		let nullable = fk_info.rel_attr.null.unwrap_or(false);
 		let unique = fk_info.is_one_to_one; // OneToOne fields have UNIQUE constraint
 		let db_index = fk_info.rel_attr.db_index.unwrap_or(true); // FK fields are indexed by default
@@ -8571,7 +8683,8 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 					.with_param("not_null", #not_null_str)
 					.with_param("unique", #unique_str)
 					.with_param("db_index", #db_index_str)
-					.with_param("logical_name", #id_column_name)
+					.with_param("logical_name", #logical_field_name)
+					.with_param("db_column", #id_column_name)
 					#skip_info
 					.with_param("fk_target", #target_model_name)
 					.with_param("fk_target_column", #fk_target_column)

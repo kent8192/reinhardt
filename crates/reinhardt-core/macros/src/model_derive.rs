@@ -8524,12 +8524,8 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 	let mut fk_id_registrations = Vec::new();
 	for fk_info in fk_field_infos {
 		let id_column_name = &fk_info.id_column_name;
-<<<<<<< HEAD
 		let rust_field_name = ident_to_wire_name(&fk_info.field_name);
-=======
-		let rust_field_name = fk_info.field_name.to_string();
-		let logical_field_name = format!("{}_id", fk_info.field_name);
->>>>>>> origin/develop/0.4.0
+		let logical_field_name = format!("{}_id", ident_to_wire_name(&fk_info.field_name));
 		let nullable = fk_info.rel_attr.null.unwrap_or(false);
 		let unique = fk_info.is_one_to_one; // OneToOne fields have UNIQUE constraint
 		let db_index = fk_info.rel_attr.db_index.unwrap_or(true); // FK fields are indexed by default

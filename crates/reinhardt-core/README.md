@@ -120,11 +120,7 @@ Available features:
 - `negotiation`: Content negotiation
 - `parsers`: Request body parsers
 - `pagination`: Pagination strategies
-<<<<<<< HEAD
-- `page`: Page types (requires `types` and `security`)
-=======
 - `page`: Page types (requires `types`, `reactive`, and `security`)
->>>>>>> origin/develop/0.4.0
 - `reactive`: Reactive types
 - `serde`: Compatibility feature; `serde` is always available because the
   target-neutral model-form contract names its serialization traits directly.

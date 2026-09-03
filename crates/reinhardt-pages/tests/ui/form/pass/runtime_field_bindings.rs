@@ -23,38 +23,38 @@ fn main() {
 		let _ = page!({
 			input {
 				a11y: off,
-				bind: runtime.field(RuntimeFormField::Name)
+				bind: runtime.field(form.name_field())
 			}
 			input {
 				a11y: off,
 				type: "number",
-				bind: runtime.field(RuntimeFormField::Count)
+				bind: runtime.field(form.count_field())
 			}
 			input {
 				a11y: off,
 				type: "checkbox",
-				bind: runtime.field(RuntimeFormField::Active)
+				bind: runtime.field(form.active_field())
 			}
 			input {
 				a11y: off,
 				type: "radio",
 				value: "yes",
-				bind: runtime.field(RuntimeFormField::Choice)
+				bind: runtime.field(form.choice_field())
 			}
 			input {
 				a11y: off,
 				type: "radio",
 				value: "yes",
-				bind: runtime.field(RuntimeFormField::ChoiceTyped)
+				bind: runtime.field(form.choice_typed_field())
 			}
 			select {
 				a11y: off,
-				bind: runtime.field(RuntimeFormField::Choice)
+				bind: runtime.field(form.choice_field())
 			}
 			select {
 				a11y: off,
 				multiple: true,
-				bind: runtime.field(RuntimeFormField::Labels)
+				bind: runtime.field(form.labels_field())
 			}
 		});
 	});

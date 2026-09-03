@@ -2678,6 +2678,7 @@ mod tests {
 	use serial_test::serial;
 	use std::any::Any;
 	use std::cell::{Cell, RefCell};
+	#[cfg(native)]
 	use std::collections::VecDeque;
 	use std::rc::Rc;
 	use std::task::{Context, Poll, Waker};
@@ -3163,6 +3164,7 @@ mod tests {
 		assert!(runtime.connected_action_resets.borrow().is_empty());
 	}
 
+	#[cfg(native)]
 	#[rstest]
 	#[serial(reactive_runtime)]
 	fn submit_server_fn_routes_structured_error_through_one_lifecycle() {

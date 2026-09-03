@@ -49,6 +49,54 @@ pub mod __private {
 		source.into_control_binding(config)
 	}
 
+	/// Copies a `bind:` source so borrowed `Signal` handles outlive the
+	/// captured local created by `page!` expression wrapping.
+	pub trait CopyBindSource {
+		type Owned;
+
+		fn copy_bind_source(self) -> Self::Owned;
+	}
+
+	pub fn copy_bind_source<Source: CopyBindSource>(source: Source) -> Source::Owned {
+		source.copy_bind_source()
+	}
+
+	impl<T: 'static> CopyBindSource for Signal<T> {
+		type Owned = Signal<T>;
+
+		fn copy_bind_source(self) -> Self::Owned {
+			self
+		}
+	}
+
+	impl<T: 'static> CopyBindSource for &Signal<T> {
+		type Owned = Signal<T>;
+
+		fn copy_bind_source(self) -> Self::Owned {
+			*self
+		}
+	}
+
+	impl<T: 'static> CopyBindSource for &mut Signal<T> {
+		type Owned = Signal<T>;
+
+		fn copy_bind_source(self) -> Self::Owned {
+			*self
+		}
+	}
+
+	impl<Form, Deps> CopyBindSource for RuntimeFieldBinding<Form, Deps>
+	where
+		Form: FormRuntimeSource,
+		Deps: Clone + PartialEq + 'static,
+	{
+		type Owned = Self;
+
+		fn copy_bind_source(self) -> Self::Owned {
+			self
+		}
+	}
+
 	macro_rules! impl_signal_control_binding {
 		($marker:ty, $value:ty, $config:ty, |$signal:ident, $config_pat:pat_param| $body:expr) => {
 			impl IntoControlBinding<$marker> for Signal<$value> {

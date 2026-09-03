@@ -796,9 +796,10 @@ fn generate_control_binding(
 		TypedControlBindingExpr::Direct(value) => value,
 		TypedControlBindingExpr::NumberWithError { value, .. } => value,
 	};
-	let value = wrap_expr_with_captures(value, pages_crate, ctx);
 	let binding_span = binding.span;
 	let private = quote! { #pages_crate::control_binding::__private };
+	let value = wrap_expr_with_captures(value, pages_crate, ctx);
+	let value = quote_spanned!(binding_span=> #private::copy_bind_source(#value));
 	let descriptor = match (&binding.kind, &binding.expression) {
 		(TypedControlBindingKind::Text, _) => {
 			quote_spanned!(binding_span=> #private::into_control_binding::<#private::TextBinding, _>(#value, ()))

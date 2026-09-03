@@ -429,9 +429,15 @@ async fn bulk_delete_hides_deleted_object_history(#[future] server_fn_context: S
 
 	// Assert
 	assert_eq!(response.deleted, 2);
-	assert_object_not_found(first_history_result.expect_err("deleted object history must be scoped out"));
-	assert_object_not_found(second_history_result.expect_err("deleted object history must be scoped out"));
-	assert_object_not_found(missing_history_result.expect_err("missing object history must be rejected"));
+	assert_object_not_found(
+		first_history_result.expect_err("deleted object history must be scoped out"),
+	);
+	assert_object_not_found(
+		second_history_result.expect_err("deleted object history must be scoped out"),
+	);
+	assert_object_not_found(
+		missing_history_result.expect_err("missing object history must be rejected"),
+	);
 	assert_eq!(first_history, ["BULK_DELETE"]);
 	assert_eq!(second_history, ["BULK_DELETE"]);
 	assert!(missing_history.is_empty());

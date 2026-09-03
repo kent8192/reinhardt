@@ -324,7 +324,7 @@ Add this to your `Cargo.toml`:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt-db = "0.4.0-alpha.12"
+reinhardt-db = "0.4.0-alpha.13"
 chrono-tz = "0.10"
 ```
 
@@ -335,7 +335,7 @@ Enable specific features based on your needs:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt-db = { version = "0.4.0-alpha.12", features = ["postgres", "orm", "migrations"] }
+reinhardt-db = { version = "0.4.0-alpha.13", features = ["postgres", "orm", "migrations"] }
 ```
 
 Available features:
@@ -508,7 +508,7 @@ Enable native dense-vector storage directly on `reinhardt-db`:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt-db = { version = "0.4.0-alpha.12", features = ["pgvector"] }
+reinhardt-db = { version = "0.4.0-alpha.13", features = ["pgvector"] }
 reinhardt-core = { version = "0.4.0-alpha.2", features = ["macros"] }
 serde = { version = "1", features = ["derive"] }
 ```
@@ -519,7 +519,7 @@ Applications using the facade enable `db-pgvector` instead and import
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt = { package = "reinhardt-web", version = "0.4.0-alpha.12", features = ["db-pgvector"] }
+reinhardt = { package = "reinhardt-web", version = "0.4.0-alpha.13", features = ["db-pgvector"] }
 ```
 
 Reinhardt never installs the PostgreSQL extension automatically. Add
@@ -1197,6 +1197,35 @@ Existing callers that used `Q::from_sql` for arbitrary trusted fragments must
 migrate to `Q::from_raw_sql`. Unsupported operators and unrecognized SQL now
 fail closed; runtime values must be expressed with `Q::new` so they remain
 bound parameters.
+
+### Constraint Violation Metadata
+
+`DatabaseError::code()` retains a driver or database code. `constraint()`,
+`table()`, and `columns()` retain structured database object metadata when the
+backend supplies it:
+
+```rust
+use reinhardt_core::exception::DatabaseErrorKind;
+use reinhardt_db::DatabaseError;
+
+let error = DatabaseError::new(
+	DatabaseErrorKind::UniqueViolation,
+	"duplicate key",
+)
+.with_code("23505")
+.with_constraint("users_email_key")
+.with_table("users")
+.with_columns(["email"]);
+
+assert_eq!(error.constraint(), Some("users_email_key"));
+assert_eq!(error.table(), Some("users"));
+assert_eq!(error.columns(), ["email"]);
+```
+
+SQLx messages are diagnostics only and must never be parsed for this metadata.
+PostgreSQL currently supplies object identifiers. MySQL and SQLite normally
+expose only the portable violation kind through SQLx, so callers must handle
+missing metadata without guessing from a message.
 
 ### Scoped N+1 Query Detection
 

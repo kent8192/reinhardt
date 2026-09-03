@@ -609,6 +609,38 @@ Arguments supplied from ambient context use `ambient_arguments`. The old
 transport layer: `#[server_fn]` client stubs attach `X-CSRFToken`, while
 non-WASM forms still render the hidden CSRF input for traditional posts.
 
+### Structured Server-Function Errors
+
+The native `model-server-fnset` feature can turn a proven model constraint
+violation into a safe validation response. Use the optional callback only for
+fixed, client-safe text:
+
+```rust,ignore
+let server_error = ServerFnError::try_from_model_error_with::<User, _>(
+	error,
+	|database_error, _fields| {
+		(database_error.constraint() == Some("users_email_unique"))
+			.then(|| "This email is already registered".to_owned())
+	},
+)
+.unwrap_or_else(|error| {
+	tracing::error!(error = %error, "user write failed");
+	ServerFnError::application("Failed to save user")
+});
+```
+
+Callback code must not return `DatabaseError::message()`, rejected values,
+table names, constraint names, or vendor diagnostics to the browser. A known
+single-field violation maps to that field; composite `UNIQUE` and `CHECK`
+violations map to the form. Unmapped or unproven errors remain the original
+framework error, so the caller chooses the safe fallback above. This helper is
+native-only; browser code consumes the resulting `ServerFnError` instead.
+
+This conversion preserves the existing serialized `ServerFnError` wire shape:
+it adds no database metadata to the browser response. Generated client forms
+route field errors by logical model field names. Composite `UNIQUE` and `CHECK`
+violations have no single logical field, so they reach the form error instead.
+
 ### Typed multipart server functions
 
 The function-like `#[server_fn]` API infers multipart transport when a

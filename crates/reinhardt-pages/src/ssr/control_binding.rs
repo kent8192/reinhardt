@@ -199,7 +199,7 @@ mod tests {
 	}
 
 	#[test]
-	fn inferred_value_only_skips_html_and_svg_scripts_and_normalizes_ascii_whitespace() {
+	fn inferred_value_flattens_sanitized_elements_and_normalizes_ascii_whitespace() {
 		// Arrange
 		let option = PageElement::new("option")
 			.child(" \tAlpha\n")
@@ -212,6 +212,6 @@ mod tests {
 		let value = option_value(&option);
 
 		// Assert
-		assert_eq!(value, "Alpha Gamma \u{a0} Beta");
+		assert_eq!(value, "Alpha html ignoredignored Gamma \u{a0} Beta");
 	}
 }

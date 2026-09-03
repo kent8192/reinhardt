@@ -65,11 +65,11 @@ impl ModelFormSchema for QuestionFormSchema {
 }
 
 impl QuestionFormSchema {
-	fn title() -> &'static ModelFormFieldDescriptor {
+	const fn title() -> &'static ModelFormFieldDescriptor {
 		&QUESTION_FIELDS[0]
 	}
 
-	fn owner_id() -> &'static ModelFormFieldDescriptor {
+	const fn owner_id() -> &'static ModelFormFieldDescriptor {
 		&QUESTION_FIELDS[1]
 	}
 }
@@ -178,6 +178,21 @@ mod save_question {
 		const PATH: &'static str = "/api/server_fn/save_question";
 		const NAME: &'static str = "save_question";
 		const IS_JSON_CODEC: bool = true;
+	}
+
+	impl<Selection, S, P> reinhardt_pages::form::ModelFormServerFn<Selection, S, P> for marker
+	where
+		S: reinhardt_pages::form::ModelFormSchema,
+		P: reinhardt_pages::form::ModelFormPolicy,
+	{
+		type Response = ();
+		type Error = reinhardt_pages::ServerFnError;
+
+		fn submit(
+			_state: &reinhardt_pages::form::ModelFormState<S, P>,
+		) -> impl core::future::Future<Output = Result<Self::Response, Self::Error>> {
+			async { ::core::unreachable!() }
+		}
 	}
 }
 

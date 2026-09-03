@@ -31,6 +31,24 @@ mod submit_settings {
 		type Response = crate::SettingsResponse;
 		type Error = reinhardt_pages::server_fn::ServerFnError;
 	}
+
+	pub fn mutation() -> impl Fn(
+		<marker as reinhardt_pages::server_fn::ServerFnRequestMetadata>::Request,
+	) -> std::pin::Pin<
+		std::boxed::Box<
+			dyn std::future::Future<
+					Output = std::result::Result<
+						<marker as reinhardt_pages::server_fn::ServerFnResponseMetadata>::Response,
+						<marker as reinhardt_pages::server_fn::ServerFnResponseMetadata>::Error,
+					>,
+				>,
+		>,
+	> {
+		|request| {
+			let _request = request;
+			std::boxed::Box::pin(async move { ::core::unreachable!() })
+		}
+	}
 }
 
 fn main() {}

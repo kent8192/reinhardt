@@ -10,3 +10,37 @@ note: expected this to be `SettingsRequest`
 22 | #[server_fn]
    | ^^^^^^^^^^^^
    = note: this error originates in the derive macro `ClientForm` which comes from the expansion of the attribute macro `server_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+ --> tests/ui/client_form/fail/server_fn_submit_request_signature.rs:6:52
+  |
+6 | #[derive(Clone, PartialEq, Serialize, Deserialize, ClientForm)]
+  |                                                    ^^^^^^^^^^
+  |                                                    |
+  |                                                    expected `OtherRequest`, found `SettingsRequest`
+  |                                                    arguments to this enum variant are incorrect
+  |
+help: the type constructed contains `SettingsRequest` due to the type of the argument passed
+ --> tests/ui/client_form/fail/server_fn_submit_request_signature.rs:6:52
+  |
+6 | #[derive(Clone, PartialEq, Serialize, Deserialize, ClientForm)]
+  |                                                    ^^^^^^^^^^ this argument influences the type of `Ok`
+note: tuple variant defined here
+ --> $RUST/core/src/result.rs
+  |
+  |     Ok(#[stable(feature = "rust1", since = "1.0.0")] T),
+  |     ^^
+  = note: this error originates in the derive macro `ClientForm` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+ --> tests/ui/client_form/fail/server_fn_submit_request_signature.rs:6:52
+  |
+6 | #[derive(Clone, PartialEq, Serialize, Deserialize, ClientForm)]
+  |                                                    ^^^^^^^^^^
+  |                                                    |
+  |                                                    expected `SettingsRequest`, found `OtherRequest`
+  |                                                    expected `FormServerMutationBuilder<SettingsRequestClientForm, Deps, SettingsRequest, SettingsResponse>` because of return type
+  |
+  = note: expected struct `FormServerMutationBuilder<SettingsRequestClientForm, Deps, SettingsRequest, SettingsResponse>`
+             found struct `FormServerMutationBuilder<SettingsRequestClientForm, Deps, OtherRequest, SettingsResponse>`
+  = note: this error originates in the derive macro `ClientForm` (in Nightly builds, run with -Z macro-backtrace for more info)

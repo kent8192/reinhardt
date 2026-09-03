@@ -1,10 +1,12 @@
 //! Stable support types for controlled `page!` form elements.
 //!
-//! The `bind:` directive accepts [`Signal`](crate::reactive::Signal) values
-//! directly for text, checkbox, radio, and select controls. Numeric controls
-//! can additionally report rejected input through [`NumberParseError`].
-//! Binding lowering passes these `Copy` signal handles by value, so generated
-//! call sites remain clean under Clippy's `clone_on_copy` lint.
+//! The `bind:` directive accepts owned or borrowed
+//! [`Signal`](crate::reactive::Signal) handles (`Signal<T>`, `&Signal<T>`, and
+//! `&mut Signal<T>`) for text, checkbox, radio, and select controls. Numeric
+//! controls can additionally report rejected input through [`NumberParseError`].
+//! Binding lowering copies these `Copy` signal handles, so generated call sites
+//! remain clean under Clippy's `clone_on_copy` lint and accessor methods that
+//! return `&Signal<T>` bind without an extra copy at the call site.
 //!
 //! # Target parity
 //!
@@ -47,35 +49,74 @@ pub mod __private {
 		source.into_control_binding(config)
 	}
 
-	impl IntoControlBinding<TextBinding> for Signal<String> {
-		type Config = ();
+	macro_rules! impl_signal_control_binding {
+		($marker:ty, $value:ty, $config:ty, |$signal:ident, $config_pat:pat| $body:expr) => {
+			impl IntoControlBinding<$marker> for Signal<$value> {
+				type Config = $config;
 
-		fn into_control_binding(self, (): Self::Config) -> ControlBinding {
-			ControlBinding::text(self)
-		}
+				fn into_control_binding(self, $config_pat: Self::Config) -> ControlBinding {
+					let $signal = self;
+					$body
+				}
+			}
+
+			impl IntoControlBinding<$marker> for &Signal<$value> {
+				type Config = $config;
+
+				fn into_control_binding(self, $config_pat: Self::Config) -> ControlBinding {
+					let $signal = *self;
+					$body
+				}
+			}
+
+			impl IntoControlBinding<$marker> for &mut Signal<$value> {
+				type Config = $config;
+
+				fn into_control_binding(self, $config_pat: Self::Config) -> ControlBinding {
+					let $signal = *self;
+					$body
+				}
+			}
+		};
 	}
 
-	impl IntoControlBinding<RadioBinding> for Signal<String> {
-		type Config = String;
-
-		fn into_control_binding(self, config: Self::Config) -> ControlBinding {
-			ControlBinding::radio(self, config)
-		}
-	}
-
-	impl IntoControlBinding<SelectOneBinding> for Signal<String> {
-		type Config = ();
-
-		fn into_control_binding(self, (): Self::Config) -> ControlBinding {
-			ControlBinding::select_one(self)
-		}
-	}
+	impl_signal_control_binding!(TextBinding, String, (), |signal, ()| {
+		ControlBinding::text(signal)
+	});
+	impl_signal_control_binding!(RadioBinding, String, String, |signal, config| {
+		ControlBinding::radio(signal, config)
+	});
+	impl_signal_control_binding!(SelectOneBinding, String, (), |signal, ()| {
+		ControlBinding::select_one(signal)
+	});
+	impl_signal_control_binding!(CheckboxBinding, bool, (), |signal, ()| {
+		ControlBinding::checkbox(signal)
+	});
+	impl_signal_control_binding!(SelectManyBinding, Vec<String>, (), |signal, ()| {
+		ControlBinding::select_many(signal)
+	});
 
 	impl<T: NumberValue> IntoControlBinding<NumberBinding> for Signal<T> {
 		type Config = ();
 
 		fn into_control_binding(self, (): Self::Config) -> ControlBinding {
 			ControlBinding::number(self)
+		}
+	}
+
+	impl<T: NumberValue> IntoControlBinding<NumberBinding> for &Signal<T> {
+		type Config = ();
+
+		fn into_control_binding(self, (): Self::Config) -> ControlBinding {
+			ControlBinding::number(*self)
+		}
+	}
+
+	impl<T: NumberValue> IntoControlBinding<NumberBinding> for &mut Signal<T> {
+		type Config = ();
+
+		fn into_control_binding(self, (): Self::Config) -> ControlBinding {
+			ControlBinding::number(*self)
 		}
 	}
 
@@ -86,22 +127,6 @@ pub mod __private {
 
 		fn into_control_binding(self, (): Self::Config) -> ControlBinding {
 			ControlBinding::number_with_error(self.0, self.1)
-		}
-	}
-
-	impl IntoControlBinding<CheckboxBinding> for Signal<bool> {
-		type Config = ();
-
-		fn into_control_binding(self, (): Self::Config) -> ControlBinding {
-			ControlBinding::checkbox(self)
-		}
-	}
-
-	impl IntoControlBinding<SelectManyBinding> for Signal<Vec<String>> {
-		type Config = ();
-
-		fn into_control_binding(self, (): Self::Config) -> ControlBinding {
-			ControlBinding::select_many(self)
 		}
 	}
 

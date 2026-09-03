@@ -592,8 +592,9 @@
 //! DOM-first, preserving an edit made after SSR and before hydration. If the
 //! application calls `runtime.reset()` before hydration, runtime field
 //! bindings become source-preferred and write the reset defaults instead of
-//! adopting stale SSR properties. Existing direct `Signal` bindings retain
-//! their normal DOM-first hydration behavior.
+//! adopting stale SSR properties. Existing direct `Signal` bindings, including
+//! borrowed `&Signal<T>` accessors, retain their normal DOM-first hydration
+//! behavior.
 //!
 //! Numeric bindings preserve invalid editor text and the last valid typed
 //! value. The current [`NumberParseError`] retains the raw text and failure

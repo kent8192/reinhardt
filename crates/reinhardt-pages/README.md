@@ -248,10 +248,11 @@ node; removing a script cannot undo side effects that already executed.
 
 ### Controlled form elements
 
-Use `bind:` when a signal should own a native control after hydration. The
-control shape determines the signal type: `String` for text, radio, and
-single-select controls; `bool` for checkboxes; a supported numeric primitive
-for number inputs; and `Vec<String>` for multiple selects.
+Use `bind:` when a signal should own a native control after hydration. Owned
+or borrowed `Signal` handles (`Signal<T>`, `&Signal<T>`, `&mut Signal<T>`) are
+accepted. The control shape determines the signal type: `String` for text,
+radio, and single-select controls; `bool` for checkboxes; a supported numeric
+primitive for number inputs; and `Vec<String>` for multiple selects.
 
 ```rust
 use reinhardt_pages::prelude::*;

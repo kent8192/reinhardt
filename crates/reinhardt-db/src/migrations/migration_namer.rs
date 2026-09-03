@@ -30,7 +30,7 @@ impl MigrationNamer {
 	/// # Examples
 	///
 	/// ```rust
-	/// # use reinhardt_db::migrations::{MigrationNamer, Operation};
+	/// # use reinhardt_db::migrations::{ColumnDefinition, FieldType, MigrationNamer, Operation};
 	/// // Initial migration
 	/// assert_eq!(
 	///     MigrationNamer::generate_name(&[], true),
@@ -55,32 +55,18 @@ impl MigrationNamer {
 	/// let ops = vec![
 	///     Operation::AddColumn {
 	///         table: "users".to_string(),
-	///         column: reinhardt_db::migrations::ColumnDefinition {
-	///             name: "email".to_string(),
-	///             type_definition: reinhardt_db::migrations::FieldType::Custom("VARCHAR(255)".to_string()),
-	///             not_null: false,
-	///             unique: false,
-	///             primary_key: false,
-	///             auto_increment: false,
-	///             default: None,
-	///             generated: None,
-	///             domain: None,
-	///         },
+	///         column: ColumnDefinition::new(
+	///             "email",
+	///             FieldType::Custom("VARCHAR(255)".to_string()),
+	///         ),
 	///         mysql_options: None,
 	///     },
 	///     Operation::AddColumn {
 	///         table: "users".to_string(),
-	///         column: reinhardt_db::migrations::ColumnDefinition {
-	///             name: "phone".to_string(),
-	///             type_definition: reinhardt_db::migrations::FieldType::Custom("VARCHAR(20)".to_string()),
-	///             not_null: false,
-	///             unique: false,
-	///             primary_key: false,
-	///             auto_increment: false,
-	///             default: None,
-	///             generated: None,
-	///             domain: None,
-	///         },
+	///         column: ColumnDefinition::new(
+	///             "phone",
+	///             FieldType::Custom("VARCHAR(20)".to_string()),
+	///         ),
 	///         mysql_options: None,
 	///     },
 	/// ];

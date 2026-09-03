@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- pin tinyvec 1.12.0 around broken 1.13.0 alloc builds
+
+### Testing
+
+- pin tinyvec 1.12.0 in isolated consumer fixtures
+
 ## [0.4.0-alpha.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.4.0-alpha.12...reinhardt-web@v0.4.0-alpha.13) - 2026-09-02
 
 ### Documentation

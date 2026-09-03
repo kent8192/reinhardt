@@ -27,6 +27,13 @@ edition = "2024"
 reinhardt-core = {{ path = {core_dir:?}, default-features = false, features = ["parsers"] }}
 reinhardt-pages = {{ path = {pages_dir:?}, default-features = false }}
 serde_json = "1"
+# Workaround for Lokathor/tinyvec#225 (tracked in reinhardt-web#6260)
+# Remove this workaround when tinyvec publishes a release that compiles with
+# the `alloc` feature without `std`.
+#
+# Ideal implementation (without workaround):
+# omit this direct pin and let isolated fixtures resolve tinyvec from crates.io.
+tinyvec = "=1.12.0"
 "#,
 		),
 	)

@@ -1422,6 +1422,13 @@ reinhardt = {{ package = "reinhardt-web", path = "{}", default-features = false,
 ctor = "0.6"
 serde = {{ version = "1", features = ["derive"] }}
 tokio = {{ version = "1", features = ["macros", "rt-multi-thread", "time"] }}
+# Workaround for Lokathor/tinyvec#225 (tracked in reinhardt-web#6260)
+# Remove this workaround when tinyvec publishes a release that compiles with
+# the `alloc` feature without `std`.
+#
+# Ideal implementation (without workaround):
+# omit this direct pin and let isolated fixtures resolve tinyvec from crates.io.
+tinyvec = "=1.12.0"
 
 [features]
 default = []

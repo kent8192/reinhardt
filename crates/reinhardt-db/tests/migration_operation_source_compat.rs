@@ -177,7 +177,12 @@ fn rendered_data_bearing_source_compiles_with_its_own_imports() {
 		format!(
 			"[package]\nname = \"rendered-migration-check\"\nversion = \"0.0.0\"\nedition = \
 			 \"2024\"\n\n[dependencies]\nreinhardt = {{ package = \"reinhardt-web\", path = \
-			 {:?}, default-features = false, features = [\"database\"] }}\n",
+			 {:?}, default-features = false, features = [\"database\"] }}\n# Workaround for \
+			 Lokathor/tinyvec#225 (tracked in reinhardt-web#6260)\n# Remove this workaround \
+			 when tinyvec publishes a release that compiles with\n# the `alloc` feature \
+			 without `std`.\n#\n# Ideal implementation (without workaround):\n# omit this \
+			 direct pin and let isolated fixtures resolve tinyvec from crates.io.\ntinyvec = \
+			 \"=1.12.0\"\n",
 			workspace_root
 		),
 	)

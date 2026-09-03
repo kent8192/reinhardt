@@ -4,7 +4,7 @@
 //!
 //! ## Features
 //!
-//! - `page` - Page types for component rendering (`Page`, `PageElement`, `Head`, etc.)
+//! - `page` - Page types for component rendering (`Page`, `PageElement`, `Head`, etc.). Enables `security`.
 //! - `http` - HTTP-related types (moved to `reinhardt-http` crate)
 //!
 //! ## Note

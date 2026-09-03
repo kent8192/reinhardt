@@ -133,6 +133,9 @@
 //! built-in MySQL profile requires 8.0.1 or newer. Older/custom servers report
 //! their exact feature set through [`TransactionExecutor::row_lock_capabilities`].
 
+#[doc(hidden)]
+pub use crate::naming;
+
 // Core modules - always available
 pub mod aggregation;
 /// Annotation module.

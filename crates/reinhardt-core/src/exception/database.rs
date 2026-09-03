@@ -42,7 +42,15 @@ pub struct DatabaseError {
 	kind: DatabaseErrorKind,
 	message: String,
 	code: Option<String>,
+	metadata: Option<Box<DatabaseErrorMetadata>>,
 	source: Option<Arc<dyn std::error::Error + Send + Sync>>,
+}
+
+#[derive(Clone, Default)]
+struct DatabaseErrorMetadata {
+	constraint: Option<String>,
+	table: Option<String>,
+	columns: Vec<String>,
 }
 
 impl DatabaseError {
@@ -52,6 +60,7 @@ impl DatabaseError {
 			kind,
 			message: message.into(),
 			code: None,
+			metadata: None,
 			source: None,
 		}
 	}
@@ -59,6 +68,28 @@ impl DatabaseError {
 	/// Associates a driver- or database-specific error code with this error.
 	pub fn with_code(mut self, code: impl Into<String>) -> Self {
 		self.code = Some(code.into());
+		self
+	}
+
+	/// Associates the physical constraint name reported by the database.
+	pub fn with_constraint(mut self, constraint: impl Into<String>) -> Self {
+		self.metadata_mut().constraint = Some(constraint.into());
+		self
+	}
+
+	/// Associates the physical table name reported by the database.
+	pub fn with_table(mut self, table: impl Into<String>) -> Self {
+		self.metadata_mut().table = Some(table.into());
+		self
+	}
+
+	/// Replaces the ordered physical columns reported by the database.
+	pub fn with_columns<I, S>(mut self, columns: I) -> Self
+	where
+		I: IntoIterator<Item = S>,
+		S: Into<String>,
+	{
+		self.metadata_mut().columns = columns.into_iter().map(Into::into).collect();
 		self
 	}
 
@@ -94,6 +125,32 @@ impl DatabaseError {
 	pub fn code(&self) -> Option<&str> {
 		self.code.as_deref()
 	}
+
+	/// Returns the physical constraint name, when supplied by the backend.
+	pub fn constraint(&self) -> Option<&str> {
+		self.metadata
+			.as_deref()
+			.and_then(|metadata| metadata.constraint.as_deref())
+	}
+
+	/// Returns the physical table name, when supplied by the backend.
+	pub fn table(&self) -> Option<&str> {
+		self.metadata
+			.as_deref()
+			.and_then(|metadata| metadata.table.as_deref())
+	}
+
+	/// Returns the ordered physical columns supplied by the backend.
+	pub fn columns(&self) -> &[String] {
+		self.metadata
+			.as_deref()
+			.map_or(&[], |metadata| metadata.columns.as_slice())
+	}
+
+	fn metadata_mut(&mut self) -> &mut DatabaseErrorMetadata {
+		self.metadata
+			.get_or_insert_with(|| Box::new(DatabaseErrorMetadata::default()))
+	}
 }
 
 impl std::fmt::Debug for DatabaseError {
@@ -103,6 +160,9 @@ impl std::fmt::Debug for DatabaseError {
 			.field("kind", &self.kind)
 			.field("message", &self.message)
 			.field("code", &self.code)
+			.field("constraint", &self.constraint())
+			.field("table", &self.table())
+			.field("columns", &self.columns())
 			.field("source", &self.source)
 			.finish()
 	}
@@ -124,7 +184,12 @@ impl std::error::Error for DatabaseError {
 
 impl PartialEq for DatabaseError {
 	fn eq(&self, other: &Self) -> bool {
-		self.kind == other.kind && self.message == other.message && self.code == other.code
+		self.kind == other.kind
+			&& self.message == other.message
+			&& self.code == other.code
+			&& self.constraint() == other.constraint()
+			&& self.table() == other.table()
+			&& self.columns() == other.columns()
 	}
 }
 
@@ -134,6 +199,7 @@ impl Eq for DatabaseError {}
 mod tests {
 	use std::error::Error as _;
 	use std::io;
+	use std::mem::size_of;
 
 	use super::{DatabaseError, DatabaseErrorKind};
 
@@ -165,5 +231,60 @@ mod tests {
 				.and_then(|source| source.downcast_ref::<io::Error>())
 				.is_some()
 		);
+	}
+
+	#[test]
+	fn database_error_retains_structured_object_metadata() {
+		let error = DatabaseError::new(DatabaseErrorKind::UniqueViolation, "duplicate")
+			.with_constraint("users_email_key")
+			.with_table("users")
+			.with_columns(["email", "tenant_id"]);
+
+		assert_eq!(error.constraint(), Some("users_email_key"));
+		assert_eq!(error.table(), Some("users"));
+		assert_eq!(error.columns(), ["email", "tenant_id"]);
+		assert!(format!("{error:?}").contains("users_email_key"));
+	}
+
+	#[test]
+	fn database_error_remains_small_enough_for_result_values() {
+		assert!(size_of::<DatabaseError>() < 128);
+	}
+
+	#[test]
+	fn cloned_database_error_retains_metadata_and_source() {
+		let error = DatabaseError::new(DatabaseErrorKind::NotNullViolation, "missing")
+			.with_table("users")
+			.with_columns(["email"])
+			.with_source(io::Error::other("driver failure"));
+
+		let cloned = error.clone();
+
+		assert_eq!(cloned.table(), Some("users"));
+		assert_eq!(cloned.columns(), ["email"]);
+		assert!(
+			cloned
+				.source()
+				.and_then(|source| source.downcast_ref::<io::Error>())
+				.is_some()
+		);
+	}
+
+	#[test]
+	fn database_error_equality_includes_metadata_but_not_source_identity() {
+		let left = DatabaseError::new(DatabaseErrorKind::UniqueViolation, "duplicate")
+			.with_constraint("users_email_key")
+			.with_columns(["email"])
+			.with_source(io::Error::other("left"));
+		let same = DatabaseError::new(DatabaseErrorKind::UniqueViolation, "duplicate")
+			.with_constraint("users_email_key")
+			.with_columns(["email"])
+			.with_source(io::Error::other("right"));
+		let different = DatabaseError::new(DatabaseErrorKind::UniqueViolation, "duplicate")
+			.with_constraint("users_username_key")
+			.with_columns(["username"]);
+
+		assert_eq!(left, same);
+		assert_ne!(left, different);
 	}
 }

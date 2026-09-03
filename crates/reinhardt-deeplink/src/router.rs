@@ -241,7 +241,7 @@ pub trait DeeplinkRouterExt {
 	fn with_deeplinks(self, config: DeeplinkConfig) -> Result<Self::Output, DeeplinkError>;
 }
 
-impl<Client> DeeplinkRouterExt for UnifiedRouter<Client> {
+impl DeeplinkRouterExt for UnifiedRouter {
 	type Output = Self;
 
 	fn with_deeplinks(self, config: DeeplinkConfig) -> Result<Self, DeeplinkError> {

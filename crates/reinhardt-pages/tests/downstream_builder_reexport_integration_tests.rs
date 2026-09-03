@@ -6,6 +6,14 @@ use std::process::Command;
 use rstest::rstest;
 use tempfile::TempDir;
 
+// Workaround for Lokathor/tinyvec#225 (tracked in reinhardt-web#6260)
+// Remove this workaround when tinyvec publishes a release that compiles with
+// the `alloc` feature without `std`.
+//
+// Ideal implementation (without workaround):
+// omit the direct tinyvec pin and let isolated fixtures resolve from crates.io.
+const TINYVEC_ISOLATED_FIXTURE_PIN: &str = r#"tinyvec = "=1.12.0""#;
+
 #[test]
 fn generated_builders_do_not_require_downstream_bon_dependency() {
 	let crate_dir = TempDir::new().expect("create downstream fixture");
@@ -22,6 +30,7 @@ edition = "2024"
 
 [dependencies]
 reinhardt-pages = {{ path = "{reinhardt_pages_dir}" }}
+{TINYVEC_ISOLATED_FIXTURE_PIN}
 "#
 		),
 	)
@@ -107,6 +116,7 @@ edition = "2024"
 reinhardt-core = {{ path = "{reinhardt_core_dir}", default-features = false, features = ["parsers"] }}
 reinhardt-pages = {{ path = "{reinhardt_pages_dir}", default-features = false }}
 serde_json = "1"
+{TINYVEC_ISOLATED_FIXTURE_PIN}
 "#
 		),
 	)

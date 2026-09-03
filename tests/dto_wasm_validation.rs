@@ -30,6 +30,13 @@ publish = false
 reinhardt = {{ path = "{}", package = "reinhardt-web", default-features = false, features = ["core", "pages"] }}
 serde = {{ version = "1.0", features = ["derive"] }}
 serde_json = "1.0"
+# Workaround for Lokathor/tinyvec#225 (tracked in reinhardt-web#6260)
+# Remove this workaround when tinyvec publishes a release that compiles with
+# the `alloc` feature without `std`.
+#
+# Ideal implementation (without workaround):
+# omit this direct pin and let isolated fixtures resolve tinyvec from crates.io.
+tinyvec = "=1.12.0"
 
 [dev-dependencies]
 wasm-bindgen-test = "={}"

@@ -1,5 +1,13 @@
 use std::{fs, path::PathBuf, process::Command};
 
+// Workaround for Lokathor/tinyvec#225 (tracked in reinhardt-web#6260)
+// Remove this workaround when tinyvec publishes a release that compiles with
+// the `alloc` feature without `std`.
+//
+// Ideal implementation (without workaround):
+// omit the direct tinyvec pin and let isolated fixtures resolve from crates.io.
+const TINYVEC_ISOLATED_FIXTURE_PIN: &str = r#"tinyvec = "=1.12.0""#;
+
 #[test]
 fn vector_module_requires_the_pgvector_feature() {
 	let temporary_project = tempfile::Builder::new()
@@ -15,7 +23,7 @@ fn vector_module_requires_the_pgvector_feature() {
 	fs::write(
 		&manifest_path,
 		format!(
-			"[package]\nname = \"pgvector-feature-boundary\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\nreinhardt-db = {{ path = \"{crate_path}\", default-features = false, features = [\"orm\", \"postgres\"] }}\n"
+			"[package]\nname = \"pgvector-feature-boundary\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\nreinhardt-db = {{ path = \"{crate_path}\", default-features = false, features = [\"orm\", \"postgres\"] }}\n{TINYVEC_ISOLATED_FIXTURE_PIN}\n"
 		),
 	)
 	.unwrap();
@@ -53,7 +61,7 @@ fn non_pgvector_consumer_preserves_existing_public_shapes() {
 	fs::write(
 		&manifest_path,
 		format!(
-			"[package]\nname = \"non-pgvector-source-compat\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\nctor = \"0.8\"\nreinhardt-core = {{ path = {:?} }}\nreinhardt-db = {{ path = {:?}, default-features = false, features = [\"migrations\", \"orm\", \"postgres\"] }}\nreinhardt-query = {{ path = {:?}, default-features = false }}\nserde = {{ version = \"1\", features = [\"derive\"] }}\n",
+			"[package]\nname = \"non-pgvector-source-compat\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\nctor = \"0.8\"\nreinhardt-core = {{ path = {:?} }}\nreinhardt-db = {{ path = {:?}, default-features = false, features = [\"migrations\", \"orm\", \"postgres\"] }}\nreinhardt-query = {{ path = {:?}, default-features = false }}\nserde = {{ version = \"1\", features = [\"derive\"] }}\n{TINYVEC_ISOLATED_FIXTURE_PIN}\n",
 			db_path.parent().unwrap().join("reinhardt-core"),
 			db_path,
 			query_path

@@ -40,6 +40,13 @@ identifier = {{ package = "uuid", version = "1.0", features = ["serde"] }}
 json = {{ package = "serde_json", version = "1.0" }}
 serde = {{ version = "1.0", features = ["derive"] }}
 time = {{ package = "chrono", version = "0.4", features = ["serde"] }}
+# Workaround for Lokathor/tinyvec#225 (tracked in reinhardt-web#6260)
+# Remove this workaround when tinyvec publishes a release that compiles with
+# the `alloc` feature without `std`.
+#
+# Ideal implementation (without workaround):
+# omit this direct pin and let isolated fixtures resolve tinyvec from crates.io.
+tinyvec = "=1.12.0"
 
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 ctor = "0.8.0"

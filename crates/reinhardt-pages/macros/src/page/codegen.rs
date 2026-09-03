@@ -792,52 +792,60 @@ fn generate_control_binding(
 	ctx: &CodegenContext,
 	radio_value_override: Option<TokenStream>,
 ) -> TokenStream {
-	let value = match &binding.expression {
+	let value_expr = match &binding.expression {
 		TypedControlBindingExpr::Direct(value) => value,
 		TypedControlBindingExpr::NumberWithError { value, .. } => value,
 	};
 	let binding_span = binding.span;
 	let private = quote! { #pages_crate::control_binding::__private };
-	let value = wrap_expr_with_captures(value, pages_crate, ctx);
-	let value = quote_spanned!(binding_span=> #private::copy_bind_source(#value));
-	let descriptor = match (&binding.kind, &binding.expression) {
-		(TypedControlBindingKind::Text, _) => {
-			quote_spanned!(binding_span=> #private::into_control_binding::<#private::TextBinding, _>(#value, ()))
-		}
-		(TypedControlBindingKind::Checkbox, _) => {
-			quote_spanned!(binding_span=> #private::into_control_binding::<#private::CheckboxBinding, _>(#value, ()))
-		}
-		(TypedControlBindingKind::SelectOne, _) => {
-			quote_spanned!(binding_span=> #private::into_control_binding::<#private::SelectOneBinding, _>(#value, ()))
-		}
-		(TypedControlBindingKind::SelectMany, _) => {
-			quote_spanned!(binding_span=> #private::into_control_binding::<#private::SelectManyBinding, _>(#value, ()))
-		}
-		(TypedControlBindingKind::Number, TypedControlBindingExpr::Direct(_)) => {
-			quote_spanned!(binding_span=> #private::into_control_binding::<#private::NumberBinding, _>(#value, ()))
+	let mut captures = ctx.captures_in_expr(value_expr);
+	let copied_value = quote_spanned!(binding_span=> #private::copy_bind_source(#value_expr));
+	let (config, extra_prelude) = match (&binding.kind, &binding.expression) {
+		(TypedControlBindingKind::Radio, _) => {
+			let radio_value = radio_value_override.unwrap_or_else(|| {
+				let radio_value = binding.radio_value.as_ref().expect("validated radio value");
+				captures.extend(ctx.captures_in_expr(radio_value));
+				quote! { (#radio_value).to_string() }
+			});
+			(radio_value, TokenStream::new())
 		}
 		(
 			TypedControlBindingKind::Number,
 			TypedControlBindingExpr::NumberWithError { error, .. },
 		) => {
-			let error = wrap_value_expr_with_captures(
-				quote! { #pages_crate::reactive::copy_signal_handle(#error) },
-				error,
-				pages_crate,
-				ctx,
-			);
-			quote_spanned!(binding_span=> #private::into_control_binding::<#private::NumberBinding, _>((#value, #error), ()))
+			captures.extend(ctx.captures_in_expr(error));
+			(
+				quote! { () },
+				quote_spanned!(binding_span=>
+					let __bind_error = #pages_crate::reactive::copy_signal_handle(#error);
+				),
+			)
 		}
-		(TypedControlBindingKind::Radio, _) => {
-			let radio_value = radio_value_override.unwrap_or_else(|| {
-				let radio_value = binding.radio_value.as_ref().expect("validated radio value");
-				let radio_value = wrap_expr_with_captures(radio_value, pages_crate, ctx);
-				quote! { (#radio_value).to_string() }
-			});
-			quote_spanned!(binding_span=> #private::into_control_binding::<#private::RadioBinding, _>(#value, #radio_value))
+		_ => (quote! { () }, TokenStream::new()),
+	};
+	let marker = match binding.kind {
+		TypedControlBindingKind::Text => quote! { #private::TextBinding },
+		TypedControlBindingKind::Checkbox => quote! { #private::CheckboxBinding },
+		TypedControlBindingKind::SelectOne => quote! { #private::SelectOneBinding },
+		TypedControlBindingKind::SelectMany => quote! { #private::SelectManyBinding },
+		TypedControlBindingKind::Number => quote! { #private::NumberBinding },
+		TypedControlBindingKind::Radio => quote! { #private::RadioBinding },
+	};
+	let capture_statements = capture_statements(&captures, pages_crate);
+	let call = match &binding.expression {
+		TypedControlBindingExpr::NumberWithError { .. } => {
+			quote_spanned!(binding_span=> #private::into_control_binding::<#marker, _>((__bind_source, __bind_error), #config))
+		}
+		_ => {
+			quote_spanned!(binding_span=> #private::into_control_binding::<#marker, _>(__bind_source, #config))
 		}
 	};
-	quote!(.control_binding(#descriptor))
+	quote_spanned!(binding_span=> .control_binding({
+		#(#capture_statements)*
+		#extra_prelude
+		let __bind_source = #copied_value;
+		#call
+	}))
 }
 
 /// Boolean attributes that should use `.bool_attr()` method.

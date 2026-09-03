@@ -322,7 +322,7 @@ async fn nc_01_new_model_creates_create_table_migration() {
 		"Migration file should reference 'todos' table"
 	);
 	assert!(
-		file_content.contains("initial: Some(true)"),
+		file_content.contains(".with_initial(Some(true))"),
 		"Migration file should have initial flag set"
 	);
 }
@@ -1021,7 +1021,7 @@ async fn nc_09_initial_migration_correctness() {
 		"Migration file should contain migration function",
 	);
 	assert!(
-		file_content.contains("initial: Some(true)"),
+		file_content.contains(".with_initial(Some(true))"),
 		"Initial migration should have initial flag"
 	);
 }
@@ -2971,7 +2971,7 @@ async fn mn_01_initial_migration_gets_initial_name() {
 		migration_name
 	);
 	assert!(
-		file_content.contains("initial: Some(true)"),
+		file_content.contains(".with_initial(Some(true))"),
 		"Initial migration should have initial flag set to Some(true)"
 	);
 	assert!(
@@ -3089,7 +3089,7 @@ async fn mn_02_second_migration_gets_descriptive_name() {
 		"Second migration should contain AddColumn operation"
 	);
 	assert!(
-		!second_content.contains("initial: Some(true)"),
+		!second_content.contains(".with_initial(Some(true))"),
 		"Second migration should NOT have initial flag"
 	);
 }

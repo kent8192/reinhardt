@@ -311,11 +311,6 @@ fn public_page_mount_supports_all_additional_bound_input_types() {
 		check_text("month", &month, "2026-09", "");
 		check_text("week", &week, "2026-W36", "");
 		check_text("time", &time, "10:30", "");
-		check_text("date", &date, "2026-08-31", "");
-		check_text("datetime-local", &datetime_local, "2026-08-31T10:30", "");
-		check_text("month", &month, "2026-09", "");
-		check_text("week", &week, "2026-W36", "");
-		check_text("time", &time, "10:30", "");
 
 		let input: web_sys::HtmlInputElement = root
 			.as_web_sys()

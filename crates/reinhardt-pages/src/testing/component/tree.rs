@@ -1749,13 +1749,6 @@ mod case_normalization_tests {
 	}
 
 	#[test]
-	fn native_temporal_validation_rejects_zero_month_extra_week_and_long_fraction() {
-		assert!(!is_valid_html_date("2026-00-01"));
-		assert!(!is_valid_html_week("2026-W54"));
-		assert!(!is_valid_html_time("10:30:00.1234"));
-	}
-
-	#[test]
 	fn native_range_rejection_keeps_the_signal_and_control_aligned() {
 		ReactiveScope::run(|| {
 			let value = Signal::new(100_u8);

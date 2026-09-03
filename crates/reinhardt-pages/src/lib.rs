@@ -329,6 +329,37 @@
 //! }
 //! ```
 //!
+//! With the native `model-server-fnset` feature,
+//! [`ServerFnError::try_from_model_error_with`] maps only proven model
+//! constraint violations. The optional callback may supply fixed,
+//! client-safe text:
+//!
+//! ```rust,ignore
+//! let server_error = ServerFnError::try_from_model_error_with::<User, _>(
+//!     error,
+//!     |database_error, _fields| {
+//!         (database_error.constraint() == Some("users_email_unique"))
+//!             .then(|| "This email is already registered".to_owned())
+//!     },
+//! )
+//! .unwrap_or_else(|error| {
+//!     tracing::error!(error = %error, "user write failed");
+//!     ServerFnError::application("Failed to save user")
+//! });
+//! ```
+//!
+//! Callback code must not return `DatabaseError::message()`, rejected values,
+//! table names, constraint names, or vendor diagnostics to the browser.
+//! Single-field violations are field errors, while composite `UNIQUE` and
+//! `CHECK` violations are form errors. Unmapped or unproven errors remain the
+//! original framework error. The conversion helper is native-only; browser
+//! code receives the resulting [`ServerFnError`].
+//!
+//! Conversion preserves the serialized [`ServerFnError`] wire shape and adds no
+//! database metadata to the browser response. Generated client forms route
+//! field errors by logical model field names. Composite `UNIQUE` and `CHECK`
+//! violations have no single logical field, so they reach the form error.
+//!
 //! ## Typed server function sets
 //!
 //! [`server_fn::server_fnset`] groups existing server function markers into a

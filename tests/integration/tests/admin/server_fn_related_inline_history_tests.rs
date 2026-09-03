@@ -276,6 +276,18 @@ fn assert_object_not_found(error: ServerFnError) {
 	assert_eq!(error.user_message(), "Object not found");
 }
 
+async fn history_actions(pool: &sqlx::PgPool, model_name: &str, object_id: &str) -> Vec<String> {
+	sqlx::query_scalar(
+		"SELECT action_name FROM reinhardt_admin_history \
+		 WHERE model_name = $1 AND object_id = $2 ORDER BY id DESC",
+	)
+	.bind(model_name)
+	.bind(object_id)
+	.fetch_all(pool)
+	.await
+	.expect("history actions must be independently queryable")
+}
+
 fn assert_history(
 	response: &HistoryResponse,
 	model_name: &str,
@@ -388,6 +400,7 @@ async fn related_inline_create_then_update_writes_canonical_per_object_history(
 	let parent_history = object_history(&context, PARENT_MODEL, &parent_id).await;
 	let updated_history = object_history(&context, CHILD_MODEL, &first_id).await;
 	let deleted_history = object_history_result(&context, CHILD_MODEL, &deleted_id).await;
+	let deleted_history_actions = history_actions(pool, CHILD_MODEL, &deleted_id).await;
 	let created_history = object_history(&context, CHILD_MODEL, &created_id).await;
 	let deleted_history_count: i64 = sqlx::query_scalar(
 		"SELECT COUNT(*) FROM reinhardt_admin_history WHERE model_name = $1 AND object_id = $2",
@@ -441,6 +454,7 @@ async fn related_inline_create_then_update_writes_canonical_per_object_history(
 		],
 	);
 	assert_object_not_found(deleted_history.expect_err("deleted child history must be scoped out"));
+	assert_eq!(deleted_history_actions, ["DELETE", "CREATE"]);
 	assert_eq!(deleted_history_count, 2);
 	assert_history(
 		&created_history,

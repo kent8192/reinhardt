@@ -54,6 +54,7 @@ pub use special::{RunCode, RunSQL, StateOperation};
 // These are maintained from the original operations.rs
 use super::IndexDefinition;
 use super::{ConstraintDefinition, FieldState, FieldType, ModelState, ProjectState};
+pub use crate::naming::truncate_identifier_with_hash;
 use pg_escape::{quote_identifier, quote_literal};
 use reinhardt_query::prelude::{
 	Alias, AlterTableStatement, CockroachDBQueryBuilder, ColumnDef, ColumnType as QueryColumnType,
@@ -5166,32 +5167,6 @@ impl ColumnDefinition {
 			domain: field_state.domain.clone(),
 		}
 	}
-}
-
-/// Truncate a database identifier to PostgreSQL's 63-byte limit with a stable hash suffix.
-pub fn truncate_identifier_with_hash(logical_name: &str) -> String {
-	const MAX_IDENTIFIER_LENGTH: usize = 63;
-	const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
-	const FNV_PRIME: u64 = 0x00000100000001b3;
-	if logical_name.len() <= MAX_IDENTIFIER_LENGTH {
-		return logical_name.to_string();
-	}
-
-	let hash = logical_name
-		.as_bytes()
-		.iter()
-		.fold(FNV_OFFSET_BASIS, |hash, byte| {
-			(hash ^ u64::from(*byte)).wrapping_mul(FNV_PRIME)
-		});
-	let hash = format!("{hash:016x}");
-	let prefix_len = MAX_IDENTIFIER_LENGTH - hash.len() - 1;
-	let boundary = logical_name
-		.char_indices()
-		.map(|(index, _)| index)
-		.take_while(|index| *index <= prefix_len)
-		.last()
-		.unwrap_or(0);
-	format!("{}_{}", &logical_name[..boundary], hash)
 }
 
 /// Generate the physical name used for a legacy table/column index operation.

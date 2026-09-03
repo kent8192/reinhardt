@@ -349,16 +349,19 @@ pub mod urls;
 ///
 /// When the `client-router` feature is enabled (the realistic configuration
 /// for wasm consumers that use `#[routes]`), this re-exports the real
-/// wasm-side `UnifiedRouter` from `reinhardt_urls::routers`. That type
-/// provides the correct closure signatures
+/// wasm-side `UnifiedRouter` from `reinhardt_urls::routers`. `UnifiedRouter`
+/// is a non-generic public type on both native and WASM; its private stored
+/// routing representation is target-specific. The WASM value stores client
+/// routing state, while the native value stores server and protocol state.
+/// The real WASM type provides the correct closure signatures
 /// (`server: FnOnce(ServerRouter) -> ServerRouter`,
 /// `client: FnOnce(ClientRouter) -> ClientRouter`) so user-supplied bodies
 /// such as `.client(|c| c.route(...))` type-check on wasm. On wasm the
 /// `ServerRouter` is a no-op builder whose result is discarded (issue #4569).
 ///
-/// Without `client-router`, an inert stub is exposed so that the path
-/// resolves; user bodies that invoke `.server`/`.client` on the stub are
-/// expected to be no-ops in that minimal configuration.
+/// Without `client-router`, the existing minimal inert stub is exposed so that
+/// the path resolves. It is not the real target-neutral router contract;
+/// enable `client-router` for active client routing.
 #[cfg(all(feature = "routing", not(native)))]
 pub mod urls {
 	/// Wasm-side stub mirroring `reinhardt_urls::prelude`.

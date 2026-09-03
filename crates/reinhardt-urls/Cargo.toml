@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-urls"
-version = "0.4.0-alpha.12"
+version = "0.4.0-alpha.13"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -118,4 +118,9 @@ required-features = ["wasm-diag-test"]
 [[test]]
 name = "client_router_listener_panic_isolation_test"
 path = "tests/wasm/client_router_listener_panic_isolation_test.rs"
+required-features = ["wasm-diag-test"]
+
+[[test]]
+name = "unified_router_target_parity_test"
+path = "tests/wasm/unified_router_target_parity_test.rs"
 required-features = ["wasm-diag-test"]

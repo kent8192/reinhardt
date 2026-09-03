@@ -1,8 +1,9 @@
 //! Integration tests for persistent per-object admin history.
 
 use super::server_fn_helpers::{
-	AdminSiteDepends, DenyAllPermissionsModelAdmin, ServerFnContext, StringPkContext,
-	TEST_CSRF_TOKEN, make_auth_user, make_staff_request, server_fn_context, string_pk_context,
+	AdminDatabaseDepends, AdminSiteDepends, DenyAllPermissionsModelAdmin, ServerFnContext,
+	StringPkContext, TEST_CSRF_TOKEN, make_auth_user, make_staff_request, server_fn_context,
+	string_pk_context,
 };
 use reinhardt_admin::core::{AdminRecord, AdminSite};
 use reinhardt_admin::server::{
@@ -180,6 +181,32 @@ async fn exact_history_ids(context: &ServerFnContext, object_id: &str) -> Vec<i6
 	.collect()
 }
 
+async fn exact_history_actions(
+	db: &AdminDatabaseDepends,
+	model_name: &str,
+	table_name: &str,
+	object_id: &str,
+) -> Vec<String> {
+	let mut connection = *db.connection();
+	OrmExecutor::fetch_all(
+		&mut connection,
+		"SELECT action_name FROM reinhardt_admin_history \
+		 WHERE model_identity = $1 AND object_identity = $2 ORDER BY id DESC",
+		vec![
+			QueryValue::Bytes(model_identity(model_name, table_name)),
+			QueryValue::Bytes(object_id.as_bytes().to_vec()),
+		],
+	)
+	.await
+	.expect("history actions must be independently queryable")
+	.into_iter()
+	.map(|row| {
+		row.get("action_name")
+			.expect("history row must have an action")
+	})
+	.collect()
+}
+
 #[rstest]
 #[tokio::test]
 async fn crud_history_rejects_deleted_objects_without_dropping_history(
@@ -210,6 +237,7 @@ async fn crud_history_rejects_deleted_objects_without_dropping_history(
 	update_name(&context, &format!("0{object_id}"), "update-secret-name")
 		.await
 		.expect("update must succeed");
+	let visible_history = query_history(&context, &format!("0{object_id}"), 1).await;
 	delete_record(
 		"testmodel".to_string(),
 		object_id.clone(),
@@ -224,13 +252,47 @@ async fn crud_history_rejects_deleted_objects_without_dropping_history(
 
 	// Act
 	let history_result = query_history_result(&context, &format!("0{object_id}"), 1).await;
-	let persisted_history = exact_history_ids(&context, &object_id).await;
+	let actions = exact_history_actions(db, "TestModel", "test_models", &object_id).await;
+	let serialized =
+		serde_json::to_string(&visible_history).expect("visible history must serialize");
 
 	// Assert
 	assert_object_not_found(
 		history_result.expect_err("deleted object history must be outside the active scope"),
 	);
-	assert_eq!(persisted_history.len(), 3);
+	assert_eq!(actions, ["DELETE", "UPDATE", "CREATE"]);
+	assert_eq!(visible_history.count, 2);
+	assert_eq!(visible_history.page, 1);
+	assert_eq!(visible_history.page_size, 25);
+	assert_eq!(visible_history.total_pages, 1);
+	assert_eq!(
+		visible_history
+			.results
+			.iter()
+			.map(|entry| entry.action_name.as_str())
+			.collect::<Vec<_>>(),
+		["UPDATE", "CREATE"]
+	);
+	assert!(visible_history.results.iter().all(|entry| {
+		entry.actor == "test_staff"
+			&& entry.model_name == "TestModel"
+			&& entry.object_id == object_id
+			&& entry.object_repr == format!("TestModel ({object_id})")
+			&& entry.affected_count == 1
+			&& entry.success
+	}));
+	assert_eq!(visible_history.results[0].changed_fields, ["name"]);
+	assert_eq!(
+		visible_history.results[1].changed_fields,
+		["description", "name", "status"]
+	);
+	for raw_value in [
+		"create-secret-name",
+		"create-secret-description",
+		"update-secret-name",
+	] {
+		assert!(!serialized.contains(raw_value));
+	}
 }
 
 #[rstest]
@@ -291,6 +353,8 @@ async fn numeric_looking_string_primary_keys_remain_distinct_across_crud_and_his
 	.expect("leading-zero primary key delete must succeed");
 	let leading_zero_history = query_string_pk_history_result(&context, "01").await;
 	let plain_history = query_string_pk_history(&context, "1").await;
+	let leading_zero_actions =
+		exact_history_actions(db, "StringPkModel", "string_pk_test_models", "01").await;
 	let deleted = db
 		.get::<AdminRecord>("string_pk_test_models", "id", "01")
 		.await
@@ -308,6 +372,7 @@ async fn numeric_looking_string_primary_keys_remain_distinct_across_crud_and_his
 	assert!(deleted.is_none());
 	assert_eq!(remaining.get("name"), Some(&json!("updated-plain-one")));
 	assert_eq!(plain_history.count, 2);
+	assert_eq!(leading_zero_actions, ["DELETE", "UPDATE", "CREATE"]);
 	assert_eq!(
 		plain_history
 			.results
@@ -350,16 +415,18 @@ async fn bulk_delete_hides_deleted_object_history(#[future] server_fn_context: S
 	let first_history = query_history_result(&context, &first_id, 1).await;
 	let second_history = query_history_result(&context, &second_id, 1).await;
 	let missing_history = query_history_result(&context, &missing_id, 1).await;
-	let first_persisted_history = exact_history_ids(&context, &first_id).await;
-	let second_persisted_history = exact_history_ids(&context, &second_id).await;
+	let first_actions = exact_history_actions(db, "TestModel", "test_models", &first_id).await;
+	let second_actions = exact_history_actions(db, "TestModel", "test_models", &second_id).await;
+	let missing_actions = exact_history_actions(db, "TestModel", "test_models", &missing_id).await;
 
 	// Assert
 	assert_eq!(response.deleted, 2);
 	assert_object_not_found(first_history.expect_err("deleted object history must be scoped out"));
 	assert_object_not_found(second_history.expect_err("deleted object history must be scoped out"));
 	assert_object_not_found(missing_history.expect_err("missing object history must be rejected"));
-	assert_eq!(first_persisted_history.len(), 1);
-	assert_eq!(second_persisted_history.len(), 1);
+	assert_eq!(first_actions, ["BULK_DELETE"]);
+	assert_eq!(second_actions, ["BULK_DELETE"]);
+	assert!(missing_actions.is_empty());
 }
 
 #[rstest]

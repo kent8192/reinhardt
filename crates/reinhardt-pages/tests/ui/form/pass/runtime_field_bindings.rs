@@ -22,30 +22,37 @@ fn main() {
 		let runtime = use_form(&form).build();
 		let _ = page!({
 			input {
+				a11y: off,
 				bind: runtime.field(RuntimeFormField::Name)
 			}
 			input {
+				a11y: off,
 				type: "number",
 				bind: runtime.field(RuntimeFormField::Count)
 			}
 			input {
+				a11y: off,
 				type: "checkbox",
 				bind: runtime.field(RuntimeFormField::Active)
 			}
 			input {
+				a11y: off,
 				type: "radio",
 				value: "yes",
 				bind: runtime.field(RuntimeFormField::Choice)
 			}
 			input {
+				a11y: off,
 				type: "radio",
 				value: "yes",
 				bind: runtime.field(RuntimeFormField::ChoiceTyped)
 			}
 			select {
+				a11y: off,
 				bind: runtime.field(RuntimeFormField::Choice)
 			}
 			select {
+				a11y: off,
 				multiple: true,
 				bind: runtime.field(RuntimeFormField::Labels)
 			}

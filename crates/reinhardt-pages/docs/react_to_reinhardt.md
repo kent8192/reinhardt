@@ -282,7 +282,10 @@ initially: Reinhardt adopts browser-restored values and user edits made before
 hydration instead of overwriting them with the server-time signal snapshot.
 After hydration, the signal wins: application writes update the corresponding
 DOM property. User input updates the signal before an explicit handler for the
-same event runs, so the handler observes the new signal value.
+same event runs, so the handler observes the new signal value. Password values
+are written only to the live DOM property, never to SSR or the `value` content
+attribute. Reactive attributes that cannot affect a control value also leave
+an in-progress browser edit untouched.
 
 Date/time inputs bind their browser serialization rather than a Rust date/time
 type. Typical values are `2026-08-31`, `2026-08-31T10:30`, `2026-08`,

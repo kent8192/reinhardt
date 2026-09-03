@@ -872,24 +872,34 @@ fn single_control_attrs_match(
 					.iter()
 					.any(|attribute| attribute.name().eq_ignore_ascii_case(name))
 			};
-			let expected_attrs_match = element.attrs().iter().all(|(name, value)| {
-				let name = name.as_ref();
-				if has_reactive_override(name) {
-					return true;
-				}
-				if crate::component::into_page::controlled_attribute_is_overridden(
-					element.bound_control(),
-					name,
-				) {
-					return true;
-				}
-				let expected = if is_boolean_attr(name) && !is_boolean_attr_truthy(value) {
-					None
-				} else {
-					Some(value.as_ref())
-				};
-				existing_element.get_attribute(name).as_deref() == expected
-			}) && element
+			let expected_attrs_match = element
+				.attrs()
+				.iter()
+				.enumerate()
+				.filter(|(index, _)| {
+					crate::component::into_page::static_attribute_is_effective(
+						element.attrs(),
+						*index,
+					)
+				})
+				.all(|(_, (name, value))| {
+					let name = name.as_ref();
+					if has_reactive_override(name) {
+						return true;
+					}
+					if crate::component::into_page::controlled_attribute_is_overridden(
+						element.bound_control(),
+						name,
+					) {
+						return true;
+					}
+					let expected = if is_boolean_attr(name) && !is_boolean_attr_truthy(value) {
+						None
+					} else {
+						Some(value.as_ref())
+					};
+					existing_element.get_attribute(name).as_deref() == expected
+				}) && element
 				.reactive_attrs()
 				.iter()
 				.enumerate()
@@ -1147,13 +1157,16 @@ fn mount_before_marker(marker: &web_sys::Comment, view: Page) -> Vec<web_sys::No
 					.expect("should create element");
 
 				// Set attributes
-				for (name, value) in attrs {
-					if !is_safe_html_attribute(&name, &value) {
+				for (index, (name, value)) in attrs.iter().enumerate() {
+					if !crate::component::into_page::static_attribute_is_effective(&attrs, index) {
+						continue;
+					}
+					if !is_safe_html_attribute(name, value) {
 						continue;
 					}
 					// Skip falsy boolean attributes
 					let name_str: &str = name.as_ref();
-					if is_boolean_attr(name_str) && !is_boolean_attr_truthy(&value) {
+					if is_boolean_attr(name_str) && !is_boolean_attr_truthy(value) {
 						continue;
 					}
 					if crate::component::into_page::controlled_attribute_is_overridden(
@@ -1162,7 +1175,7 @@ fn mount_before_marker(marker: &web_sys::Comment, view: Page) -> Vec<web_sys::No
 					) {
 						continue;
 					}
-					let _ = element.set_attribute(&name, &value);
+					let _ = element.set_attribute(name, value);
 				}
 
 				let element_wrapper = crate::dom::Element::new(element.clone());
@@ -1195,16 +1208,20 @@ fn mount_before_marker(marker: &web_sys::Comment, view: Page) -> Vec<web_sys::No
 						let attribute = attribute.clone();
 						let element = element_wrapper.clone();
 						let binding = control_binding.clone();
-						let reconcile_on_attribute_change =
-							binding.as_ref().is_some_and(|binding| {
-								crate::component::into_page::controlled_attribute_affects_value(
-									binding,
-									attribute.name(),
-								)
-							});
 						let initializing = std::rc::Rc::clone(&initializing_reactive_attributes);
 						Effect::new(move || {
-							match attribute.value() {
+							let value = attribute.value();
+							if binding.as_ref().is_some_and(|binding| {
+								!crate::control_binding::controlled_attribute_update_is_supported(
+									&element.as_web_sys().tag_name(),
+									binding.kind(),
+									attribute.name(),
+									value.as_deref(),
+								)
+							}) {
+								return;
+							}
+							match value {
 								Some(value)
 									if !is_safe_html_attribute(attribute.name(), &value) =>
 								{
@@ -1224,12 +1241,15 @@ fn mount_before_marker(marker: &web_sys::Comment, view: Page) -> Vec<web_sys::No
 								}
 							}
 							if !initializing.get()
-								&& reconcile_on_attribute_change
 								&& let Some(binding) = binding.as_ref()
-								&& let Err(error) =
-									crate::dom::control_binding::reconcile_control_binding(
-										&element, binding,
-									) {
+								&& crate::component::into_page::controlled_attribute_affects_value(
+									&element,
+									binding,
+									attribute.name(),
+								) && let Err(error) =
+								crate::dom::control_binding::reconcile_control_binding(
+									&element, binding,
+								) {
 								web_sys::console::error_1(
 									&format!("controlled input attribute update failed: {error}")
 										.into(),
@@ -1238,6 +1258,12 @@ fn mount_before_marker(marker: &web_sys::Comment, view: Page) -> Vec<web_sys::No
 						})
 					})
 					.collect::<Vec<_>>();
+				if let Some(binding) = control_binding.as_ref() {
+					crate::component::into_page::initialize_control_default(
+						&element_wrapper,
+						binding,
+					);
+				}
 				if !reactive_attribute_effects.is_empty() {
 					initializing_reactive_attributes.set(false);
 					if let Some(binding) = control_binding.as_ref() {
@@ -1246,13 +1272,6 @@ fn mount_before_marker(marker: &web_sys::Comment, view: Page) -> Vec<web_sys::No
 							binding,
 						)?;
 					}
-				}
-
-				if let Some(binding) = control_binding.as_ref() {
-					crate::component::into_page::initialize_control_default(
-						&element_wrapper,
-						binding,
-					);
 				}
 				let binding_controller = control_binding
 					.clone()

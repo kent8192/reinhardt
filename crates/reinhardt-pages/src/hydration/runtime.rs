@@ -1306,6 +1306,7 @@ fn attach_hydrated_element_events(
 			.map_err(|error| HydrationError::EventAttachmentFailed(error.to_string()))?;
 	}
 
+	let initializing_reactive_attributes = std::rc::Rc::new(std::cell::Cell::new(true));
 	let reactive_attribute_effects = element_view
 		.reactive_attrs()
 		.iter()
@@ -1326,8 +1327,20 @@ fn attach_hydrated_element_events(
 		.map(|attribute| {
 			let element = element.clone();
 			let binding = element_view.bound_control().cloned();
+			let initializing = std::rc::Rc::clone(&initializing_reactive_attributes);
 			crate::reactive::Effect::new(move || {
-				match attribute.value() {
+				let value = attribute.value();
+				if binding.as_ref().is_some_and(|binding| {
+					!crate::control_binding::controlled_attribute_update_is_supported(
+						&element.as_web_sys().tag_name(),
+						binding.kind(),
+						attribute.name(),
+						value.as_deref(),
+					)
+				}) {
+					return;
+				}
+				match value {
 					Some(value)
 						if !reinhardt_core::types::page::is_safe_html_attribute(
 							attribute.name(),
@@ -1348,9 +1361,14 @@ fn attach_hydrated_element_events(
 						let _ = element.remove_attribute(attribute.name());
 					}
 				}
-				if let Some(binding) = binding.as_ref()
-					&& let Err(error) =
-						crate::dom::control_binding::reconcile_control_binding(&element, binding)
+				if !initializing.get()
+					&& let Some(binding) = binding.as_ref()
+					&& crate::component::into_page::controlled_attribute_affects_value(
+						&element,
+						binding,
+						attribute.name(),
+					) && let Err(error) =
+					crate::dom::control_binding::reconcile_control_binding(&element, binding)
 				{
 					web_sys::console::error_1(
 						&format!("controlled input attribute update failed: {error}").into(),
@@ -1359,6 +1377,28 @@ fn attach_hydrated_element_events(
 			})
 		})
 		.collect::<Vec<_>>();
+	initializing_reactive_attributes.set(false);
+	if registry.should_hydrate_control_bindings()
+		&& let Some(binding) = element_view.bound_control()
+		&& (binding.kind() != crate::component::ControlKind::Number
+			|| (element
+				.as_web_sys()
+				.tag_name()
+				.eq_ignore_ascii_case("input")
+				&& element
+					.as_web_sys()
+					.get_attribute("type")
+					.is_some_and(|input_type| input_type.eq_ignore_ascii_case("range"))))
+		&& element_view.reactive_attrs().iter().any(|attribute| {
+			crate::component::into_page::controlled_attribute_affects_value(
+				element,
+				binding,
+				attribute.name(),
+			)
+		}) {
+		crate::dom::control_binding::reconcile_control_binding(element, binding)
+			.map_err(|error| HydrationError::EventAttachmentFailed(error.to_string()))?;
+	}
 	store_reactive_node(ReactiveAttributeEffects::new(reactive_attribute_effects));
 
 	Ok(())

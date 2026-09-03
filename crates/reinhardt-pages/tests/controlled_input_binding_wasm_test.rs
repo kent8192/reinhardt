@@ -10,6 +10,7 @@ use reinhardt_pages::component::{
 use reinhardt_pages::dom::Element;
 use reinhardt_pages::reactive::{ReactiveScope, Signal, with_runtime};
 use reinhardt_pages::{PageElement, page};
+use rstest::rstest;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_test::*;
@@ -119,6 +120,716 @@ fn unrelated_reactive_attributes_preserve_an_active_control_edit() {
 
 		assert_eq!(value.get(), "bound");
 		assert_eq!(input.value(), "draft");
+		reinhardt_pages::cleanup_reactive_nodes();
+	});
+}
+
+#[rstest]
+#[case(false)]
+#[case(true)]
+#[wasm_bindgen_test]
+fn initial_range_reconciliation_uses_the_bound_value_as_the_step_base(
+	#[case] nested_in_reactive_if: bool,
+) {
+	ReactiveScope::run(|| {
+		// Arrange
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let root = Element::new(document.create_element("div").expect("root"));
+		let value = Signal::new(3_i32);
+		let range_value = value.clone();
+		let range = move || {
+			PageElement::new("input")
+				.attr("type", "range")
+				.attr("step", "2")
+				.reactive_attr("class", || Some("stepped".into()))
+				.control_binding(ControlBinding::number(range_value.clone()))
+				.into_page()
+		};
+		let page = if nested_in_reactive_if {
+			Page::reactive_if(|| true, range, || Page::Empty)
+		} else {
+			range()
+		};
+
+		// Act
+		page.mount(&root).expect("mount");
+		let input: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("range")
+			.unchecked_into();
+
+		// Assert
+		assert_eq!(value.get(), 3);
+		assert_eq!(input.value(), "3");
+		assert_eq!(input.get_attribute("value").as_deref(), Some("3"));
+		reinhardt_pages::cleanup_reactive_nodes();
+	});
+}
+
+#[rstest]
+#[case(false)]
+#[case(true)]
+#[wasm_bindgen_test]
+fn reactive_multiple_reconciles_email_value_sanitization(#[case] nested_in_reactive_if: bool) {
+	ReactiveScope::run(|| {
+		// Arrange
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let root = Element::new(document.create_element("div").expect("root"));
+		let value = Signal::new("a@example.test,  b@example.test ".to_owned());
+		let multiple = Signal::new(false);
+		let reactive_multiple = multiple.clone();
+		let email_value = value.clone();
+		let email = move || {
+			let reactive_multiple = reactive_multiple.clone();
+			PageElement::new("input")
+				.attr("type", "email")
+				.reactive_attr("multiple", move || {
+					Some(reactive_multiple.get().to_string().into())
+				})
+				.control_binding(ControlBinding::text(email_value.clone()))
+				.into_page()
+		};
+		let page = if nested_in_reactive_if {
+			Page::reactive_if(|| true, email, || Page::Empty)
+		} else {
+			email()
+		};
+		page.mount(&root).expect("mount");
+		let input: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("email")
+			.unchecked_into();
+
+		// Act
+		multiple.set(true);
+
+		// Assert
+		assert_eq!(value.get(), "a@example.test,b@example.test");
+		assert_eq!(input.value(), "a@example.test,b@example.test");
+		reinhardt_pages::cleanup_reactive_nodes();
+	});
+}
+
+#[rstest]
+#[case(false)]
+#[case(true)]
+#[wasm_bindgen_test]
+fn reactive_password_type_removes_the_serialized_bound_value(#[case] nested_in_reactive_if: bool) {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_form = document.create_element("form").expect("form");
+		let form: web_sys::HtmlFormElement = raw_form.clone().unchecked_into();
+		let root = Element::new(raw_form);
+		let password_type = Signal::new(false);
+		let reactive_password_type = password_type;
+		let value = Signal::new("secret".to_owned());
+		let bound_value = value;
+		let input = move || {
+			let reactive_password_type = reactive_password_type;
+			PageElement::new("input")
+				.attr("type", "text")
+				.reactive_attr("type", move || {
+					Some(if reactive_password_type.get() {
+						"password".into()
+					} else {
+						"text".into()
+					})
+				})
+				.control_binding(ControlBinding::text(bound_value))
+				.into_page()
+		};
+		let page = if nested_in_reactive_if {
+			Page::reactive_if(|| true, input, || Page::Empty)
+		} else {
+			input()
+		};
+		page.mount(&root).expect("mount");
+		let input: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("input")
+			.unchecked_into();
+
+		password_type.set(true);
+		with_runtime(|runtime| runtime.flush_updates());
+
+		assert_eq!(input.type_(), "password");
+		assert_eq!(input.value(), "secret");
+		assert_eq!(input.get_attribute("value"), None);
+		assert_eq!(value.get(), "secret");
+
+		password_type.set(false);
+		with_runtime(|runtime| runtime.flush_updates());
+		input.set_value("draft");
+		form.reset();
+
+		assert_eq!(input.type_(), "text");
+		assert_eq!(input.value(), "secret");
+		reinhardt_pages::cleanup_reactive_nodes();
+	});
+}
+
+#[rstest]
+#[case(false)]
+#[case(true)]
+#[wasm_bindgen_test]
+fn reactive_text_binding_rejects_file_type_transition(#[case] nested_in_reactive_if: bool) {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_root = document.create_element("div").expect("root");
+		let _cleanup = AttachedRootCleanup(raw_root.clone());
+		let root = Element::new(raw_root);
+		let file_type = Signal::new(false);
+		let reactive_file_type = file_type;
+		let value = Signal::new("bound".to_owned());
+		let bound_value = value;
+		let input = move || {
+			let reactive_file_type = reactive_file_type;
+			PageElement::new("input")
+				.attr("type", "text")
+				.reactive_attr("type", move || {
+					Some(if reactive_file_type.get() {
+						"file".into()
+					} else {
+						"text".into()
+					})
+				})
+				.control_binding(ControlBinding::text(bound_value))
+				.into_page()
+		};
+		let page = if nested_in_reactive_if {
+			Page::reactive_if(|| true, input, || Page::Empty)
+		} else {
+			input()
+		};
+		page.mount(&root).expect("mount");
+		let input: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("input")
+			.unchecked_into();
+
+		file_type.set(true);
+		with_runtime(|runtime| runtime.flush_updates());
+
+		assert_eq!(input.type_(), "text");
+		assert_eq!(input.value(), "bound");
+		assert_eq!(value.get(), "bound");
+	});
+}
+
+#[rstest]
+#[case(false, false)]
+#[case(false, true)]
+#[case(true, false)]
+#[case(true, true)]
+#[wasm_bindgen_test]
+fn reactive_select_cardinality_changes_are_rejected(
+	#[case] starts_multiple: bool,
+	#[case] nested_in_reactive_if: bool,
+) {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_root = document.create_element("div").expect("root");
+		let _cleanup = AttachedRootCleanup(raw_root.clone());
+		let root = Element::new(raw_root);
+		let multiple = Signal::new(starts_multiple);
+		let reactive_multiple = multiple;
+		let binding = if starts_multiple {
+			ControlBinding::select_many(Signal::new(vec!["rust".to_owned()]))
+		} else {
+			ControlBinding::select_one(Signal::new("rust".to_owned()))
+		};
+		let select = move || {
+			let reactive_multiple = reactive_multiple;
+			let element = PageElement::new("select");
+			let element = if starts_multiple {
+				element.attr("multiple", "multiple")
+			} else {
+				element
+			};
+			element
+				.reactive_attr("multiple", move || {
+					Some(reactive_multiple.get().to_string().into())
+				})
+				.control_binding(binding.clone())
+				.child(
+					PageElement::new("option")
+						.attr("value", "rust")
+						.child("Rust"),
+				)
+				.child(
+					PageElement::new("option")
+						.attr("value", "wasm")
+						.child("WebAssembly"),
+				)
+				.into_page()
+		};
+		let page = if nested_in_reactive_if {
+			Page::reactive_if(|| true, select, || Page::Empty)
+		} else {
+			select()
+		};
+		page.mount(&root).expect("mount");
+		let select: web_sys::HtmlSelectElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("select")
+			.unchecked_into();
+
+		multiple.set(!starts_multiple);
+		with_runtime(|runtime| runtime.flush_updates());
+
+		assert_eq!(select.multiple(), starts_multiple);
+	});
+}
+
+#[rstest]
+#[case(false)]
+#[case(true)]
+#[wasm_bindgen_test]
+fn duplicate_static_password_type_uses_the_browser_first_value(
+	#[case] nested_in_reactive_if: bool,
+) {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let root = Element::new(document.create_element("div").expect("root"));
+		let value = Signal::new("secret".to_owned());
+		let bound_value = value;
+		let input = move || {
+			PageElement::new("input")
+				.attr("type", "password")
+				.attr("type", "text")
+				.control_binding(ControlBinding::text(bound_value))
+				.into_page()
+		};
+		let page = if nested_in_reactive_if {
+			Page::reactive_if(|| true, input, || Page::Empty)
+		} else {
+			input()
+		};
+		page.mount(&root).expect("mount");
+		let input: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("input")
+			.unchecked_into();
+
+		assert_eq!(input.type_(), "password");
+		assert_eq!(input.value(), "secret");
+		assert_eq!(input.get_attribute("value"), None);
+		assert_eq!(value.get(), "secret");
+		reinhardt_pages::cleanup_reactive_nodes();
+	});
+}
+
+struct HydratedReactiveAttributeInput {
+	invalid: Signal<bool>,
+	value: Signal<String>,
+}
+
+struct HydratedReactivePasswordInput {
+	password_type: Signal<bool>,
+	value: Signal<String>,
+}
+
+struct HydratedRejectedReactiveTypeInput {
+	file_type: Signal<bool>,
+	value: Signal<String>,
+}
+
+struct HydratedDuplicateStaticPasswordInput {
+	value: Signal<String>,
+}
+
+struct HydratedReactiveNumberInput {
+	max: Signal<u16>,
+	value: Signal<u8>,
+}
+
+struct HydratedReactiveRangeInput {
+	max: Signal<u16>,
+	value: Signal<u8>,
+}
+
+impl Component for HydratedReactivePasswordInput {
+	fn name() -> &'static str {
+		"HydratedReactivePasswordInput"
+	}
+
+	fn render(&self) -> Page {
+		let password_type = self.password_type;
+		PageElement::new("input")
+			.attr("type", "text")
+			.reactive_attr("type", move || {
+				Some(if password_type.get() {
+					"password".into()
+				} else {
+					"text".into()
+				})
+			})
+			.control_binding(ControlBinding::text(self.value))
+			.into_page()
+	}
+}
+
+impl Component for HydratedRejectedReactiveTypeInput {
+	fn name() -> &'static str {
+		"HydratedRejectedReactiveTypeInput"
+	}
+
+	fn render(&self) -> Page {
+		let file_type = self.file_type;
+		let value = self.value;
+		PageElement::new("div")
+			.child(Page::reactive(move || {
+				let reactive_file_type = file_type;
+				PageElement::new("input")
+					.attr("type", "text")
+					.reactive_attr("type", move || {
+						Some(if reactive_file_type.get() {
+							"file".into()
+						} else {
+							"text".into()
+						})
+					})
+					.control_binding(ControlBinding::text(value))
+					.into_page()
+			}))
+			.into_page()
+	}
+}
+
+impl Component for HydratedDuplicateStaticPasswordInput {
+	fn name() -> &'static str {
+		"HydratedDuplicateStaticPasswordInput"
+	}
+
+	fn render(&self) -> Page {
+		PageElement::new("input")
+			.attr("type", "password")
+			.attr("type", "text")
+			.control_binding(ControlBinding::text(self.value))
+			.into_page()
+	}
+}
+
+impl Component for HydratedReactiveNumberInput {
+	fn name() -> &'static str {
+		"HydratedReactiveNumberInput"
+	}
+
+	fn render(&self) -> Page {
+		let max = self.max;
+		PageElement::new("input")
+			.attr("type", "number")
+			.reactive_attr("max", move || Some(max.get().to_string().into()))
+			.control_binding(ControlBinding::number(self.value))
+			.into_page()
+	}
+}
+
+impl Component for HydratedReactiveRangeInput {
+	fn name() -> &'static str {
+		"HydratedReactiveRangeInput"
+	}
+
+	fn render(&self) -> Page {
+		let max = self.max;
+		PageElement::new("input")
+			.attr("type", "range")
+			.reactive_attr("max", move || Some(max.get().to_string().into()))
+			.control_binding(ControlBinding::number(self.value))
+			.into_page()
+	}
+}
+
+impl Component for HydratedReactiveAttributeInput {
+	fn name() -> &'static str {
+		"HydratedReactiveAttributeInput"
+	}
+
+	fn render(&self) -> Page {
+		let invalid = self.invalid.clone();
+		PageElement::new("input")
+			.attr("type", "text")
+			.reactive_attr("aria-invalid", move || {
+				Some(invalid.get().to_string().into())
+			})
+			.control_binding(ControlBinding::text(self.value.clone()))
+			.into_page()
+	}
+}
+
+#[rstest]
+#[wasm_bindgen_test]
+fn hydrated_unrelated_reactive_attributes_preserve_an_active_control_edit() {
+	ReactiveScope::run(|| {
+		// Arrange
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_input = document.create_element("input").expect("input");
+		raw_input.set_attribute("type", "text").expect("input type");
+		raw_input
+			.set_attribute("aria-invalid", "false")
+			.expect("initial reactive attribute");
+		let input: web_sys::HtmlInputElement = raw_input.clone().unchecked_into();
+		input.set_value("bound");
+		let root = Element::new(raw_input);
+		let invalid = Signal::new(false);
+		let value = Signal::new("bound".to_owned());
+		let _state = SsrStateElement::install(&document);
+		reinhardt_pages::hydration::hydrate(
+			&HydratedReactiveAttributeInput {
+				invalid: invalid.clone(),
+				value: value.clone(),
+			},
+			&root,
+		)
+		.expect("hydrate");
+		input.set_value("draft");
+
+		// Act
+		invalid.set(true);
+		with_runtime(|runtime| runtime.flush_updates());
+
+		// Assert
+		assert_eq!(value.get(), "bound");
+		assert_eq!(input.value(), "draft");
+		reinhardt_pages::cleanup_reactive_nodes();
+	});
+}
+
+#[rstest]
+#[wasm_bindgen_test]
+fn hydrated_password_type_removes_the_serialized_bound_value() {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_input = document.create_element("input").expect("input");
+		raw_input.set_attribute("type", "text").expect("input type");
+		raw_input
+			.set_attribute("value", "secret")
+			.expect("serialized value");
+		let raw_form = document.create_element("form").expect("form");
+		raw_form.append_child(&raw_input).expect("form input");
+		let form: web_sys::HtmlFormElement = raw_form.unchecked_into();
+		let input: web_sys::HtmlInputElement = raw_input.clone().unchecked_into();
+		let root = Element::new(raw_input);
+		let password_type = Signal::new(false);
+		let value = Signal::new("secret".to_owned());
+		let _state = SsrStateElement::install(&document);
+		reinhardt_pages::hydration::hydrate(
+			&HydratedReactivePasswordInput {
+				password_type,
+				value,
+			},
+			&root,
+		)
+		.expect("hydrate");
+
+		password_type.set(true);
+		with_runtime(|runtime| runtime.flush_updates());
+
+		assert_eq!(input.type_(), "password");
+		assert_eq!(input.value(), "secret");
+		assert_eq!(input.get_attribute("value"), None);
+		assert_eq!(value.get(), "secret");
+
+		password_type.set(false);
+		with_runtime(|runtime| runtime.flush_updates());
+		input.set_value("draft");
+		form.reset();
+
+		assert_eq!(input.type_(), "text");
+		assert_eq!(input.value(), "secret");
+		reinhardt_pages::cleanup_reactive_nodes();
+	});
+}
+
+#[rstest]
+#[wasm_bindgen_test]
+fn hydration_initial_password_type_removes_the_serialized_bound_value() {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_input = document.create_element("input").expect("input");
+		raw_input.set_attribute("type", "text").expect("input type");
+		raw_input
+			.set_attribute("value", "secret")
+			.expect("serialized value");
+		let input: web_sys::HtmlInputElement = raw_input.clone().unchecked_into();
+		let _cleanup = AttachedRootCleanup(raw_input.clone());
+		let root = Element::new(raw_input);
+		let password_type = Signal::new(true);
+		let value = Signal::new("secret".to_owned());
+		let _state = SsrStateElement::install(&document);
+
+		reinhardt_pages::hydration::hydrate(
+			&HydratedReactivePasswordInput {
+				password_type,
+				value,
+			},
+			&root,
+		)
+		.expect("hydrate");
+
+		assert_eq!(input.type_(), "password");
+		assert_eq!(input.value(), "secret");
+		assert_eq!(input.get_attribute("value"), None);
+		assert_eq!(value.get(), "secret");
+	});
+}
+
+#[wasm_bindgen_test]
+fn hydration_preserves_an_adopted_control_after_rejecting_its_initial_type() {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_root = document.create_element("div").expect("root");
+		let raw_input = document.create_element("input").expect("input");
+		raw_input.set_attribute("type", "text").expect("input type");
+		raw_input
+			.set_attribute("value", "server")
+			.expect("serialized value");
+		raw_root.append_child(&raw_input).expect("SSR child");
+		let input: web_sys::HtmlInputElement = raw_input.clone().unchecked_into();
+		let _cleanup = AttachedRootCleanup(raw_root.clone());
+		let root = Element::new(raw_root);
+		let file_type = Signal::new(true);
+		let value = Signal::new("server".to_owned());
+		let _state = SsrStateElement::install(&document);
+
+		reinhardt_pages::hydration::hydrate(
+			&HydratedRejectedReactiveTypeInput { file_type, value },
+			&root,
+		)
+		.expect("hydrate");
+
+		assert!(raw_input.is_same_node(root.as_web_sys().first_element_child().as_deref()));
+		assert_eq!(input.type_(), "text");
+		assert_eq!(input.value(), "server");
+		assert_eq!(value.get(), "server");
+	});
+}
+
+#[rstest]
+#[wasm_bindgen_test]
+fn hydration_initial_reactive_attributes_preserve_rejected_numeric_edits() {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_input = document.create_element("input").expect("input");
+		raw_input
+			.set_attribute("type", "number")
+			.expect("input type");
+		raw_input.set_attribute("max", "500").expect("input max");
+		let input: web_sys::HtmlInputElement = raw_input.clone().unchecked_into();
+		let _cleanup = AttachedRootCleanup(raw_input.clone());
+		input.set_value("300");
+		let root = Element::new(raw_input);
+		let max = Signal::new(500_u16);
+		let value = Signal::new(7_u8);
+		let _state = SsrStateElement::install(&document);
+
+		reinhardt_pages::hydration::hydrate(&HydratedReactiveNumberInput { max, value }, &root)
+			.expect("hydrate rejected numeric edit");
+
+		assert_eq!(input.value(), "300");
+		assert_eq!(value.get(), 7);
+	});
+}
+
+#[rstest]
+#[wasm_bindgen_test]
+fn hydration_initial_reactive_range_constraint_reconciles_browser_sanitization() {
+	ReactiveScope::run(|| {
+		// Arrange
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_input = document.create_element("input").expect("input");
+		raw_input
+			.set_attribute("type", "range")
+			.expect("input type");
+		raw_input.set_attribute("max", "100").expect("SSR max");
+		raw_input.set_attribute("value", "100").expect("SSR value");
+		let input: web_sys::HtmlInputElement = raw_input.clone().unchecked_into();
+		let _cleanup = AttachedRootCleanup(raw_input.clone());
+		let root = Element::new(raw_input);
+		let max = Signal::new(50_u16);
+		let value = Signal::new(100_u8);
+		let _state = SsrStateElement::install(&document);
+
+		// Act
+		reinhardt_pages::hydration::hydrate(&HydratedReactiveRangeInput { max, value }, &root)
+			.expect("hydrate range with a narrower reactive maximum");
+
+		// Assert
+		assert_eq!(
+			(input.max(), input.value(), value.get()),
+			("50".to_owned(), "50".to_owned(), 50)
+		);
+	});
+}
+
+#[rstest]
+#[wasm_bindgen_test]
+fn hydration_accepts_the_browser_first_static_password_type() {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_input = document.create_element("input").expect("input");
+		raw_input
+			.set_attribute("type", "password")
+			.expect("input type");
+		raw_input
+			.set_attribute("data-rh-password-omitted", "true")
+			.expect("password omission marker");
+		let input: web_sys::HtmlInputElement = raw_input.clone().unchecked_into();
+		let root = Element::new(raw_input);
+		let value = Signal::new("secret".to_owned());
+		let _state = SsrStateElement::install(&document);
+		reinhardt_pages::hydration::hydrate(&HydratedDuplicateStaticPasswordInput { value }, &root)
+			.expect("hydrate");
+
+		assert_eq!(input.type_(), "password");
+		assert_eq!(input.value(), "secret");
+		assert_eq!(input.get_attribute("value"), None);
+		assert_eq!(value.get(), "secret");
 		reinhardt_pages::cleanup_reactive_nodes();
 	});
 }

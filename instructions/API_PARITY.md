@@ -19,6 +19,20 @@ The level applies per symbol. A type can be P1 while selected methods are P0.
 |---|---|---|
 | `page!` controlled `bind:` directive and `control_binding` support types | Renders signal state during SSR and synchronizes values in native component tests. | Adopts the live control property during hydration, then synchronizes user and signal writes. |
 
+Both targets apply browser text-fallback sanitization for unknown input types
+and ignore reactive type or select-cardinality changes that would invalidate an
+existing binding.
+
+## P1 API Surface
+
+| API | Native behavior | WASM behavior |
+|---|---|---|
+| `UnifiedRouter::server` | Invokes the closure and stores native server routes. | Type-checks and drops the closure without invoking it. |
+| `UnifiedRouter::client` | Type-checks and drops the closure without invoking it. | Invokes the closure and stores client routes. |
+
+Inactive `UnifiedRouter` closures must not contain required side effects. Each
+active target must have an executable test proving its route configuration.
+
 ## Stub Taxonomy
 
 - Mirror: the same user-facing operation is meaningful on both targets.

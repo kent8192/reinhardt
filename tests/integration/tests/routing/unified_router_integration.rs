@@ -1,7 +1,6 @@
 //! Integration tests for UnifiedRouter with hierarchical routing and namespace support
 
 use async_trait::async_trait;
-use reinhardt_core::reactive::ReactiveScope;
 use reinhardt_core::ws::WebSocketEndpointInfo;
 use reinhardt_di::{DiRegistrationList, InjectionContext, SingletonScope};
 use reinhardt_grpc::{GrpcRouteError, GrpcRouter};
@@ -190,26 +189,24 @@ fn native_merge_preserves_protocol_order_and_namespaces() {
 
 #[test]
 fn native_mount_prefixes_websocket_and_validates_grpc_prefixes() {
-	ReactiveScope::run(|| {
-		let root = UnifiedRouter::new()
-			.client(|client| client)
-			.mount_unified("/", chat_routes().client(|client| client))
-			.__into_native_routes();
-		let non_root = UnifiedRouter::new()
-			.client(|client| client)
-			.mount_unified("/api/", notification_routes().client(|client| client))
-			.__into_native_routes();
+	let root = UnifiedRouter::new()
+		.client(|client| client)
+		.mount_unified("/", chat_routes().client(|client| client))
+		.__into_native_routes();
+	let non_root = UnifiedRouter::new()
+		.client(|client| client)
+		.mount_unified("/api/", notification_routes().client(|client| client))
+		.__into_native_routes();
 
-		assert_eq!(root.websocket.routes()[0].path(), "/chat/");
-		assert_eq!(root.grpc.len(), 1);
-		assert_eq!(non_root.websocket.routes()[0].path(), "/api/notifications/");
-		assert_eq!(
-			non_root.grpc.validation_errors(),
-			[GrpcRouteError::NonRootMount {
-				prefix: "/api/".into()
-			}]
-		);
-	});
+	assert_eq!(root.websocket.routes()[0].path(), "/chat/");
+	assert_eq!(root.grpc.len(), 1);
+	assert_eq!(non_root.websocket.routes()[0].path(), "/api/notifications/");
+	assert_eq!(
+		non_root.grpc.validation_errors(),
+		[GrpcRouteError::NonRootMount {
+			prefix: "/api/".into()
+		}]
+	);
 }
 
 #[test]

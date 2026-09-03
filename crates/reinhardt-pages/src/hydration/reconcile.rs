@@ -472,7 +472,10 @@ fn reconcile_attrs_at_path(
 	path: ReconcilePath,
 	inside_controlled_select: bool,
 ) -> Result<(), ReconcileError> {
-	for (name, value) in el_view.attrs() {
+	for (index, (name, value)) in el_view.attrs().iter().enumerate() {
+		if !crate::component::into_page::static_attribute_is_effective(el_view.attrs(), index) {
+			continue;
+		}
 		let name_str = name.as_ref();
 		let has_reactive_override = el_view
 			.reactive_attrs()

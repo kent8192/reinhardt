@@ -586,17 +586,35 @@ impl TestDom {
 
 	pub(crate) fn refresh_control_bindings(&mut self) {
 		let mut selects = Vec::new();
-		for (node_id, node) in self.nodes.iter_mut().enumerate() {
-			let TestNode::Element(element) = node else {
+		for node_id in 0..self.nodes.len() {
+			let binding = {
+				let TestNode::Element(element) = &mut self.nodes[node_id] else {
+					continue;
+				};
+				element.refresh_reactive_attributes();
+				element.control_binding.clone()
+			};
+			let Some(binding) = binding else {
 				continue;
 			};
-			element.refresh_reactive_attributes();
-			let Some(binding) = element.control_binding.clone() else {
+			let conflicting_range = {
+				let TestNode::Element(element) = &self.nodes[node_id] else {
+					continue;
+				};
+				has_conflicting_native_range_binding(&self.nodes, Some(node_id), element, &binding)
+			};
+			let TestNode::Element(element) = &mut self.nodes[node_id] else {
 				continue;
 			};
 			let value = binding.read();
 			let normalized = normalize_native_control_value(element, &binding, value.clone());
-			let applied = apply_native_control_normalization(element, &binding, &value, normalized);
+			let applied = apply_native_control_normalization(
+				element,
+				&binding,
+				&value,
+				normalized,
+				!conflicting_range,
+			);
 			let signal_revision = reinhardt_core::reactive::with_runtime(|runtime| {
 				runtime.signal_revision(binding.target())
 			});
@@ -742,13 +760,21 @@ impl TestDom {
 						element_node.control_binding.clone(),
 						last_observed_control_value,
 					) {
+					element_node.project_controlled_attributes(&binding, &value);
 					let normalized =
 						normalize_native_control_value(&element_node, &binding, value.clone());
+					let normalization_write_back_allowed = !has_conflicting_native_range_binding(
+						&self.nodes,
+						None,
+						&element_node,
+						&binding,
+					);
 					let applied = apply_native_control_normalization(
 						&element_node,
 						&binding,
 						&value,
 						normalized,
+						normalization_write_back_allowed,
 					);
 					element_node.last_observed_control_value = Some(binding.read());
 					element_node.last_observed_signal_revision =
@@ -1077,7 +1103,7 @@ impl ElementNode {
 			ControlKind::Text => {
 				self.tag.eq_ignore_ascii_case("textarea")
 					|| (self.tag.eq_ignore_ascii_case("input")
-						&& has_effective_text_type(self.attr("type")))
+						&& crate::control_binding::is_effective_text_input_type(self.attr("type")))
 			}
 			ControlKind::Number => {
 				self.tag.eq_ignore_ascii_case("input")
@@ -1156,6 +1182,11 @@ impl ElementNode {
 	}
 
 	fn project_controlled_attributes(&mut self, binding: &ControlBinding, value: &ControlValue) {
+		let omits_password_value = binding.kind() == ControlKind::Text
+			&& self.tag.eq_ignore_ascii_case("input")
+			&& self
+				.attr("type")
+				.is_some_and(|input_type| input_type.eq_ignore_ascii_case("password"));
 		let projects_value = self.tag.eq_ignore_ascii_case("input")
 			&& matches!(
 				binding.kind(),
@@ -1172,7 +1203,7 @@ impl ElementNode {
 				ControlKind::Radio => binding.radio_value(),
 				_ => None,
 			};
-			if let Some(value) = projected_value {
+			if let Some(value) = projected_value.filter(|_| !omits_password_value) {
 				self.attrs.push(("value".to_owned(), value.to_owned()));
 			}
 		}
@@ -1195,9 +1226,20 @@ impl ElementNode {
 			{
 				continue;
 			}
+			let value = attribute.value();
+			if self.control_binding.as_ref().is_some_and(|binding| {
+				!crate::control_binding::controlled_attribute_update_is_supported(
+					&self.tag,
+					binding.kind(),
+					attribute.name(),
+					value.as_deref(),
+				)
+			}) {
+				continue;
+			}
 			self.attrs
 				.retain(|(name, _)| !name.eq_ignore_ascii_case(attribute.name()));
-			if let Some(value) = attribute.value()
+			if let Some(value) = value
 				&& (!is_boolean_attr(attribute.name()) || is_boolean_attr_truthy(&value))
 			{
 				self.attrs
@@ -1246,32 +1288,6 @@ impl ElementNode {
 	}
 }
 
-fn has_effective_text_type(input_type: Option<&str>) -> bool {
-	let Some(input_type) = input_type else {
-		return true;
-	};
-	crate::control_binding::is_text_input_type(input_type)
-		|| ![
-			"button",
-			"checkbox",
-			"date",
-			"datetime-local",
-			"file",
-			"hidden",
-			"image",
-			"month",
-			"number",
-			"radio",
-			"range",
-			"reset",
-			"submit",
-			"time",
-			"week",
-		]
-		.iter()
-		.any(|known| input_type.eq_ignore_ascii_case(known))
-}
-
 fn normalize_native_control_value(
 	element: &ElementNode,
 	binding: &ControlBinding,
@@ -1287,14 +1303,23 @@ fn normalize_native_control_value(
 	if binding.kind() == ControlKind::Text && input_type.eq_ignore_ascii_case("color") {
 		return ControlValue::Text(normalize_native_color_value(&raw));
 	}
-	if binding.kind() == ControlKind::Text && crate::control_binding::is_text_input_type(input_type)
+	if binding.kind() == ControlKind::Text
+		&& crate::control_binding::is_effective_text_input_type(Some(input_type))
 	{
 		let mut normalized = if input_type_removes_line_breaks(input_type) {
 			raw.replace(['\r', '\n'], "")
 		} else {
 			raw
 		};
-		if ["url", "email"]
+		if input_type.eq_ignore_ascii_case("email")
+			&& element.attr("multiple").is_some_and(is_boolean_attr_truthy)
+		{
+			normalized = normalized
+				.split(',')
+				.map(|value| value.trim_matches(|character: char| character.is_ascii_whitespace()))
+				.collect::<Vec<_>>()
+				.join(",");
+		} else if ["url", "email"]
 			.iter()
 			.any(|known| input_type.eq_ignore_ascii_case(known))
 		{
@@ -1319,41 +1344,24 @@ fn normalize_native_control_value(
 	if binding.kind() != ControlKind::Number || !input_type.eq_ignore_ascii_case("range") {
 		return ControlValue::Text(raw);
 	}
-	let Ok(number) = raw.parse::<f64>() else {
+	let Some((min, max, step, step_base)) = native_range_constraints(element) else {
 		return ControlValue::Text(raw);
 	};
-	if !number.is_finite() {
-		return ControlValue::Text(raw);
-	}
-	let min = element
-		.attr("min")
-		.and_then(|value| value.parse::<f64>().ok())
-		.filter(|value| value.is_finite())
-		.unwrap_or(0.0);
-	let max = element
-		.attr("max")
-		.and_then(|value| value.parse::<f64>().ok())
-		.filter(|value| value.is_finite())
-		.unwrap_or(100.0);
+	let number = raw
+		.parse::<f64>()
+		.ok()
+		.filter(|number| number.is_finite())
+		.unwrap_or_else(|| if max < min { min } else { min.midpoint(max) });
 	let normalized = if max < min {
 		min
 	} else {
 		let clamped = number.clamp(min, max);
-		let step = match element.attr("step") {
-			Some(value) if value.eq_ignore_ascii_case("any") => None,
-			Some(value) => value
-				.parse::<f64>()
-				.ok()
-				.filter(|value| value.is_finite() && *value > 0.0)
-				.or(Some(1.0)),
-			None => Some(1.0),
-		};
 		match step {
 			None => clamped,
 			Some(step) => {
-				let quotient = (clamped - min) / step;
-				let lower = min + quotient.floor() * step;
-				let upper = min + quotient.ceil() * step;
+				let quotient = (clamped - step_base) / step;
+				let lower = step_base + quotient.floor() * step;
+				let upper = step_base + quotient.ceil() * step;
 				let epsilon = step * 1e-12 + f64::EPSILON;
 				let lower = (lower >= min - epsilon && lower <= max + epsilon).then_some(lower);
 				let upper = (upper >= min - epsilon && upper <= max + epsilon).then_some(upper);
@@ -1381,6 +1389,7 @@ fn normalize_native_control_value(
 	}
 }
 
+<<<<<<< HEAD
 fn input_type_removes_line_breaks(input_type: &str) -> bool {
 	["text", "search", "tel", "url", "email", "password"]
 		.iter()
@@ -1547,6 +1556,78 @@ fn weekday_of_january_first(year: u32) -> u32 {
 		weekday_sunday_zero as u32
 	}
 }
+
+fn native_range_constraints(element: &ElementNode) -> Option<(f64, f64, Option<f64>, f64)> {
+	if !element.tag.eq_ignore_ascii_case("input")
+		|| !element
+			.attr("type")
+			.is_some_and(|input_type| input_type.eq_ignore_ascii_case("range"))
+	{
+		return None;
+	}
+	let min_attribute = element
+		.attr("min")
+		.and_then(crate::control_binding::parse_html_number);
+	let min = min_attribute.unwrap_or(0.0);
+	let max = element
+		.attr("max")
+		.and_then(crate::control_binding::parse_html_number)
+		.unwrap_or(100.0);
+	let step_base = min_attribute
+		.or_else(|| {
+			element
+				.attr("value")
+				.and_then(crate::control_binding::parse_html_number)
+		})
+		.unwrap_or(0.0);
+	let step = match element.attr("step") {
+		Some(value) if value.eq_ignore_ascii_case("any") => None,
+		Some(value) => crate::control_binding::parse_html_number(value)
+			.filter(|value| value.is_finite() && *value > 0.0)
+			.or(Some(1.0)),
+		None => Some(1.0),
+	};
+	Some((min, max, step, step_base))
+}
+
+fn has_conflicting_native_range_binding(
+	nodes: &[TestNode],
+	current_node: Option<NodeId>,
+	element: &ElementNode,
+	binding: &ControlBinding,
+) -> bool {
+	if binding.kind() != ControlKind::Number {
+		return false;
+	}
+	let Some((min, max, step, step_base)) = native_range_constraints(element) else {
+		return false;
+	};
+	let constraints = (min, max.max(min), step, step_base);
+	nodes.iter().enumerate().any(|(node_id, candidate)| {
+		if current_node == Some(node_id) {
+			return false;
+		}
+		let TestNode::Element(candidate) = candidate else {
+			return false;
+		};
+		candidate
+			.control_binding
+			.as_ref()
+			.is_some_and(|candidate_binding| {
+				candidate_binding.kind() == ControlKind::Number
+					&& candidate_binding.target() == binding.target()
+					&& native_range_constraints(candidate).is_some_and(
+						|(min, max, step, step_base)| {
+							crate::control_binding::range_constraints_conflict(
+								constraints,
+								(min, max.max(min), step, step_base),
+							)
+						},
+					)
+			})
+	})
+}
+
 fn normalize_native_color_value(raw: &str) -> String {
 	let bytes = raw.as_bytes();
 	if bytes.len() == 7
@@ -1564,8 +1645,10 @@ fn apply_native_control_normalization(
 	binding: &ControlBinding,
 	original: &ControlValue,
 	normalized: ControlValue,
+	normalization_write_back_allowed: bool,
 ) -> ControlValue {
 	if &normalized == original
+		|| !normalization_write_back_allowed
 		|| !should_commit_native_normalization(element, binding, original, &normalized)
 	{
 		return normalized;
@@ -1604,6 +1687,7 @@ mod case_normalization_tests {
 	use crate::reactive::{ReactiveScope, Signal};
 	use reinhardt_core::page::IntoPage;
 	use reinhardt_core::types::page::PageElement;
+	use rstest::rstest;
 
 	fn element(tag: &str, input_type: Option<&str>) -> ElementNode {
 		ElementNode {
@@ -1677,6 +1761,37 @@ mod case_normalization_tests {
 		});
 	}
 
+	#[rstest]
+	fn native_password_control_omits_bound_value_after_reactive_type_change() {
+		ReactiveScope::run(|| {
+			let password_type = Signal::new(false);
+			let reactive_password_type = password_type;
+			let value = Signal::new("secret".to_owned());
+			let mut dom = TestDom::render(
+				PageElement::new("input")
+					.attr("type", "text")
+					.reactive_attr("type", move || {
+						Some(if reactive_password_type.get() {
+							"password".into()
+						} else {
+							"text".into()
+						})
+					})
+					.control_binding(ControlBinding::text(value))
+					.into_page(),
+			);
+			let node = dom.children(dom.root())[0];
+
+			assert_eq!(dom.element(node).unwrap().attr("value"), Some("secret"));
+			password_type.set(true);
+			dom.refresh_control_bindings();
+
+			assert_eq!(dom.element(node).unwrap().attr("type"), Some("password"));
+			assert_eq!(dom.element(node).unwrap().attr("value"), None);
+			assert_eq!(value.get(), "secret");
+		});
+	}
+
 	#[test]
 	fn native_controlled_boolean_attributes_follow_signal_state() {
 		ReactiveScope::run(|| {
@@ -1700,7 +1815,7 @@ mod case_normalization_tests {
 		});
 	}
 
-	#[test]
+	#[rstest]
 	fn native_text_controls_apply_browser_value_sanitization() {
 		ReactiveScope::run(|| {
 			let binding = ControlBinding::text(Signal::new(String::new()));
@@ -1722,6 +1837,21 @@ mod case_normalization_tests {
 					ControlValue::Text("line\nbreak".to_owned()),
 				),
 				ControlValue::Text("line\nbreak".to_owned())
+			);
+
+			let mut multiple_email = element("input", Some("email"));
+			multiple_email
+				.attrs
+				.push(("multiple".to_owned(), "multiple".to_owned()));
+			assert_eq!(
+				normalize_native_control_value(
+					&multiple_email,
+					&binding,
+					ControlValue::Text(
+						" first@example.test,\u{a0}second@example.test \n".to_owned()
+					),
+				),
+				ControlValue::Text("first@example.test,\u{a0}second@example.test".to_owned())
 			);
 		});
 	}
@@ -1749,6 +1879,28 @@ mod case_normalization_tests {
 	}
 
 	#[test]
+	fn native_range_values_use_the_value_attribute_as_step_base() {
+		ReactiveScope::run(|| {
+			let mut range = element("input", Some("range"));
+			range.attrs.extend([
+				("max".to_owned(), "10".to_owned()),
+				("step".to_owned(), "2".to_owned()),
+				("value".to_owned(), "1".to_owned()),
+			]);
+			let binding = ControlBinding::number(Signal::new(3_i32));
+
+			assert_eq!(
+				normalize_native_control_value(
+					&range,
+					&binding,
+					ControlValue::Text("3".to_owned()),
+				),
+				ControlValue::Text("3".to_owned())
+			);
+		});
+	}
+
+	#[test]
 	fn native_range_rejection_keeps_the_signal_and_control_aligned() {
 		ReactiveScope::run(|| {
 			let value = Signal::new(100_u8);
@@ -1764,6 +1916,174 @@ mod case_normalization_tests {
 
 			assert_eq!(value.get(), 100);
 			assert_eq!(dom.value(node).as_deref(), Some("100"));
+		});
+	}
+
+	#[rstest]
+	fn native_range_uses_the_browser_default_for_non_finite_values() {
+		ReactiveScope::run(|| {
+			let value = Signal::new(f64::NAN);
+			let dom = TestDom::render(
+				PageElement::new("input")
+					.attr("type", "range")
+					.control_binding(ControlBinding::number(value))
+					.into_page(),
+			);
+			let node = dom.children(dom.root())[0];
+
+			assert_eq!(value.get(), 50.0);
+			assert_eq!(dom.value(node).as_deref(), Some("50"));
+		});
+	}
+
+	#[rstest]
+	fn native_conflicting_ranges_keep_browser_values_local() {
+		ReactiveScope::run(|| {
+			let value = Signal::new(150_i32);
+			let mut dom = TestDom::render(
+				PageElement::new("div")
+					.child(
+						PageElement::new("input")
+							.attr("type", "range")
+							.attr("max", "100")
+							.control_binding(ControlBinding::number(value)),
+					)
+					.child(
+						PageElement::new("input")
+							.attr("type", "range")
+							.attr("min", "200")
+							.attr("max", "400")
+							.control_binding(ControlBinding::number(value)),
+					)
+					.into_page(),
+			);
+			let container = dom.children(dom.root())[0];
+			let ranges = dom.children(container).to_vec();
+
+			assert_eq!(
+				(value.get(), dom.value(ranges[0]), dom.value(ranges[1])),
+				(100, Some("100".to_owned()), Some("200".to_owned()))
+			);
+
+			value.set(150);
+			dom.refresh_control_bindings();
+
+			assert_eq!(
+				(value.get(), dom.value(ranges[0]), dom.value(ranges[1])),
+				(150, Some("100".to_owned()), Some("200".to_owned()))
+			);
+		});
+	}
+
+	#[rstest]
+	fn native_overlapping_ranges_without_a_common_step_keep_browser_values_local() {
+		ReactiveScope::run(|| {
+			// Arrange
+			let value = Signal::new(3_i32);
+
+			// Act
+			let dom = TestDom::render(
+				PageElement::new("div")
+					.child(
+						PageElement::new("input")
+							.attr("type", "range")
+							.attr("min", "0")
+							.attr("max", "5")
+							.attr("step", "4")
+							.control_binding(ControlBinding::number(value)),
+					)
+					.child(
+						PageElement::new("input")
+							.attr("type", "range")
+							.attr("min", "2")
+							.attr("max", "5")
+							.attr("step", "6")
+							.control_binding(ControlBinding::number(value)),
+					)
+					.into_page(),
+			);
+			let container = dom.children(dom.root())[0];
+			let ranges = dom.children(container);
+
+			// Assert
+			assert_eq!(
+				(value.get(), dom.value(ranges[0]), dom.value(ranges[1])),
+				(4, Some("4".to_owned()), Some("2".to_owned()))
+			);
+		});
+	}
+
+	#[rstest]
+	fn native_continuous_and_stepped_ranges_without_a_shared_value_keep_values_local() {
+		ReactiveScope::run(|| {
+			// Arrange
+			let value = Signal::new(0.5_f64);
+
+			// Act
+			let dom = TestDom::render(
+				PageElement::new("div")
+					.child(
+						PageElement::new("input")
+							.attr("type", "range")
+							.attr("min", "0.5")
+							.attr("max", "0.6")
+							.attr("step", "any")
+							.control_binding(ControlBinding::number(value)),
+					)
+					.child(
+						PageElement::new("input")
+							.attr("type", "range")
+							.attr("min", "0")
+							.attr("max", "0.6")
+							.attr("step", "1")
+							.control_binding(ControlBinding::number(value)),
+					)
+					.into_page(),
+			);
+			let container = dom.children(dom.root())[0];
+			let ranges = dom.children(container);
+
+			// Assert
+			assert_eq!(
+				(value.get(), dom.value(ranges[0]), dom.value(ranges[1])),
+				(0.5, Some("0.5".to_owned()), Some("0".to_owned()))
+			);
+		});
+	}
+
+	#[rstest]
+	fn native_range_normalization_precedes_later_reactive_attributes() {
+		ReactiveScope::run(|| {
+			let value = Signal::new(150_i32);
+			let second_max = value;
+			let mut dom = TestDom::render(
+				PageElement::new("div")
+					.child(
+						PageElement::new("input")
+							.attr("type", "range")
+							.attr("max", "100")
+							.control_binding(ControlBinding::number(value)),
+					)
+					.child(
+						PageElement::new("input")
+							.attr("type", "range")
+							.reactive_attr("max", move || Some(second_max.get().to_string().into()))
+							.control_binding(ControlBinding::number(value)),
+					)
+					.into_page(),
+			);
+			let container = dom.children(dom.root())[0];
+			let ranges = dom.children(container).to_vec();
+
+			value.set(150);
+			dom.refresh_control_bindings();
+
+			assert_eq!(value.get(), 100);
+			assert_eq!(
+				dom.element(ranges[1])
+					.and_then(|element| element.attr("max")),
+				Some("100")
+			);
 		});
 	}
 

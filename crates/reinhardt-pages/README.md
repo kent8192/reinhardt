@@ -284,7 +284,23 @@ SSR serializes the signal string into the `value` attribute. Hydration first
 adopts the live DOM property, preserving browser restoration and edits made
 before hydration. The adopted value also becomes the browser reset default, so
 a later form reset preserves the pre-hydration control state. Later signal
-changes update the existing control in place. See the
+changes update the existing control in place.
+
+Hydration first adopts the live DOM value, preserving browser restoration and
+edits made before hydration. The adopted value also becomes the browser reset
+default, so a later form reset preserves the pre-hydration control state. Later
+signal changes update the control. Password bindings set only the live value
+property and never expose the secret through an SSR or DOM `value` attribute.
+Reactive attributes reconcile a binding only when they can change the control's
+value, so unrelated presentation updates preserve an in-progress edit. A
+reactive `type` or `multiple` update that would make the control incompatible
+with its binding is ignored, keeping the mounted controller usable. During
+initial hydration, browser normalization caused by reactive `min`, `max`, or
+`step` constraints is written back for range inputs, while ordinary number
+inputs continue to preserve rejected editor text. Multiple range controls bound
+to one signal synchronize only when their overlapping constraints contain a
+value accepted by every stepped grid; `step="any"` makes only that control
+continuous. See the
 [React migration guide](docs/react_to_reinhardt.md#controlled-and-uncontrolled-form-controls)
 for event ordering, IME, numeric-error, and low-level escape-hatch details.
 For `input[type=number]`, the binding combines `beforeinput` metadata with the

@@ -91,6 +91,30 @@ fn hydration_reconciliation_ignores_static_reactive_attribute_overrides() {
 }
 
 #[wasm_bindgen_test]
+fn hydration_reconciles_the_effective_duplicate_boolean_attribute() {
+	// Arrange
+	let document = web_sys::window()
+		.expect("window")
+		.document()
+		.expect("document");
+	let element = document.create_element("button").expect("create button");
+	element
+		.set_attribute("disabled", "true")
+		.expect("set server attribute");
+	let page = PageElement::new("button")
+		.attr("disabled", "true")
+		.attr("DISABLED", "false")
+		.into_page();
+
+	// Act
+	let result = reconcile(&Element::new(element.clone()), &page);
+
+	// Assert
+	assert!(result.is_ok(), "{result:?}");
+	assert!(element.has_attribute("disabled"));
+}
+
+#[wasm_bindgen_test]
 async fn action_button_mounts_dispatches_once_and_exposes_pending_attributes() {
 	let root = BodyRoot::new("ui-action-button-pending");
 	let scope = ReactiveScope::new();

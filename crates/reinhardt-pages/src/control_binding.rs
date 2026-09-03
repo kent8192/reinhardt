@@ -50,7 +50,7 @@ pub mod __private {
 	}
 
 	macro_rules! impl_signal_control_binding {
-		($marker:ty, $value:ty, $config:ty, |$signal:ident, $config_pat:pat| $body:expr) => {
+		($marker:ty, $value:ty, $config:ty, |$signal:ident, $config_pat:pat_param| $body:expr) => {
 			impl IntoControlBinding<$marker> for Signal<$value> {
 				type Config = $config;
 

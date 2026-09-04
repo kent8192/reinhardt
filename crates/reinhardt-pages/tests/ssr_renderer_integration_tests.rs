@@ -748,6 +748,11 @@ fn ssr_query_retry_builder_order_preserves_the_same_nested_defaults() {
 
 fn controlled_bindings_page(scope: &ReactiveScope) -> Page {
 	let text = signal_in_scope(scope, "A&B".to_owned());
+	let date = signal_in_scope(scope, "2026-08-31".to_owned());
+	let datetime_local = signal_in_scope(scope, "2026-08-31T10:30".to_owned());
+	let month = signal_in_scope(scope, "2026-08".to_owned());
+	let week = signal_in_scope(scope, "2026-W36".to_owned());
+	let time = signal_in_scope(scope, String::new());
 	let checked = signal_in_scope(scope, true);
 	let selected = signal_in_scope(scope, vec!["rust".to_owned(), "wasm".to_owned()]);
 
@@ -759,6 +764,31 @@ fn controlled_bindings_page(scope: &ReactiveScope) -> Page {
 		textarea {
 			a11y: off,
 			bind: text
+		}
+		input {
+			a11y: off,
+			type: "date",
+			bind: date
+		}
+		input {
+			a11y: off,
+			type: "datetime-local",
+			bind: datetime_local
+		}
+		input {
+			a11y: off,
+			type: "month",
+			bind: month
+		}
+		input {
+			a11y: off,
+			type: "week",
+			bind: week
+		}
+		input {
+			a11y: off,
+			type: "time",
+			bind: time
 		}
 		input {
 			a11y: off,
@@ -811,6 +841,11 @@ async fn controlled_bindings_render_html_initial_state() {
 		concat!(
 			"<input value=\"A&amp;B\" />",
 			"<textarea>A&amp;B</textarea>",
+			"<input type=\"date\" value=\"2026-08-31\" />",
+			"<input type=\"datetime-local\" value=\"2026-08-31T10:30\" />",
+			"<input type=\"month\" value=\"2026-08\" />",
+			"<input type=\"week\" value=\"2026-W36\" />",
+			"<input type=\"time\" value=\"\" />",
 			"<input type=\"checkbox\" checked=\"checked\" />",
 			"<select multiple=\"multiple\"><optgroup>",
 			"<option value=\"rust\" selected=\"selected\">Rust</option>",

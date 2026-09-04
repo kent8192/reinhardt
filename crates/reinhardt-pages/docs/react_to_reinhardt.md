@@ -247,7 +247,7 @@ a `Signal`, providing the Reinhardt equivalent of a React controlled input.
 
 | Control shape | Bound signal |
 | --- | --- |
-| `input` with no `type` or static `type: "text"`, `"search"`, `"tel"`, `"url"`, `"email"`, `"password"`, or `"color"` | `Signal<String>` |
+| `input` with no `type` or static `type: "text"`, `"search"`, `"tel"`, `"url"`, `"email"`, `"password"`, `"color"`, `"date"`, `"datetime-local"`, `"month"`, `"week"`, or `"time"` | `Signal<String>` |
 | `input` with static `type: "number"` or `"range"` | `Signal<T>` where `T: NumberValue`; optionally an error signal |
 | `input` with static `type: "checkbox"` | `Signal<bool>` |
 | `input` with static `type: "radio"` | `Signal<String>`; each radio also declares a static or dynamic `value` expression |
@@ -255,9 +255,10 @@ a `Signal`, providing the Reinhardt equivalent of a React controlled input.
 | `select` with no `multiple` or static `multiple: false` | `Signal<String>` |
 | `select` with static `multiple: true` | `Signal<Vec<String>>` |
 
-Other input types, including `file` and date/time controls, are not binding
-shapes. Bound input `type` and select `multiple` classifiers must be static so
-the macro can validate the signal type at compile time.
+Other input types, including `file`, are not binding shapes. The obsolete
+`datetime` type is not an alias for `datetime-local`. Bound input `type` and
+select `multiple` classifiers must be static so the macro can validate the
+signal type at compile time.
 
 ```rust
 use reinhardt_pages::prelude::*;
@@ -285,6 +286,14 @@ same event runs, so the handler observes the new signal value. Password values
 are written only to the live DOM property, never to SSR or the `value` content
 attribute. Reactive attributes that cannot affect a control value also leave
 an in-progress browser edit untouched.
+
+Date/time inputs bind their browser serialization rather than a Rust date/time
+type. Typical values are `2026-08-31`, `2026-08-31T10:30`, `2026-08`,
+`2026-W36`, and `10:30`; `""` represents an empty control. User edits commit
+the browser-normalized `HTMLInputElement.value`, so an invalid or incomplete
+editor value is observed as `""`. Application writes should be a valid
+serialization or `""`. Browser sanitization of an application write changes
+the DOM property but does not silently rewrite the signal.
 
 Text writes are deferred while an IME composition is active. The completed
 value is committed at `compositionend`, and a duplicate final `input` event is

@@ -1306,7 +1306,11 @@ fn normalize_native_control_value(
 	if binding.kind() == ControlKind::Text
 		&& crate::control_binding::is_effective_text_input_type(Some(input_type))
 	{
-		let mut normalized = raw.replace(['\r', '\n'], "");
+		let mut normalized = if input_type_removes_line_breaks(input_type) {
+			raw.replace(['\r', '\n'], "")
+		} else {
+			raw
+		};
 		if input_type.eq_ignore_ascii_case("email")
 			&& element.attr("multiple").is_some_and(is_boolean_attr_truthy)
 		{
@@ -1322,6 +1326,18 @@ fn normalize_native_control_value(
 			normalized = normalized
 				.trim_matches(|character: char| character.is_ascii_whitespace())
 				.to_owned();
+		}
+		if input_type.eq_ignore_ascii_case("datetime-local")
+			&& let Some((date, time)) = normalized.split_once(' ')
+		{
+			normalized = format!("{date}T{time}");
+		}
+		if is_temporal_input_type(input_type) {
+			if !is_valid_temporal_input_value(input_type, &normalized) {
+				normalized.clear();
+			} else if input_type.eq_ignore_ascii_case("datetime-local") {
+				normalized = normalize_datetime_local_value(&normalized);
+			}
 		}
 		return ControlValue::Text(normalized);
 	}
@@ -1370,6 +1386,174 @@ fn normalize_native_control_value(
 		ControlValue::Text(raw)
 	} else {
 		ControlValue::Text(normalized)
+	}
+}
+
+<<<<<<< HEAD
+fn input_type_removes_line_breaks(input_type: &str) -> bool {
+	["text", "search", "tel", "url", "email", "password"]
+		.iter()
+		.any(|known| input_type.eq_ignore_ascii_case(known))
+}
+
+fn normalize_datetime_local_value(value: &str) -> String {
+	let Some((date, time)) = value.split_once('T').or_else(|| value.split_once(' ')) else {
+		return value.to_owned();
+	};
+	let Some((hour, minute_and_seconds)) = time.split_once(':') else {
+		return format!("{date}T{time}");
+	};
+	let Some((minute, seconds)) = minute_and_seconds.split_once(':') else {
+		return format!("{date}T{hour}:{minute_and_seconds}");
+	};
+	let (second, fraction) = seconds.split_once('.').unwrap_or((seconds, ""));
+	let fraction = fraction.trim_end_matches('0');
+	if second == "00" && fraction.is_empty() {
+		format!("{date}T{hour}:{minute}")
+	} else if fraction.is_empty() {
+		format!("{date}T{hour}:{minute}:{second}")
+	} else {
+		format!("{date}T{hour}:{minute}:{second}.{fraction}")
+	}
+}
+
+fn is_temporal_input_type(input_type: &str) -> bool {
+	["date", "datetime-local", "month", "time", "week"]
+		.iter()
+		.any(|known| input_type.eq_ignore_ascii_case(known))
+}
+
+fn is_valid_temporal_input_value(input_type: &str, value: &str) -> bool {
+	if input_type.eq_ignore_ascii_case("date") {
+		is_valid_html_date(value)
+	} else if input_type.eq_ignore_ascii_case("datetime-local") {
+		value
+			.split_once('T')
+			.or_else(|| value.split_once(' '))
+			.is_some_and(|(date, time)| is_valid_html_date(date) && is_valid_html_time(time))
+	} else if input_type.eq_ignore_ascii_case("month") {
+		is_valid_html_month(value)
+	} else if input_type.eq_ignore_ascii_case("time") {
+		is_valid_html_time(value)
+	} else if input_type.eq_ignore_ascii_case("week") {
+		is_valid_html_week(value)
+	} else {
+		true
+	}
+}
+
+fn is_valid_html_date(value: &str) -> bool {
+	let Some((year, month_day)) = value.split_once('-') else {
+		return false;
+	};
+	let Some((month, day)) = month_day.split_once('-') else {
+		return false;
+	};
+	let Some(year) = parse_html_year(year) else {
+		return false;
+	};
+	let Some(month) = parse_fixed_decimal(month, 2) else {
+		return false;
+	};
+	let Some(day) = parse_fixed_decimal(day, 2) else {
+		return false;
+	};
+	(1..=12).contains(&month) && day > 0 && day <= days_in_month(year, month)
+}
+
+fn is_valid_html_month(value: &str) -> bool {
+	let Some((year, month)) = value.split_once('-') else {
+		return false;
+	};
+	parse_html_year(year).is_some_and(|_| {
+		parse_fixed_decimal(month, 2).is_some_and(|month| (1..=12).contains(&month))
+	})
+}
+
+fn is_valid_html_week(value: &str) -> bool {
+	let Some((year, week)) = value.split_once("-W") else {
+		return false;
+	};
+	let Some(year) = parse_html_year(year) else {
+		return false;
+	};
+	let Some(week) = parse_fixed_decimal(week, 2) else {
+		return false;
+	};
+	(1..=53).contains(&week) && (week < 53 || has_iso_week_53(year))
+}
+
+fn is_valid_html_time(value: &str) -> bool {
+	let Some((hour, minute_and_seconds)) = value.split_once(':') else {
+		return false;
+	};
+	let Some(hour) = parse_fixed_decimal(hour, 2) else {
+		return false;
+	};
+	let (minute, seconds) = match minute_and_seconds.split_once(':') {
+		Some((minute, seconds)) => (minute, Some(seconds)),
+		None => (minute_and_seconds, None),
+	};
+	let Some(minute) = parse_fixed_decimal(minute, 2) else {
+		return false;
+	};
+	if hour > 23 || minute > 59 {
+		return false;
+	}
+	let Some(seconds) = seconds else {
+		return true;
+	};
+	let (second, fraction) = match seconds.split_once('.') {
+		Some((second, fraction)) => (second, Some(fraction)),
+		None => (seconds, None),
+	};
+	let Some(second) = parse_fixed_decimal(second, 2) else {
+		return false;
+	};
+	second <= 59
+		&& fraction.is_none_or(|fraction| {
+			(1..=3).contains(&fraction.len()) && fraction.bytes().all(|byte| byte.is_ascii_digit())
+		})
+}
+
+fn parse_html_year(value: &str) -> Option<u32> {
+	(value.len() >= 4 && value.bytes().all(|byte| byte.is_ascii_digit()))
+		.then(|| value.parse::<u32>().ok())
+		.flatten()
+		.filter(|year| *year > 0)
+}
+
+fn parse_fixed_decimal(value: &str, width: usize) -> Option<u32> {
+	(value.len() == width && value.bytes().all(|byte| byte.is_ascii_digit()))
+		.then(|| value.parse::<u32>().ok())
+		.flatten()
+}
+
+fn days_in_month(year: u32, month: u32) -> u32 {
+	match month {
+		2 if is_leap_year(year) => 29,
+		2 => 28,
+		4 | 6 | 9 | 11 => 30,
+		_ => 31,
+	}
+}
+
+fn is_leap_year(year: u32) -> bool {
+	(year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
+}
+
+fn has_iso_week_53(year: u32) -> bool {
+	let weekday = weekday_of_january_first(year);
+	weekday == 4 || (weekday == 3 && is_leap_year(year))
+}
+
+fn weekday_of_january_first(year: u32) -> u32 {
+	let year = i64::from(year) - 1;
+	let weekday_sunday_zero = (year + year / 4 - year / 100 + year / 400 + 1) % 7;
+	if weekday_sunday_zero == 0 {
+		7
+	} else {
+		weekday_sunday_zero as u32
 	}
 }
 

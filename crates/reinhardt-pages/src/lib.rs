@@ -414,10 +414,15 @@
 //! ## Controlled form elements
 //!
 //! The `bind:` directive connects native form controls to typed [`Signal`]
-//! values. Text and radio groups use `Signal<String>`, checkboxes use
-//! `Signal<bool>`, numeric inputs use a primitive implementing [`NumberValue`],
-//! and multiple selects use `Signal<Vec<String>>`. Numeric bindings may expose
-//! a [`NumberParseError`] signal that retains recoverable invalid editor text.
+//! values. String-valued inputs (`text`, `search`, `tel`, `url`, `email`,
+//! `password`, `color`, `date`, `datetime-local`, `month`, `week`, and `time`)
+//! and radio groups use `Signal<String>`, checkboxes use `Signal<bool>`, numeric
+//! inputs use a primitive implementing [`NumberValue`], and multiple selects
+//! use `Signal<Vec<String>>`. Date/time inputs use the browser's serialized
+//! value, with `""` for an empty or browser-rejected editor value. Browser
+//! sanitization of an application write does not silently rewrite the signal.
+//! Numeric bindings may expose a [`NumberParseError`] signal that retains
+//! recoverable invalid editor text.
 //! Only unmodified Arrow/Home/End keyboard moves are predicted; modifier-key
 //! commands and already-canceled key events are treated as unknown. When a
 //! pointer-positioned number edit is sanitized before its inaccessible selection

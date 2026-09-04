@@ -2263,6 +2263,31 @@ mod tests {
 		false
 	)]
 	#[case(
+		quote::quote!({ input { a11y: off, type: "date", bind: value } }),
+		TypedControlBindingKind::Text,
+		false
+	)]
+	#[case(
+		quote::quote!({ input { a11y: off, type: "datetime-local", bind: value } }),
+		TypedControlBindingKind::Text,
+		false
+	)]
+	#[case(
+		quote::quote!({ input { a11y: off, type: "month", bind: value } }),
+		TypedControlBindingKind::Text,
+		false
+	)]
+	#[case(
+		quote::quote!({ input { a11y: off, type: "week", bind: value } }),
+		TypedControlBindingKind::Text,
+		false
+	)]
+	#[case(
+		quote::quote!({ input { a11y: off, type: "time", bind: value } }),
+		TypedControlBindingKind::Text,
+		false
+	)]
+	#[case(
 		quote::quote!({ input { a11y: off, type: "range", bind: value } }),
 		TypedControlBindingKind::Number,
 		false

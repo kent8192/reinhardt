@@ -799,8 +799,8 @@ fn classify_control_binding(
 
 /// Classifies a statically typed `<input>` binding for downstream page macros.
 ///
-/// Text-like controls share the `Text` binding semantics, while `number` and
-/// `range` share the `Number` semantics. Checkbox and radio controls retain
+/// String-valued controls share the `Text` binding semantics, while `number`
+/// and `range` share the `Number` semantics. Checkbox and radio controls retain
 /// their checked-state behavior.
 #[doc(hidden)]
 pub fn classify_input_binding(
@@ -823,9 +823,8 @@ pub fn classify_input_binding(
 	};
 
 	match input_type.to_ascii_lowercase().as_str() {
-		"text" | "search" | "tel" | "url" | "email" | "password" | "color" => {
-			Ok((TypedControlBindingKind::Text, None))
-		}
+		"text" | "search" | "tel" | "url" | "email" | "password" | "color" | "date"
+		| "datetime-local" | "month" | "week" | "time" => Ok((TypedControlBindingKind::Text, None)),
 		"number" | "range" => Ok((TypedControlBindingKind::Number, None)),
 		"checkbox" => Ok((TypedControlBindingKind::Checkbox, None)),
 		"radio" => {
@@ -2711,6 +2710,31 @@ mod tests {
 	)]
 	#[case(
 		quote!({ input { a11y: off, type: "color", bind: value } }),
+		TypedControlBindingKind::Text,
+		false
+	)]
+	#[case(
+		quote!({ input { a11y: off, type: "date", bind: value } }),
+		TypedControlBindingKind::Text,
+		false
+	)]
+	#[case(
+		quote!({ input { a11y: off, type: "datetime-local", bind: value } }),
+		TypedControlBindingKind::Text,
+		false
+	)]
+	#[case(
+		quote!({ input { a11y: off, type: "month", bind: value } }),
+		TypedControlBindingKind::Text,
+		false
+	)]
+	#[case(
+		quote!({ input { a11y: off, type: "week", bind: value } }),
+		TypedControlBindingKind::Text,
+		false
+	)]
+	#[case(
+		quote!({ input { a11y: off, type: "time", bind: value } }),
 		TypedControlBindingKind::Text,
 		false
 	)]

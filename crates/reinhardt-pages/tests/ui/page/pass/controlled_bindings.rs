@@ -83,6 +83,31 @@ fn main() {
 			}
 			input {
 				a11y: off,
+				type: "date",
+				bind: text
+			}
+			input {
+				a11y: off,
+				type: "datetime-local",
+				bind: text
+			}
+			input {
+				a11y: off,
+				type: "month",
+				bind: text
+			}
+			input {
+				a11y: off,
+				type: "week",
+				bind: text
+			}
+			input {
+				a11y: off,
+				type: "time",
+				bind: text
+			}
+			input {
+				a11y: off,
 				type: "range",
 				bind: number
 			}

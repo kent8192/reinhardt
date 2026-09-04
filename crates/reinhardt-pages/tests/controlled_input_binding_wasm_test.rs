@@ -857,6 +857,11 @@ fn public_page_mount_supports_all_additional_bound_input_types() {
 		let email = Signal::new(email_raw.to_owned());
 		let password = Signal::new("old-secret".to_owned());
 		let color = Signal::new("#112233".to_owned());
+		let date = Signal::new("2026-08-30".to_owned());
+		let datetime_local = Signal::new("2026-08-30T09:15".to_owned());
+		let month = Signal::new("2026-08".to_owned());
+		let week = Signal::new("2026-W35".to_owned());
+		let time = Signal::new("09:15".to_owned());
 		let range = Signal::new(200_i32);
 
 		page!({
@@ -898,6 +903,36 @@ fn public_page_mount_supports_all_additional_bound_input_types() {
 			}
 			input {
 				a11y: off,
+				id: "date",
+				type: "date",
+				bind: date
+			}
+			input {
+				a11y: off,
+				id: "datetime-local",
+				type: "datetime-local",
+				bind: datetime_local
+			}
+			input {
+				a11y: off,
+				id: "month",
+				type: "month",
+				bind: month
+			}
+			input {
+				a11y: off,
+				id: "week",
+				type: "week",
+				bind: week
+			}
+			input {
+				a11y: off,
+				id: "time",
+				type: "time",
+				bind: time
+			}
+			input {
+				a11y: off,
 				id: "range",
 				type: "range",
 				bind: range
@@ -931,7 +966,7 @@ fn public_page_mount_supports_all_additional_bound_input_types() {
 		assert_eq!(range.get(), 100);
 		assert_eq!(initial_range.value(), "100");
 
-		let check_text = |id: &str, signal: &Signal<String>, next: &str| {
+		let check_text = |id: &str, signal: &Signal<String>, next: &str, empty: &str| {
 			let input: web_sys::HtmlInputElement = root
 				.as_web_sys()
 				.query_selector(&format!("#{id}"))
@@ -957,14 +992,59 @@ fn public_page_mount_supports_all_additional_bound_input_types() {
 					.active_element()
 					.is_some_and(|active| active.is_same_node(Some(&element)))
 			);
+
+			input.set_value("");
+			input
+				.dispatch_event(&web_sys::InputEvent::new("input").expect("event"))
+				.expect("dispatch");
+			assert_eq!(signal.get(), empty);
+			let current = root
+				.as_web_sys()
+				.query_selector(&format!("#{id}"))
+				.expect("query")
+				.expect("current input");
+			assert!(element.is_same_node(Some(&current)));
+			assert!(
+				document
+					.active_element()
+					.is_some_and(|active| active.is_same_node(Some(&element)))
+			);
 		};
 
-		check_text("search", &search, "next search");
-		check_text("tel", &tel, "+81-3-9876-5432");
-		check_text("url", &url, "https://next.example.test");
-		check_text("email", &email, "next@example.test");
-		check_text("password", &password, "next-secret");
-		check_text("color", &color, "#abcdef");
+		check_text("search", &search, "next search", "");
+		check_text("tel", &tel, "+81-3-9876-5432", "");
+		check_text("url", &url, "https://next.example.test", "");
+		check_text("email", &email, "next@example.test", "");
+		check_text("password", &password, "next-secret", "");
+		check_text("color", &color, "#abcdef", "#000000");
+		check_text("date", &date, "2026-08-31", "");
+		check_text("datetime-local", &datetime_local, "2026-08-31T10:30", "");
+		check_text("month", &month, "2026-09", "");
+		check_text("week", &week, "2026-W36", "");
+		check_text("time", &time, "10:30", "");
+
+		let input: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.query_selector("#date")
+			.expect("query")
+			.expect("date input")
+			.unchecked_into();
+		let element: web_sys::Element = input.clone().unchecked_into();
+		input.focus().expect("focus");
+		date.set("not-a-date".to_owned());
+		assert_eq!(date.get(), "not-a-date");
+		assert_eq!(input.value(), "");
+		let current = root
+			.as_web_sys()
+			.query_selector("#date")
+			.expect("query")
+			.expect("current date input");
+		assert!(element.is_same_node(Some(&current)));
+		assert!(
+			document
+				.active_element()
+				.is_some_and(|active| active.is_same_node(Some(&element)))
+		);
 
 		let input: web_sys::HtmlInputElement = root
 			.as_web_sys()
@@ -2233,6 +2313,26 @@ struct HydratedInput {
 	observed: Rc<RefCell<String>>,
 }
 
+struct HydratedDateTimeInput {
+	value: Signal<String>,
+}
+
+impl Component for HydratedDateTimeInput {
+	fn name() -> &'static str {
+		"HydratedDateTimeInput"
+	}
+
+	fn render(&self) -> Page {
+		PageElement::new("div")
+			.child(
+				PageElement::new("input")
+					.attr("type", "datetime-local")
+					.control_binding(ControlBinding::text(self.value.clone())),
+			)
+			.into_page()
+	}
+}
+
 struct HydratedInputAfterText {
 	value: Signal<String>,
 }
@@ -2568,6 +2668,44 @@ fn public_hydration_adopts_the_live_dom_property() {
 			.expect("dispatch");
 		assert_eq!(value.get(), "edited");
 		assert_eq!(&*observed.borrow(), "edited");
+		reinhardt_pages::cleanup_reactive_nodes();
+	});
+}
+
+#[wasm_bindgen_test]
+fn public_hydration_adopts_datetime_local_input_value() {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_root = document.create_element("div").expect("root");
+		let raw_input = document.create_element("input").expect("input");
+		raw_input
+			.set_attribute("type", "datetime-local")
+			.expect("input type");
+		let input: web_sys::HtmlInputElement = raw_input.clone().unchecked_into();
+		input.set_value("2026-08-31T10:30");
+		raw_root.append_child(&raw_input).expect("input append");
+		let root = Element::new(raw_root);
+		let value = Signal::new("server datetime".to_owned());
+		let _state = SsrStateElement::install(&document);
+
+		reinhardt_pages::hydration::hydrate(
+			&HydratedDateTimeInput {
+				value: value.clone(),
+			},
+			&root,
+		)
+		.expect("hydrate datetime-local input");
+
+		assert_eq!(value.get(), "2026-08-31T10:30");
+		assert!(raw_input.is_same_node(root.as_web_sys().first_element_child().as_deref()));
+		input.set_value("2026-08-31T11:45");
+		input
+			.dispatch_event(&web_sys::InputEvent::new("input").expect("event"))
+			.expect("dispatch");
+		assert_eq!(value.get(), "2026-08-31T11:45");
 		reinhardt_pages::cleanup_reactive_nodes();
 	});
 }

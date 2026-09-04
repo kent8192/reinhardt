@@ -10,7 +10,7 @@ use super::is_boolean_attr_truthy;
 /// Identifies the form control represented by a binding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlKind {
-	/// A single-line or multi-line text control.
+	/// A string-valued input or multi-line text control.
 	Text,
 	/// A numeric input control.
 	Number,
@@ -111,7 +111,7 @@ fn is_number_input_type(input_type: &str) -> bool {
 /// Cross-target value read from or written to a form control.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlValue {
-	/// A textual control value.
+	/// A string-valued control value.
 	Text(String),
 	/// A checked-state control value.
 	Checked(bool),
@@ -302,7 +302,7 @@ impl fmt::Debug for ControlBinding {
 }
 
 impl ControlBinding {
-	/// Creates a binding for a textual signal.
+	/// Creates a binding for a string-valued signal.
 	pub fn text(signal: Signal<String>) -> Self {
 		Self::string_value(ControlKind::Text, signal)
 	}

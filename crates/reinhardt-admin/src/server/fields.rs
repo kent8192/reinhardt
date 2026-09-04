@@ -129,7 +129,7 @@ pub async fn get_fields(
 			let allowed_fields = form
 				.fields
 				.iter()
-				.map(|field| field.name.as_str())
+				.map(|field| field.name.clone())
 				.collect::<Vec<_>>();
 			retain_allowed_fields_with_aliases(values, &allowed_fields, &form.aliases);
 			translate_physical_field_names_to_logical(table_name, values).map_server_fn_error()?;

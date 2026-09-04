@@ -114,6 +114,14 @@ For 0.2.x applications moving to 0.3.0, use the
 The full lifecycle policy lives in
 [Stability Policy](instructions/STABILITY_POLICY.md).
 
+### Generated migration source provenance
+
+| Layer | Responsibility | Source of truth |
+| --- | --- | --- |
+| `reinhardt-db` | Marker, parser, span-preserving conversion, and builder output | Migration AST and semantic metadata |
+| `reinhardt-admin` | Offline directory traversal, preflight, and atomic writes | Requested `migrations/` path |
+| `makemigrations --check` | Detect model drift without writing migration files | Current model and migration state |
+
 ## Installation
 
 Reinhardt is a modular framework. Choose your starting point:

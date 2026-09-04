@@ -1184,6 +1184,35 @@ migrate to `Q::from_raw_sql`. Unsupported operators and unrecognized SQL now
 fail closed; runtime values must be expressed with `Q::new` so they remain
 bound parameters.
 
+### Constraint Violation Metadata
+
+`DatabaseError::code()` retains a driver or database code. `constraint()`,
+`table()`, and `columns()` retain structured database object metadata when the
+backend supplies it:
+
+```rust
+use reinhardt_core::exception::DatabaseErrorKind;
+use reinhardt_db::DatabaseError;
+
+let error = DatabaseError::new(
+	DatabaseErrorKind::UniqueViolation,
+	"duplicate key",
+)
+.with_code("23505")
+.with_constraint("users_email_key")
+.with_table("users")
+.with_columns(["email"]);
+
+assert_eq!(error.constraint(), Some("users_email_key"));
+assert_eq!(error.table(), Some("users"));
+assert_eq!(error.columns(), ["email"]);
+```
+
+SQLx messages are diagnostics only and must never be parsed for this metadata.
+PostgreSQL currently supplies object identifiers. MySQL and SQLite normally
+expose only the portable violation kind through SQLx, so callers must handle
+missing metadata without guessing from a message.
+
 ### Scoped N+1 Query Detection
 
 Use `NPlusOneScope` around development diagnostics or focused tests to detect

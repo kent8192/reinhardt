@@ -13,6 +13,35 @@
 //!
 //! Equivalent to Django's `django.db` package.
 //!
+//! ## Constraint violation metadata
+//!
+//! [`DatabaseError::code`] retains a driver or database code. When a backend
+//! supplies object identifiers, [`DatabaseError::constraint`],
+//! [`DatabaseError::table`], and [`DatabaseError::columns`] retain them without
+//! parsing diagnostic text:
+//!
+//! ```rust
+//! use reinhardt_core::exception::DatabaseErrorKind;
+//! use reinhardt_db::DatabaseError;
+//!
+//! let error = DatabaseError::new(
+//!     DatabaseErrorKind::UniqueViolation,
+//!     "duplicate key",
+//! )
+//! .with_code("23505")
+//! .with_constraint("users_email_key")
+//! .with_table("users")
+//! .with_columns(["email"]);
+//!
+//! assert_eq!(error.constraint(), Some("users_email_key"));
+//! assert_eq!(error.table(), Some("users"));
+//! assert_eq!(error.columns(), ["email"]);
+//! ```
+//!
+//! SQLx messages are diagnostic only and must never be parsed for object
+//! metadata. PostgreSQL currently supplies object identifiers; MySQL and
+//! SQLite normally expose only the portable error kind through SQLx.
+//!
 //! ## Features
 //!
 //! ### Database Backends (`backends` module)

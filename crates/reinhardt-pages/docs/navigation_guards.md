@@ -45,9 +45,10 @@ async fn require_authenticated(
 	if session.is_authenticated {
 		Ok(NavigationDecision::Allow)
 	} else {
+		let login_path = users_routes::reverse("login", &[]);
 		Ok(NavigationDecision::Redirect {
 			location: format!(
-				"/login?next={}",
+				"{login_path}?next={}",
 				encode_return_location(context.destination()),
 			),
 			replace: true,
@@ -65,12 +66,13 @@ fn dashboard_layout(outlet: Outlet) -> Page {
 }
 ```
 
-`current_session::query`, `encode_return_location`, and
-`render_dashboard` in this example are application functions. A guard may be
-attached to a leaf `#[component]` or to a `#[layout]`; a layout guard applies
-to every matched descendant. Each route-tree node accepts at most one
-navigation guard. Compose additional checks in ordinary Rust and return the
-first non-`Allow` result immediately:
+`current_session::query`, `users_routes::reverse`, `encode_return_location`,
+and `render_dashboard` in this example are application functions. Reverse the
+named login route instead of hardcoding its path so the redirect tracks the
+registered URL. A guard may be attached to a leaf `#[component]` or to a
+`#[layout]`; a layout guard applies to every matched descendant. Each
+route-tree node accepts at most one navigation guard. Compose additional
+checks in ordinary Rust and return the first non-`Allow` result immediately:
 
 ```rust,ignore
 #[navigation_guard]
@@ -82,7 +84,7 @@ async fn require_project_access(
 		.await?;
 	if !session.is_authenticated {
 		return Ok(NavigationDecision::Redirect {
-			location: "/login".to_owned(),
+			location: users_routes::reverse("login", &[]),
 			replace: true,
 		});
 	}

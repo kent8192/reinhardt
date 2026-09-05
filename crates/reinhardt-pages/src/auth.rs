@@ -95,6 +95,11 @@ pub const SESSION_COOKIE_NAME: &str = "sessionid";
 /// [`AuthState`] and JWT identity generations. A login, update, state-changing
 /// logout, or JWT identity change advances the corresponding generation and
 /// supersedes any older replacement navigation.
+///
+/// Replacement uses the committed path after a yield so a 401 observed during
+/// a guard cannot recursively start nested navigation. If another navigation
+/// starts after this call and before that replacement runs, the newer attempt
+/// is preserved and the replacement is skipped.
 pub fn invalidate_authentication() {
 	let generation = (
 		auth_state().authentication_generation(),
@@ -119,9 +124,13 @@ fn invalidate_authentication_generation(generation: (u64, u64)) {
 		}
 
 		coordinator.clear_for_authentication_change();
+		let navigation_generation = coordinator.generation();
 		let schedule_guard = AuthenticationInvalidationScheduleGuard { generation };
 		crate::platform::spawn_task(async move {
 			crate::platform::defer_yield().await;
+			if coordinator.generation() != navigation_generation {
+				return;
+			}
 			let path = coordinator.current_path();
 			let _ = coordinator.navigate_with_completion_guard(
 				path,

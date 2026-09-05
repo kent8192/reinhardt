@@ -234,6 +234,9 @@ installed launcher coordinator to replace-revalidate the active branch. The
 launcher unmounts the active route before revalidation so a rejected guard or
 loader failure cannot leave content from the previous authentication state in
 the DOM.
+If a logout or account-switch handler starts another navigation after
+invalidation and before the deferred replacement runs, that newer attempt is
+preserved and the replacement of the previous branch is skipped.
 Repeated invalidations for the same authentication identity are coalesced.
 `AuthState::login`, `AuthState::login_full`, `AuthState::update`, and a
 state-changing `AuthState::logout` advance that generation, so a newer account

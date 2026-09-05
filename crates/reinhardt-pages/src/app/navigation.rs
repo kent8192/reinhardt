@@ -700,6 +700,10 @@ impl NavigationCoordinator {
 		}
 	}
 
+	pub(crate) fn generation(&self) -> u64 {
+		self.next_generation.get()
+	}
+
 	fn is_current_generation(&self, generation: u64) -> bool {
 		self.next_generation.get() == generation
 	}
@@ -1395,6 +1399,53 @@ mod tests {
 					1,
 					"anonymous redirect replaces the protected entry"
 				);
+				crate::app::__clear_spa_router_for_test();
+			});
+		}
+
+		#[test]
+		fn authentication_invalidation_preserves_navigation_started_before_replacement() {
+			ReactiveScope::run(|| {
+				reset_test_state();
+				let _query_client = provide_test_query_client();
+				let tasks = Rc::new(RefCell::new(VecDeque::new()));
+				let tasks_for_sink = Rc::clone(&tasks);
+				let _sink = crate::platform::install_task_sink(move |task| {
+					tasks_for_sink.borrow_mut().push_back(task);
+				});
+				let router = Rc::new(router_with_loaded_routes());
+				crate::app::__install_client_router_for_test((*router).clone());
+				let coordinator = crate::app::try_with_navigation_coordinator(Rc::clone)
+					.expect("the test app installs a navigation coordinator");
+				GATE_OPEN.with(|gate| gate.set(true));
+
+				coordinator
+					.navigate("/".to_owned(), NavigationIntent::Initial)
+					.expect("initial route commits");
+				coordinator
+					.navigate("/guarded-loaded/".to_owned(), NavigationIntent::Push)
+					.expect("protected route starts");
+				poll_rounds(&tasks, 12);
+				assert_eq!(router.current_path().get(), "/guarded-loaded/");
+				assert_eq!(coordinator.committed_index(), 1);
+
+				crate::auth::invalidate_authentication();
+				coordinator
+					.navigate("/loaded/".to_owned(), NavigationIntent::Push)
+					.expect("post-invalidation navigation starts before replacement");
+				poll_rounds(&tasks, 16);
+
+				assert_eq!(router.current_path().get(), "/loaded/");
+				assert_eq!(
+					coordinator.committed_index(),
+					2,
+					"a newer navigation must not be cancelled by deferred replacement of the old branch"
+				);
+				let store = coordinator
+					.mounted_store()
+					.expect("successful navigation retains its loader store");
+				let html = with_loader_store(&store, || router.render_current().render_to_string());
+				assert_eq!(html, "prepared slow route");
 				crate::app::__clear_spa_router_for_test();
 			});
 		}

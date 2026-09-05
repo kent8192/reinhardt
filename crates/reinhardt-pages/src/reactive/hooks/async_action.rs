@@ -17,7 +17,7 @@ use crate::reactive::Signal;
 use crate::reactive::pages_arena::{PageNodeKey, PageNodeKind, allocate_page_node, with_page_node};
 use reinhardt_core::reactive::deps::Trackable;
 use reinhardt_core::reactive::scope::enter_scope;
-use reinhardt_core::reactive::{ScopeId, current_scope_id};
+use reinhardt_core::reactive::{ScopeId, current_scope_id, untracked};
 
 type ErrorCallback<E> = Rc<dyn Fn(&E)>;
 type SuccessCallback<T> = Rc<dyn Fn(&T)>;
@@ -756,7 +756,7 @@ impl<T: Clone + 'static, E: Clone + 'static> Action<T, E> {
 		else {
 			return;
 		};
-		dispatch(Box::new(payload));
+		untracked(|| dispatch(Box::new(payload)));
 	}
 }
 
@@ -915,6 +915,40 @@ mod tests {
 		action.force_success_for_test(());
 		reinhardt_core::reactive::with_runtime(|runtime| runtime.flush_updates());
 		assert_eq!(runs.get(), 1);
+	}
+
+	#[rstest]
+	#[serial_test::serial(reactive_runtime)]
+	fn dispatch_construction_does_not_subscribe_the_calling_effect() {
+		let scope = reinhardt_core::reactive::ReactiveScope::new();
+		let construction_reads = Rc::new(std::cell::Cell::new(0));
+		let effect_runs = Rc::new(std::cell::Cell::new(0));
+		let (source, _action, _effect) = scope.enter(|| {
+			let source = Signal::new("first".to_owned());
+			let source_for_action = source;
+			let construction_reads_for_action = Rc::clone(&construction_reads);
+			let action = use_action(move |_: ()| {
+				construction_reads_for_action.set(construction_reads_for_action.get() + 1);
+				let value = source_for_action.get();
+				async move { Ok::<String, String>(value) }
+			});
+			let action_for_effect = action;
+			let effect_runs_for_effect = Rc::clone(&effect_runs);
+			let effect = reinhardt_core::reactive::Effect::new(move || {
+				effect_runs_for_effect.set(effect_runs_for_effect.get() + 1);
+				action_for_effect.dispatch(());
+			});
+			(source, action, effect)
+		});
+
+		assert_eq!(effect_runs.get(), 1);
+		assert_eq!(construction_reads.get(), 1);
+
+		source.set("second".to_owned());
+		reinhardt_core::reactive::with_runtime(|runtime| runtime.flush_updates());
+
+		assert_eq!(effect_runs.get(), 1);
+		assert_eq!(construction_reads.get(), 1);
 	}
 
 	#[cfg(all(native, feature = "testing"))]

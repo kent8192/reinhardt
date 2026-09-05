@@ -13,7 +13,7 @@ use reinhardt_pages::dom::Element;
 use reinhardt_pages::hydration::hydrate;
 use reinhardt_pages::prelude::defer_yield;
 use reinhardt_pages::reactive::query::{QueryClient, QueryDefaults, QueryOptions};
-use reinhardt_pages::reactive::{Effect, ReactiveScope};
+use reinhardt_pages::reactive::{Effect, ReactiveScope, Signal};
 use rstest::rstest;
 use serial_test::serial;
 use wasm_bindgen::{JsCast, JsValue};
@@ -663,6 +663,58 @@ async fn delete_mutation_suppresses_duplicate_dispatches_while_pending() {
 	.await;
 	assert_eq!(fetch.delete_requests(), 1);
 
+	scope.dispose();
+}
+
+#[wasm_bindgen_test(async)]
+#[serial(server_mutation_globals)]
+async fn plain_dispatch_does_not_subscribe_the_calling_effect() {
+	let fetch = FetchGuard::install();
+	let scope = ReactiveScope::new();
+	let effect_runs = Rc::new(Cell::new(0));
+	let (cluster_id, mutation, _effect) = scope.enter(|| {
+		let cluster_id = Signal::new("cluster-1".to_owned());
+		let cluster_id_for_action = cluster_id;
+		let request = delete_cluster::mutation();
+		let mutation = use_server_mutation(move |_: ()| {
+			let cluster_id = cluster_id_for_action.get();
+			request(cluster_id)
+		})
+		.build();
+		let mutation_for_effect = mutation;
+		let effect_runs_for_effect = Rc::clone(&effect_runs);
+		let effect = Effect::new(move || {
+			effect_runs_for_effect.set(effect_runs_for_effect.get() + 1);
+			assert_eq!(
+				mutation_for_effect.dispatch(()),
+				MutationDispatchOutcome::Dispatched
+			);
+		});
+		(cluster_id, mutation, effect)
+	});
+
+	wait_until(
+		&fetch,
+		"effect-driven delete request",
+		|| fetch.delete_requests() == 1,
+		|| format!("{:?}", mutation.phase()),
+	)
+	.await;
+	fetch.open_delete_gate();
+	wait_until(
+		&fetch,
+		"effect-driven delete success",
+		|| mutation.result().is_some(),
+		|| format!("{:?}", mutation.phase()),
+	)
+	.await;
+
+	cluster_id.set("cluster-2".to_owned());
+	reinhardt_pages::reactive::with_runtime(|runtime| runtime.flush_updates());
+	settle_browser().await;
+
+	assert_eq!(effect_runs.get(), 1);
+	assert_eq!(fetch.delete_requests(), 1);
 	scope.dispose();
 }
 

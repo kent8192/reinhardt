@@ -191,8 +191,11 @@ For example, opt-in trimming does not rewrite the mounted input, and an invalid
 URL remains available for correction. Immediately before every generated
 submission, Pages builds an owned snapshot in generated schema order, applies
 field conversion and normalization, and runs the generated synchronous
-validation pipeline. The normalized raw payload is sent only when validation
-succeeds; the editable control state remains unchanged.
+validation pipeline under the form's `fields` or `exclude` selection policy.
+Required fields outside that selection do not block the snapshot. The endpoint
+payload keeps its declared policy, which the server validates independently.
+The normalized raw payload is sent only when validation succeeds; the editable
+control state remains unchanged.
 
 Snapshot validation failures become the same structured `ServerFnError` used
 for server responses. A recognized selected field is routed to

@@ -39,7 +39,7 @@ const QUESTION_FIELDS: [ModelFormFieldDescriptor; 2] = [
 		nullable: false,
 		editable: true,
 		generated_relation_id: false,
-	trim: false,
+		trim: false,
 	},
 	ModelFormFieldDescriptor {
 		name: "owner_id",
@@ -52,7 +52,7 @@ const QUESTION_FIELDS: [ModelFormFieldDescriptor; 2] = [
 		nullable: false,
 		editable: true,
 		generated_relation_id: true,
-	trim: false,
+		trim: false,
 	},
 ];
 
@@ -161,13 +161,22 @@ impl<P: ModelFormPolicy> ModelFormValidatingPayload for QuestionModelFormData<P>
 	type Cleaned = CleanedQuestionModelFormData<P>;
 
 	fn clean_and_validate(self) -> Result<Self::Cleaned, ValidationErrors> {
-		if self.title.as_deref() == Some("Rejected by validation") {
+		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+		let payload = {
+			let mut payload = self;
+			reinhardt_forms::model_form::clean_generated_payload::<QuestionFormSchema, P, _>(
+				&mut payload,
+			)?;
+			payload
+		};
+		#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+		let payload = self;
+
+		if payload.title.as_deref() == Some("Rejected by validation") {
 			let mut errors = ValidationErrors::new();
 			errors.add(
 				"title",
-				reinhardt_core::validators::ValidationError::Custom(
-					"Title is rejected".to_owned(),
-				),
+				reinhardt_core::validators::ValidationError::Custom("Title is rejected".to_owned()),
 			);
 			errors.add(
 				"_all",
@@ -177,7 +186,7 @@ impl<P: ModelFormPolicy> ModelFormValidatingPayload for QuestionModelFormData<P>
 			);
 			return Err(errors);
 		}
-		Ok(CleanedQuestionModelFormData(self))
+		Ok(CleanedQuestionModelFormData(payload))
 	}
 }
 

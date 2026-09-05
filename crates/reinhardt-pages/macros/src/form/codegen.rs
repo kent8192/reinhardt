@@ -2477,8 +2477,8 @@ fn generate_model_form(
 					self.set_server_error(::core::option::Option::None);
 					let state = self.__model_state.borrow().clone();
 					if let ::core::result::Result::Err(errors) = state.build_validated_payload_for::<
-						#data_ident,
-						#policy_path,
+						#payload_path<#policy_ident>,
+						#policy_ident,
 					>() {
 						let error = #pages_crate::ServerFnError::from(errors);
 						self.error.set(::core::option::Option::Some(error.to_string()));
@@ -2554,8 +2554,8 @@ fn generate_model_form(
 					self.success.set(false);
 					#model_form_policy_check
 					let normalized_payload = match state.build_validated_payload_for::<
-						#data_ident,
-						#policy_path,
+						#payload_path<#policy_ident>,
+						#policy_ident,
 					>() {
 						::core::result::Result::Ok(payload) => payload,
 						::core::result::Result::Err(errors) => {
@@ -2575,7 +2575,7 @@ fn generate_model_form(
 						) {
 							continue;
 						}
-						match <#data_ident as #pages_crate::form::ModelFormPayload<#policy_path>>::get_json(
+						match <#payload_path<#policy_ident> as #pages_crate::form::ModelFormPayload<#policy_ident>>::get_json(
 							&normalized_payload,
 							descriptor.name,
 						) {
@@ -8746,10 +8746,14 @@ mod tests {
 
 		let output = parse_validate_generate(input).to_string();
 
-		assert!(output.contains("QuestionModelFormData < QuestionSubmissionPolicy >"));
-		assert!(
-			!output.contains("QuestionModelFormData < QuestionFormSelectionPolicy >"),
-			"the public data alias must remain assignable to the server endpoint payload"
+		assert_eq!(
+			output
+				.matches(
+					"pub type QuestionFormData = QuestionModelFormData < QuestionSubmissionPolicy >"
+				)
+				.count(),
+			1,
+			"the public data alias must remain assignable to the server endpoint payload",
 		);
 		assert!(output.contains("i128 :: from (min)"));
 		assert!(output.contains("Value :: Null => :: std :: string :: String :: new ()"));
@@ -8824,22 +8828,33 @@ mod tests {
 	}
 
 	#[rstest::rstest]
-	fn test_generate_model_form_validates_and_rehydrates_submission_snapshot() {
+	#[case::fields(quote! { fields: [name], })]
+	#[case::exclude(quote! { exclude: [api_url], })]
+	fn test_generate_model_form_validates_and_rehydrates_submission_snapshot(
+		#[case] selection: TokenStream,
+	) {
 		let input = quote! {
 			name: ClusterForm,
 			model: Cluster,
 			policy: ClusterPolicy,
-			fields: [name, api_url],
+			#selection
 			server_fn: save_cluster,
 		};
 
 		let output = parse_validate_generate(input).to_string();
 		assert_eq!(output.matches("build_validated_payload_for").count(), 2);
+		assert_eq!(
+			output
+				.matches("build_validated_payload_for :: < ClusterModelFormData < ClusterFormSelectionPolicy > , ClusterFormSelectionPolicy , >")
+				.count(),
+			2,
+			"native and WASM snapshots must validate only selected fields",
+		);
 		let validation = output
 			.rfind("build_validated_payload_for")
 			.expect("WASM submission must validate its snapshot");
 		let rehydration = output[validation..]
-			.find("ModelFormPayload < ClusterPolicy >> :: get_json")
+			.find("ModelFormPayload < ClusterFormSelectionPolicy >> :: get_json")
 			.map(|offset| validation + offset)
 			.expect("generated submission must read normalized payload fields");
 		let dispatch = output[validation..]

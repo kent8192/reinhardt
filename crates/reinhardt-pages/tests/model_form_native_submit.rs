@@ -83,6 +83,71 @@ impl Model for ConstraintQuestion {
 }
 
 #[rstest]
+#[case::missing_selected_title(
+	None,
+	Err(ServerFnError::validation([("title", "This field is required.")]))
+)]
+#[case::valid_subset(Some("Valid title"), Ok(()))]
+#[case::selected_application_validation(
+	Some("Rejected by validation"),
+	Err(ServerFnError::validation([
+		("title", "Title is rejected"),
+		("_all", "Question is rejected"),
+	]))
+)]
+fn native_generated_submit_validates_only_selected_fields(
+	#[case] title: Option<&str>,
+	#[case] expected: Result<(), ServerFnError>,
+) {
+	reinhardt_core::reactive::ReactiveScope::run(|| {
+		// Arrange
+		let explicit_form = form! {
+			name: QuestionSelectedSubmitForm,
+			model: Question,
+			policy: QuestionPolicy,
+			fields: [title],
+			server_fn: save_question,
+		};
+		let excluded_form = form! {
+			name: QuestionExcludedSubmitForm,
+			model: Question,
+			policy: QuestionPolicy,
+			exclude: [owner_id],
+			server_fn: save_question,
+		};
+		if let Some(title) = title {
+			explicit_form
+				.set_value("title", serde_json::json!(title))
+				.expect("selected title accepts text");
+			excluded_form
+				.set_value("title", serde_json::json!(title))
+				.expect("non-excluded title accepts text");
+		}
+
+		// Act
+		let explicit_result = tokio_test::block_on(explicit_form.submit());
+		let excluded_result = tokio_test::block_on(excluded_form.submit());
+
+		// Assert
+		assert_eq!(explicit_result, expected);
+		assert_eq!(excluded_result, expected);
+		if expected.is_ok() {
+			let payload: QuestionModelFormData<QuestionPolicy> = explicit_form
+				.data()
+				.expect("the public payload retains the endpoint policy");
+			let errors = match payload.clean_and_validate() {
+				Ok(_) => panic!("the broader endpoint policy still requires owner_id"),
+				Err(errors) => errors,
+			};
+			assert_eq!(
+				ServerFnError::from(errors),
+				ServerFnError::validation([("owner_id", "This field is required.")]),
+			);
+		}
+	});
+}
+
+#[rstest]
 fn native_generated_submit_routes_snapshot_errors_without_dispatch() {
 	reinhardt_core::reactive::ReactiveScope::run(|| {
 		// Arrange

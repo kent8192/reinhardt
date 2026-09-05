@@ -13,7 +13,7 @@ mod state;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;
 
-#[cfg(feature = "testing")]
+#[cfg(any(feature = "testing", test))]
 pub use browser::QueryBrowserResourceProbe;
 #[cfg(native)]
 pub(crate) use client::NormalizedRecipeRefresh;
@@ -25,7 +25,7 @@ pub(super) use client::acquire_query;
 pub(crate) use client::{
 	QueryAcquireOptions, QueryConsumer, QueryErrorPolicy, QueryLease, QueryResultError,
 };
-#[cfg(feature = "testing")]
+#[cfg(any(feature = "testing", test))]
 pub use client::{
 	query_browser_resource_counts, query_browser_resource_probe_for_test,
 	set_query_visibility_for_test,
@@ -38,7 +38,5 @@ pub use context::queries;
 pub(crate) use context::{current_query_client, with_query_client, with_query_client_async};
 pub use hook::{QueryHandle, use_query};
 pub use identity::{QueryDescriptor, QueryFamily, QueryKey};
-#[doc(hidden)]
-pub use retry::QueryRetryConfig;
-pub use retry::{NoRetry, RetryPolicy};
+pub use retry::{NoRetry, QueryRetryConfig, RetryPolicy};
 pub use state::{QueryDefaults, QueryOptions, QuerySnapshot, QueryStatus};

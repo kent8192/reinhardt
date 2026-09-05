@@ -66,14 +66,16 @@ prefetch, and navigation.
 ## Navigation and cancellation
 
 `ClientLauncher` installs a pages-owned `NavigationCoordinator`. It performs
-matching and guards synchronously, then prepares all matched layout and leaf
-loaders concurrently. Only the latest navigation generation can commit. A
+structural matching, including existing synchronous route predicates, then
+evaluates asynchronous `#[navigation_guard]` functions before preparing all
+matched layout and leaf loaders concurrently. Only the latest navigation
+generation can commit. A
 superseded attempt drops its loader futures and releases its query leases;
 Reinhardt-managed browser requests also receive an abort signal. Work started
 by application code outside the loader future is intentionally not cancelled.
-The matched leaf and layout guards are evaluated again immediately before an
-asynchronously prepared route commits, so a session or authorization change
-during loading cannot commit a route that is no longer allowed.
+The matched leaf and layout navigation guards are evaluated again immediately
+before an asynchronously prepared route commits, so a session or authorization
+change during loading cannot commit a route that is no longer allowed.
 
 `use_transition().is_pending` includes coordinator navigation pending state in
 addition to local transition work and becomes `true` synchronously when a

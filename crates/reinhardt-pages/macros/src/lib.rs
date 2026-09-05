@@ -87,6 +87,7 @@ mod form;
 mod from_request;
 mod head;
 mod loader;
+mod navigation_guard;
 mod page;
 mod page_props;
 mod server_fn;
@@ -272,6 +273,12 @@ pub fn layout(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn loader(args: TokenStream, input: TokenStream) -> TokenStream {
 	loader::loader_impl(args, input)
+}
+
+/// Declares an async route navigation guard and registers it for execution.
+#[proc_macro_attribute]
+pub fn navigation_guard(args: TokenStream, input: TokenStream) -> TokenStream {
+	navigation_guard::navigation_guard_impl(args, input)
 }
 
 /// Declares public APIs with matching WASM and server-side surfaces.

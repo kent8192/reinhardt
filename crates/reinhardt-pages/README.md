@@ -60,6 +60,10 @@ For a React concept mapping, see
 For route-level loaders, prepare/commit navigation, prefetch, cancellation, and
 SSR hydration, see [Route-level data loaders](docs/route_loaders.md).
 
+For asynchronous route access checks across navigation, loaders, prefetch,
+SSR, hydration, and authentication invalidation, see
+[Asynchronous navigation guards](docs/navigation_guards.md).
+
 ## Headless UI primitives
 
 The `reinhardt_pages::ui` module provides small, headless building blocks for

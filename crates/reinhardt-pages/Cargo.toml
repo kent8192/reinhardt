@@ -453,6 +453,11 @@ path = "tests/wasm/route_loader_prefetch_wasm_test.rs"
 required-features = []
 
 [[test]]
+name = "navigation_guard_wasm_test"
+path = "tests/wasm/navigation_guard_wasm_test.rs"
+required-features = []
+
+[[test]]
 name = "portal_wasm_test"
 path = "tests/wasm/portal_wasm_test.rs"
 required-features = []

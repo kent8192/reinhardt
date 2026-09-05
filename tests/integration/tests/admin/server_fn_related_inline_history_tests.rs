@@ -13,6 +13,7 @@ use reinhardt_db::backends::dialect::PostgresBackend;
 use reinhardt_db::orm::DatabaseConnectionLease;
 use reinhardt_di::KeyedDepends;
 use reinhardt_macros::model;
+use reinhardt_pages::server_fn::{ServerFnError, ServerFnErrorKind};
 use reinhardt_test::fixtures::shared_postgres::shared_db_pool;
 use rstest::{fixture, rstest};
 use serde::{Deserialize, Serialize};
@@ -241,11 +242,11 @@ async fn create_parent_with_children(
 	(parent_id, rows)
 }
 
-async fn object_history(
+async fn object_history_result(
 	context: &RelatedInlineContext,
 	model_name: &str,
 	object_id: &str,
-) -> HistoryResponse {
+) -> Result<HistoryResponse, ServerFnError> {
 	let (site, db, _, _) = context;
 	get_history(
 		model_name.to_lowercase(),
@@ -257,7 +258,22 @@ async fn object_history(
 		make_auth_user(),
 	)
 	.await
-	.expect("related object history must be queryable")
+}
+
+async fn object_history(
+	context: &RelatedInlineContext,
+	model_name: &str,
+	object_id: &str,
+) -> HistoryResponse {
+	object_history_result(context, model_name, object_id)
+		.await
+		.expect("related object history must be queryable")
+}
+
+fn assert_object_not_found(error: ServerFnError) {
+	assert_eq!(error.kind(), ServerFnErrorKind::Server);
+	assert_eq!(error.status(), Some(404));
+	assert_eq!(error.user_message(), "Object not found");
 }
 
 async fn history_actions(pool: &sqlx::PgPool, model_name: &str, object_id: &str) -> Vec<String> {
@@ -383,8 +399,17 @@ async fn related_inline_create_then_update_writes_canonical_per_object_history(
 		.expect("new related child identity must be returned by the database");
 	let parent_history = object_history(&context, PARENT_MODEL, &parent_id).await;
 	let updated_history = object_history(&context, CHILD_MODEL, &first_id).await;
-	let deleted_history = history_actions(pool, CHILD_MODEL, &deleted_id).await;
+	let deleted_history = object_history_result(&context, CHILD_MODEL, &deleted_id).await;
+	let deleted_actions = history_actions(pool, CHILD_MODEL, &deleted_id).await;
 	let created_history = object_history(&context, CHILD_MODEL, &created_id).await;
+	let deleted_history_count: i64 = sqlx::query_scalar(
+		"SELECT COUNT(*) FROM reinhardt_admin_history WHERE model_name = $1 AND object_id = $2",
+	)
+	.bind(CHILD_MODEL)
+	.bind(&deleted_id)
+	.fetch_one(pool)
+	.await
+	.expect("deleted child history must remain persisted");
 
 	// Assert
 	assert_eq!(update.affected, Some(1));
@@ -428,7 +453,9 @@ async fn related_inline_create_then_update_writes_canonical_per_object_history(
 			("CREATE", &["name", "position"]),
 		],
 	);
-	assert_eq!(deleted_history, ["DELETE", "CREATE"]);
+	assert_object_not_found(deleted_history.expect_err("deleted child history must be scoped out"));
+	assert_eq!(deleted_actions, ["DELETE", "CREATE"]);
+	assert_eq!(deleted_history_count, 2);
 	assert_history(
 		&created_history,
 		CHILD_MODEL,

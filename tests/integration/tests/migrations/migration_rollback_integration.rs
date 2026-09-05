@@ -96,64 +96,64 @@ fn create_test_migration(
 	name: &'static str,
 	operations: Vec<Operation>,
 ) -> Migration {
-	Migration {
-		app_label: app.to_string(),
-		name: name.to_string(),
+	Migration::from_parts(
+		name.to_string(),
+		app.to_string(),
 		operations,
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	}
+		vec![],
+		vec![],
+		true,
+		None,
+		false,
+		false,
+		vec![],
+		vec![],
+	)
 }
 
 /// Create a basic column definition.
 fn create_basic_column(name: &str, type_def: FieldType) -> ColumnDefinition {
-	ColumnDefinition {
-		name: name.to_string(),
-		type_definition: type_def,
-		not_null: false,
-		unique: false,
-		primary_key: false,
-		auto_increment: false,
-		default: None,
-		generated: None,
-		domain: None,
-	}
+	ColumnDefinition::from_parts(
+		name.to_string(),
+		type_def,
+		false,
+		false,
+		false,
+		false,
+		None,
+		None,
+		None,
+	)
 }
 
 /// Create a NOT NULL column definition.
 fn create_not_null_column(name: &str, type_def: FieldType) -> ColumnDefinition {
-	ColumnDefinition {
-		name: name.to_string(),
-		type_definition: type_def,
-		not_null: true,
-		unique: false,
-		primary_key: false,
-		auto_increment: false,
-		default: None,
-		generated: None,
-		domain: None,
-	}
+	ColumnDefinition::from_parts(
+		name.to_string(),
+		type_def,
+		true,
+		false,
+		false,
+		false,
+		None,
+		None,
+		None,
+	)
 }
 
 /// Create an auto-increment primary key column.
 fn create_auto_pk_column(name: &str, type_def: FieldType) -> ColumnDefinition {
-	ColumnDefinition {
-		name: name.to_string(),
-		type_definition: type_def,
-		not_null: true,
-		unique: false,
-		primary_key: true,
-		auto_increment: true,
-		default: None,
-		generated: None,
-		domain: None,
-	}
+	ColumnDefinition::from_parts(
+		name.to_string(),
+		type_def,
+		true,
+		false,
+		true,
+		true,
+		None,
+		None,
+		None,
+	)
 }
 
 // ============================================================================
@@ -867,10 +867,10 @@ async fn test_atomic_multi_operation_rollback(#[case] backend: DatabaseType) {
 	let (_handle, connection) = setup_backend(backend).await;
 	let mut executor = DatabaseMigrationExecutor::new(connection.clone());
 
-	let migration = Migration {
-		app_label: "testapp".to_string(),
-		name: "0001_multi_ops".to_string(),
-		operations: vec![
+	let migration = Migration::from_parts(
+		"0001_multi_ops".to_string(),
+		"testapp".to_string(),
+		vec![
 			Operation::CreateTable {
 				name: leak_str("table1").to_string(),
 				columns: vec![create_auto_pk_column("id", FieldType::Integer)],
@@ -896,15 +896,15 @@ async fn test_atomic_multi_operation_rollback(#[case] backend: DatabaseType) {
 				partition: None,
 			},
 		],
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	};
+		vec![],
+		vec![],
+		true,
+		None,
+		false,
+		false,
+		vec![],
+		vec![],
+	);
 
 	// Act: forward
 	executor
@@ -1211,10 +1211,10 @@ async fn test_partial_rollback_non_atomic(#[case] backend: DatabaseType) {
 	let (_handle, connection) = setup_backend(backend).await;
 	let mut executor = DatabaseMigrationExecutor::new(connection.clone());
 
-	let migration = Migration {
-		app_label: "testapp".to_string(),
-		name: "0001_non_atomic".to_string(),
-		operations: vec![Operation::CreateTable {
+	let migration = Migration::from_parts(
+		"0001_non_atomic".to_string(),
+		"testapp".to_string(),
+		vec![Operation::CreateTable {
 			name: leak_str("non_atomic_table").to_string(),
 			columns: vec![create_auto_pk_column("id", FieldType::Integer)],
 			constraints: vec![],
@@ -1222,15 +1222,15 @@ async fn test_partial_rollback_non_atomic(#[case] backend: DatabaseType) {
 			interleave_in_parent: None,
 			partition: None,
 		}],
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: false,
-		initial: None,
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	};
+		vec![],
+		vec![],
+		false,
+		None,
+		false,
+		false,
+		vec![],
+		vec![],
+	);
 
 	// Act: forward
 	executor
@@ -1465,10 +1465,10 @@ async fn test_rollback_with_dependencies(
 		}],
 	);
 
-	let migration_b = Migration {
-		app_label: "testapp".to_string(),
-		name: "0002_create_orders".to_string(),
-		operations: vec![
+	let migration_b = Migration::from_parts(
+		"0002_create_orders".to_string(),
+		"testapp".to_string(),
+		vec![
 			Operation::CreateTable {
 				name: leak_str("orders").to_string(),
 				columns: vec![
@@ -1485,15 +1485,15 @@ async fn test_rollback_with_dependencies(
 				constraint_sql: fk_constraint_sql.to_string(),
 			},
 		],
-		dependencies: vec![("testapp".to_string(), "0001_create_users".to_string())],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	};
+		vec![("testapp".to_string(), "0001_create_users".to_string())],
+		vec![],
+		true,
+		None,
+		false,
+		false,
+		vec![],
+		vec![],
+	);
 
 	// Act: forward both
 	executor
@@ -1563,10 +1563,10 @@ async fn test_circular_dependency_rollback(#[case] backend: DatabaseType) {
 	let mut executor = DatabaseMigrationExecutor::new(connection);
 
 	// Build an actual cycle: A depends on B, and B depends on A.
-	let migration_a = Migration {
-		app_label: "testapp".to_string(),
-		name: "0001_migration_a".to_string(),
-		operations: vec![Operation::CreateTable {
+	let migration_a = Migration::from_parts(
+		"0001_migration_a".to_string(),
+		"testapp".to_string(),
+		vec![Operation::CreateTable {
 			name: leak_str("table_a").to_string(),
 			columns: vec![create_auto_pk_column("id", FieldType::Integer)],
 			constraints: vec![],
@@ -1574,20 +1574,20 @@ async fn test_circular_dependency_rollback(#[case] backend: DatabaseType) {
 			interleave_in_parent: None,
 			partition: None,
 		}],
-		dependencies: vec![("testapp".to_string(), "0002_migration_b".to_string())],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	};
+		vec![("testapp".to_string(), "0002_migration_b".to_string())],
+		vec![],
+		true,
+		None,
+		false,
+		false,
+		vec![],
+		vec![],
+	);
 
-	let migration_b = Migration {
-		app_label: "testapp".to_string(),
-		name: "0002_migration_b".to_string(),
-		operations: vec![Operation::CreateTable {
+	let migration_b = Migration::from_parts(
+		"0002_migration_b".to_string(),
+		"testapp".to_string(),
+		vec![Operation::CreateTable {
 			name: leak_str("table_b").to_string(),
 			columns: vec![create_auto_pk_column("id", FieldType::Integer)],
 			constraints: vec![],
@@ -1595,15 +1595,15 @@ async fn test_circular_dependency_rollback(#[case] backend: DatabaseType) {
 			interleave_in_parent: None,
 			partition: None,
 		}],
-		dependencies: vec![("testapp".to_string(), "0001_migration_a".to_string())],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	};
+		vec![("testapp".to_string(), "0001_migration_a".to_string())],
+		vec![],
+		true,
+		None,
+		false,
+		false,
+		vec![],
+		vec![],
+	);
 
 	// Act: apply both migrations together so the resolver sees the cycle.
 	let apply_result = executor

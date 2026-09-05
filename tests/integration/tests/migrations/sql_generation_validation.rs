@@ -46,79 +46,79 @@ fn create_test_migration(
 	name: &'static str,
 	operations: Vec<Operation>,
 ) -> Migration {
-	Migration {
-		app_label: app.to_string(),
-		name: name.to_string(),
+	Migration::from_parts(
+		name.to_string(),
+		app.to_string(),
 		operations,
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	}
+		vec![],
+		vec![],
+		true,
+		None,
+		false,
+		false,
+		vec![],
+		vec![],
+	)
 }
 
 /// Create a basic column definition
 fn create_basic_column(name: &str, type_def: FieldType) -> ColumnDefinition {
-	ColumnDefinition {
-		name: name.to_string(),
-		type_definition: type_def,
-		not_null: false,
-		unique: false,
-		primary_key: false,
-		auto_increment: false,
-		default: None,
-		generated: None,
-		domain: None,
-	}
+	ColumnDefinition::from_parts(
+		name.to_string(),
+		type_def,
+		false,
+		false,
+		false,
+		false,
+		None,
+		None,
+		None,
+	)
 }
 
 /// Create a NOT NULL column definition
 fn create_not_null_column(name: &str, type_def: FieldType) -> ColumnDefinition {
-	ColumnDefinition {
-		name: name.to_string(),
-		type_definition: type_def,
-		not_null: true,
-		unique: false,
-		primary_key: false,
-		auto_increment: false,
-		default: None,
-		generated: None,
-		domain: None,
-	}
+	ColumnDefinition::from_parts(
+		name.to_string(),
+		type_def,
+		true,
+		false,
+		false,
+		false,
+		None,
+		None,
+		None,
+	)
 }
 
 /// Create a column with DEFAULT value
 fn create_column_with_default(name: &str, type_def: FieldType, default: &str) -> ColumnDefinition {
-	ColumnDefinition {
-		name: name.to_string(),
-		type_definition: type_def,
-		not_null: false,
-		unique: false,
-		primary_key: false,
-		auto_increment: false,
-		default: Some(default.to_string()),
-		generated: None,
-		domain: None,
-	}
+	ColumnDefinition::from_parts(
+		name.to_string(),
+		type_def,
+		false,
+		false,
+		false,
+		false,
+		Some(default.to_string()),
+		None,
+		None,
+	)
 }
 
 /// Create an auto-increment primary key column
 fn create_auto_pk_column(name: &str, type_def: FieldType) -> ColumnDefinition {
-	ColumnDefinition {
-		name: name.to_string(),
-		type_definition: type_def,
-		not_null: true,
-		unique: false,
-		primary_key: true,
-		auto_increment: true,
-		default: None,
-		generated: None,
-		domain: None,
-	}
+	ColumnDefinition::from_parts(
+		name.to_string(),
+		type_def,
+		true,
+		false,
+		true,
+		true,
+		None,
+		None,
+		None,
+	)
 }
 
 // ============================================================================
@@ -236,30 +236,28 @@ async fn test_create_table_with_composite_primary_key() {
 	let operation = Operation::CreateTable {
 		name: leak_str("order_items").to_string(),
 		columns: vec![
-			ColumnDefinition {
-				name: "order_id".to_string(),
-				type_definition: FieldType::BigInteger,
-				not_null: true,
-				unique: false,
-				primary_key: true,
-				auto_increment: false,
-				default: None,
-
-				generated: None,
-				domain: None,
-			},
-			ColumnDefinition {
-				name: "item_id".to_string(),
-				type_definition: FieldType::BigInteger,
-				not_null: true,
-				unique: false,
-				primary_key: true,
-				auto_increment: false,
-				default: None,
-
-				generated: None,
-				domain: None,
-			},
+			ColumnDefinition::from_parts(
+				"order_id".to_string(),
+				FieldType::BigInteger,
+				true,
+				false,
+				true,
+				false,
+				None,
+				None,
+				None,
+			),
+			ColumnDefinition::from_parts(
+				"item_id".to_string(),
+				FieldType::BigInteger,
+				true,
+				false,
+				true,
+				false,
+				None,
+				None,
+				None,
+			),
 			create_basic_column("quantity", FieldType::Integer),
 		],
 		constraints: vec![],
@@ -344,21 +342,20 @@ async fn test_alter_table_alter_column_type_syntax() {
 		table: leak_str("products").to_string(),
 		column: leak_str("price").to_string(),
 		old_definition: None,
-		new_definition: ColumnDefinition {
-			name: "price".to_string(),
-			type_definition: FieldType::Decimal {
+		new_definition: ColumnDefinition::from_parts(
+			"price".to_string(),
+			FieldType::Decimal {
 				precision: 12,
 				scale: 2,
 			},
-			not_null: false,
-			unique: false,
-			primary_key: false,
-			auto_increment: false,
-			default: None,
-
-			generated: None,
-			domain: None,
-		},
+			false,
+			false,
+			false,
+			false,
+			None,
+			None,
+			None,
+		),
 		mysql_options: None,
 	};
 
@@ -902,42 +899,39 @@ async fn test_composite_primary_key_syntax_postgres() {
 	let operation = Operation::CreateTable {
 		name: leak_str("order_items").to_string(),
 		columns: vec![
-			ColumnDefinition {
-				name: "order_id".to_string(),
-				type_definition: FieldType::BigInteger,
-				not_null: true,
-				unique: false,
-				primary_key: true,
-				auto_increment: false,
-				default: None,
-
-				generated: None,
-				domain: None,
-			},
-			ColumnDefinition {
-				name: "item_id".to_string(),
-				type_definition: FieldType::BigInteger,
-				not_null: true,
-				unique: false,
-				primary_key: true,
-				auto_increment: false,
-				default: None,
-
-				generated: None,
-				domain: None,
-			},
-			ColumnDefinition {
-				name: "quantity".to_string(),
-				type_definition: FieldType::Integer,
-				not_null: true,
-				unique: false,
-				primary_key: false,
-				auto_increment: false,
-				default: Some("1".to_string()),
-
-				generated: None,
-				domain: None,
-			},
+			ColumnDefinition::from_parts(
+				"order_id".to_string(),
+				FieldType::BigInteger,
+				true,
+				false,
+				true,
+				false,
+				None,
+				None,
+				None,
+			),
+			ColumnDefinition::from_parts(
+				"item_id".to_string(),
+				FieldType::BigInteger,
+				true,
+				false,
+				true,
+				false,
+				None,
+				None,
+				None,
+			),
+			ColumnDefinition::from_parts(
+				"quantity".to_string(),
+				FieldType::Integer,
+				true,
+				false,
+				false,
+				false,
+				Some("1".to_string()),
+				None,
+				None,
+			),
 		],
 		constraints: vec![],
 		without_rowid: None,
@@ -977,30 +971,28 @@ async fn test_composite_primary_key_syntax_mysql() {
 	let operation = Operation::CreateTable {
 		name: leak_str("user_roles").to_string(),
 		columns: vec![
-			ColumnDefinition {
-				name: "user_id".to_string(),
-				type_definition: FieldType::Integer,
-				not_null: true,
-				unique: false,
-				primary_key: true,
-				auto_increment: false,
-				default: None,
-
-				generated: None,
-				domain: None,
-			},
-			ColumnDefinition {
-				name: "role_id".to_string(),
-				type_definition: FieldType::Integer,
-				not_null: true,
-				unique: false,
-				primary_key: true,
-				auto_increment: false,
-				default: None,
-
-				generated: None,
-				domain: None,
-			},
+			ColumnDefinition::from_parts(
+				"user_id".to_string(),
+				FieldType::Integer,
+				true,
+				false,
+				true,
+				false,
+				None,
+				None,
+				None,
+			),
+			ColumnDefinition::from_parts(
+				"role_id".to_string(),
+				FieldType::Integer,
+				true,
+				false,
+				true,
+				false,
+				None,
+				None,
+				None,
+			),
 		],
 		constraints: vec![],
 		without_rowid: None,
@@ -1054,42 +1046,39 @@ async fn test_composite_primary_key_postgres_integration(
 		vec![Operation::CreateTable {
 			name: leak_str("enrollment").to_string(),
 			columns: vec![
-				ColumnDefinition {
-					name: "student_id".to_string(),
-					type_definition: FieldType::Integer,
-					not_null: true,
-					unique: false,
-					primary_key: true,
-					auto_increment: false,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
-				ColumnDefinition {
-					name: "course_id".to_string(),
-					type_definition: FieldType::Integer,
-					not_null: true,
-					unique: false,
-					primary_key: true,
-					auto_increment: false,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
-				ColumnDefinition {
-					name: "enrolled_at".to_string(),
-					type_definition: FieldType::DateTime,
-					not_null: false,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
-					default: Some("CURRENT_TIMESTAMP".to_string()),
-
-					generated: None,
-					domain: None,
-				},
+				ColumnDefinition::from_parts(
+					"student_id".to_string(),
+					FieldType::Integer,
+					true,
+					false,
+					true,
+					false,
+					None,
+					None,
+					None,
+				),
+				ColumnDefinition::from_parts(
+					"course_id".to_string(),
+					FieldType::Integer,
+					true,
+					false,
+					true,
+					false,
+					None,
+					None,
+					None,
+				),
+				ColumnDefinition::from_parts(
+					"enrolled_at".to_string(),
+					FieldType::DateTime,
+					false,
+					false,
+					false,
+					false,
+					Some("CURRENT_TIMESTAMP".to_string()),
+					None,
+					None,
+				),
 			],
 			constraints: vec![],
 			without_rowid: None,
@@ -1201,54 +1190,50 @@ async fn test_composite_primary_key_three_columns(
 		vec![Operation::CreateTable {
 			name: leak_str("booking").to_string(),
 			columns: vec![
-				ColumnDefinition {
-					name: "hotel_id".to_string(),
-					type_definition: FieldType::Integer,
-					not_null: true,
-					unique: false,
-					primary_key: true,
-					auto_increment: false,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
-				ColumnDefinition {
-					name: "room_number".to_string(),
-					type_definition: FieldType::Integer,
-					not_null: true,
-					unique: false,
-					primary_key: true,
-					auto_increment: false,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
-				ColumnDefinition {
-					name: "booking_date".to_string(),
-					type_definition: FieldType::Date,
-					not_null: true,
-					unique: false,
-					primary_key: true,
-					auto_increment: false,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
-				ColumnDefinition {
-					name: "guest_name".to_string(),
-					type_definition: FieldType::VarChar(200),
-					not_null: true,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
+				ColumnDefinition::from_parts(
+					"hotel_id".to_string(),
+					FieldType::Integer,
+					true,
+					false,
+					true,
+					false,
+					None,
+					None,
+					None,
+				),
+				ColumnDefinition::from_parts(
+					"room_number".to_string(),
+					FieldType::Integer,
+					true,
+					false,
+					true,
+					false,
+					None,
+					None,
+					None,
+				),
+				ColumnDefinition::from_parts(
+					"booking_date".to_string(),
+					FieldType::Date,
+					true,
+					false,
+					true,
+					false,
+					None,
+					None,
+					None,
+				),
+				ColumnDefinition::from_parts(
+					"guest_name".to_string(),
+					FieldType::VarChar(200),
+					true,
+					false,
+					false,
+					false,
+					None,
+					None,
+					None,
+				),
 			],
 			constraints: vec![],
 			without_rowid: None,

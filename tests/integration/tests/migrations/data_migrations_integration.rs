@@ -48,64 +48,64 @@ fn create_test_migration(
 	name: &'static str,
 	operations: Vec<Operation>,
 ) -> Migration {
-	Migration {
-		app_label: app.to_string(),
-		name: name.to_string(),
+	Migration::from_parts(
+		name.to_string(),
+		app.to_string(),
 		operations,
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	}
+		vec![],
+		vec![],
+		true,
+		None,
+		false,
+		false,
+		vec![],
+		vec![],
+	)
 }
 
 /// Create a basic column definition
 fn create_basic_column(name: &str, type_def: FieldType) -> ColumnDefinition {
-	ColumnDefinition {
-		name: name.to_string(),
-		type_definition: type_def,
-		not_null: false,
-		unique: false,
-		primary_key: false,
-		auto_increment: false,
-		default: None,
-		generated: None,
-		domain: None,
-	}
+	ColumnDefinition::from_parts(
+		name.to_string(),
+		type_def,
+		false,
+		false,
+		false,
+		false,
+		None,
+		None,
+		None,
+	)
 }
 
 /// Create a NOT NULL column definition
 fn create_not_null_column(name: &str, type_def: FieldType) -> ColumnDefinition {
-	ColumnDefinition {
-		name: name.to_string(),
-		type_definition: type_def,
-		not_null: true,
-		unique: false,
-		primary_key: false,
-		auto_increment: false,
-		default: None,
-		generated: None,
-		domain: None,
-	}
+	ColumnDefinition::from_parts(
+		name.to_string(),
+		type_def,
+		true,
+		false,
+		false,
+		false,
+		None,
+		None,
+		None,
+	)
 }
 
 /// Create an auto-increment primary key column
 fn create_auto_pk_column(name: &str, type_def: FieldType) -> ColumnDefinition {
-	ColumnDefinition {
-		name: name.to_string(),
-		type_definition: type_def,
-		not_null: true,
-		unique: false,
-		primary_key: true,
-		auto_increment: true,
-		default: None,
-		generated: None,
-		domain: None,
-	}
+	ColumnDefinition::from_parts(
+		name.to_string(),
+		type_def,
+		true,
+		false,
+		true,
+		true,
+		None,
+		None,
+		None,
+	)
 }
 
 // ============================================================================
@@ -939,10 +939,10 @@ async fn test_state_only_migration(
 
 	// Create a migration with state_only=true
 	// This migration should NOT execute database operations
-	let state_only_migration = Migration {
-		app_label: "testapp".to_string(),
-		name: "0001_state_only".to_string(),
-		operations: vec![Operation::CreateTable {
+	let state_only_migration = Migration::from_parts(
+		"0001_state_only".to_string(),
+		"testapp".to_string(),
+		vec![Operation::CreateTable {
 			name: leak_str("state_only_table").to_string(),
 			columns: vec![create_auto_pk_column("id", FieldType::Integer)],
 			constraints: vec![],
@@ -950,15 +950,15 @@ async fn test_state_only_migration(
 			interleave_in_parent: None,
 			partition: None,
 		}],
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: true, // Skip database operations
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	};
+		vec![],
+		vec![],
+		true,
+		None,
+		true,
+		false,
+		vec![],
+		vec![],
+	);
 
 	// Apply migration with state_only=true
 	executor
@@ -1005,10 +1005,10 @@ async fn test_database_only_migration(
 
 	// Create a migration with database_only=true
 	// This migration executes database operations but doesn't update ProjectState
-	let database_only_migration = Migration {
-		app_label: "testapp".to_string(),
-		name: "0001_db_only".to_string(),
-		operations: vec![Operation::CreateTable {
+	let database_only_migration = Migration::from_parts(
+		"0001_db_only".to_string(),
+		"testapp".to_string(),
+		vec![Operation::CreateTable {
 			name: leak_str("database_only_table").to_string(),
 			columns: vec![
 				create_auto_pk_column("id", FieldType::Integer),
@@ -1019,15 +1019,15 @@ async fn test_database_only_migration(
 			interleave_in_parent: None,
 			partition: None,
 		}],
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: true, // Execute SQL but skip ProjectState updates
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	};
+		vec![],
+		vec![],
+		true,
+		None,
+		false,
+		true,
+		vec![],
+		vec![],
+	);
 
 	// Apply migration with database_only=true
 	executor

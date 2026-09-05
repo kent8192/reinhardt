@@ -15,6 +15,7 @@ use reinhardt_db::migrations::model_registry::{
 };
 use reinhardt_db::orm::connection::DatabaseConnectionLease;
 use reinhardt_di::KeyedDepends;
+use reinhardt_pages::server_fn::ServerFnErrorKind;
 use reinhardt_test::fixtures::shared_postgres::shared_db_pool;
 use rstest::*;
 use serde_json::json;
@@ -481,7 +482,7 @@ async fn test_get_fields_field_type_inference(
 
 // ==================== Edge case tests ====================
 
-/// Verify get_fields rejects a non-existent edit target.
+/// Verify get_fields rejects a non-existent or out-of-scope edit target.
 #[rstest]
 #[tokio::test]
 async fn test_get_fields_edit_nonexistent_id(
@@ -505,7 +506,9 @@ async fn test_get_fields_edit_nonexistent_id(
 
 	// Assert
 	let error = result.expect_err("get_fields should reject a non-existent edit target");
+	assert_eq!(error.kind(), ServerFnErrorKind::Server);
 	assert_eq!(error.status(), Some(404));
+	assert_eq!(error.user_message(), "Object not found");
 }
 
 // ==================== Error path tests ====================

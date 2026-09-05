@@ -43,32 +43,12 @@ fn create_test_migration(
 	name: &'static str,
 	operations: Vec<Operation>,
 ) -> Migration {
-	Migration {
-		app_label: app.to_string(),
-		name: name.to_string(),
-		operations,
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-	}
+	Migration::from_parts(name.to_string(), app.to_string(), operations, vec![], vec![], true, None, false, false, Vec::new(), Vec::new())
 }
 
 /// Create a basic column definition
 fn create_basic_column(name: &str, type_def: FieldType) -> ColumnDefinition {
-	ColumnDefinition {
-		name: name.to_string(),
-		type_definition: type_def,
-		not_null: false,
-		unique: false,
-		primary_key: false,
-		auto_increment: false,
-		default: None,
-		generated: None,
-		domain: None,
-	}
+	ColumnDefinition::from_parts(name.to_string(), type_def, false, false, false, false, None, None, None)
 }
 
 // ============================================================================
@@ -139,18 +119,7 @@ async fn test_least_privilege_principle_adherence(
 		vec![Operation::CreateTable {
 			name: leak_str("users").to_string(),
 			columns: vec![
-				ColumnDefinition {
-					name: "id".to_string(),
-					type_definition: FieldType::Custom("SERIAL PRIMARY KEY".to_string()),
-					not_null: true,
-					unique: false,
-					primary_key: true,
-					auto_increment: true,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
+				ColumnDefinition::from_parts("id".to_string(), FieldType::Custom("SERIAL PRIMARY KEY".to_string()), true, false, true, true, None, None, None),
 				create_basic_column("username", FieldType::VarChar(Some(100))),
 				create_basic_column("email", FieldType::VarChar(Some(255))),
 			],
@@ -331,18 +300,7 @@ async fn test_sensitive_data_handling(
 		vec![Operation::CreateTable {
 			name: leak_str("users").to_string(),
 			columns: vec![
-				ColumnDefinition {
-					name: "id".to_string(),
-					type_definition: FieldType::Custom("SERIAL PRIMARY KEY".to_string()),
-					not_null: true,
-					unique: false,
-					primary_key: true,
-					auto_increment: true,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
+				ColumnDefinition::from_parts("id".to_string(), FieldType::Custom("SERIAL PRIMARY KEY".to_string()), true, false, true, true, None, None, None),
 				create_basic_column("username", FieldType::VarChar(Some(100))),
 				create_basic_column("password_hash", FieldType::VarChar(Some(255))),
 				create_basic_column("api_token", FieldType::VarChar(Some(255))),
@@ -565,36 +523,14 @@ async fn test_audit_logging_completeness(
 		vec![Operation::CreateTable {
 			name: leak_str("migration_audit_log").to_string(),
 			columns: vec![
-				ColumnDefinition {
-					name: "id".to_string(),
-					type_definition: FieldType::Custom("SERIAL PRIMARY KEY".to_string()),
-					not_null: true,
-					unique: false,
-					primary_key: true,
-					auto_increment: true,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
+				ColumnDefinition::from_parts("id".to_string(), FieldType::Custom("SERIAL PRIMARY KEY".to_string()), true, false, true, true, None, None, None),
 				create_basic_column("migration_app", FieldType::VarChar(Some(100))),
 				create_basic_column("migration_name", FieldType::VarChar(Some(255))),
 				create_basic_column("operation_type", FieldType::VarChar(Some(50))),
 				create_basic_column("table_name", FieldType::VarChar(Some(100))),
 				create_basic_column("success", FieldType::Boolean),
 				create_basic_column("error_message", FieldType::Text),
-				ColumnDefinition {
-					name: "executed_at".to_string(),
-					type_definition: FieldType::Timestamp,
-					not_null: true,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
-					default: Some("CURRENT_TIMESTAMP".to_string()),
-
-					generated: None,
-					domain: None,
-				},
+				ColumnDefinition::from_parts("executed_at".to_string(), FieldType::Timestamp, true, false, false, false, Some("CURRENT_TIMESTAMP".to_string()), None, None),
 				create_basic_column("executed_by", FieldType::VarChar(Some(100))),
 			],
 		}],
@@ -616,18 +552,7 @@ async fn test_audit_logging_completeness(
 		vec![Operation::CreateTable {
 			name: leak_str("products").to_string(),
 			columns: vec![
-				ColumnDefinition {
-					name: "id".to_string(),
-					type_definition: FieldType::Custom("SERIAL PRIMARY KEY".to_string()),
-					not_null: true,
-					unique: false,
-					primary_key: true,
-					auto_increment: true,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
+				ColumnDefinition::from_parts("id".to_string(), FieldType::Custom("SERIAL PRIMARY KEY".to_string()), true, false, true, true, None, None, None),
 				create_basic_column("name", FieldType::VarChar(Some(200))),
 				create_basic_column("price", FieldType::Custom("DECIMAL(10, 2)".to_string())),
 			],
@@ -1040,18 +965,7 @@ async fn test_sql_injection_prevention(
 		vec![Operation::CreateTable {
 			name: leak_str("users").to_string(),
 			columns: vec![
-				ColumnDefinition {
-					name: "id".to_string(),
-					type_definition: FieldType::Custom("SERIAL PRIMARY KEY".to_string()),
-					not_null: true,
-					unique: false,
-					primary_key: true,
-					auto_increment: true,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
+				ColumnDefinition::from_parts("id".to_string(), FieldType::Custom("SERIAL PRIMARY KEY".to_string()), true, false, true, true, None, None, None),
 				create_basic_column("username", FieldType::VarChar(Some(100))),
 				create_basic_column("email", FieldType::VarChar(Some(255))),
 			],

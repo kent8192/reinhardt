@@ -216,13 +216,7 @@ fn test_ec_mg_02_circular_dependency_detection() {
 #[rstest]
 fn test_ec_mg_02_self_referencing_migration() {
 	// Arrange
-	let migration = Migration {
-		app_label: "self_ref".to_string(),
-		name: "0001_self_referencing".to_string(),
-		operations: vec![],
-		dependencies: vec!["self_ref.0001_self_referencing".to_string()],
-		..Default::default()
-	};
+	let migration = Migration::from_parts("0001_self_referencing".to_string(), "self_ref".to_string(), vec![], vec!["self_ref.0001_self_referencing".to_string()], Vec::new(), true, None, false, false, Vec::new(), Vec::new());
 
 	let graph = MigrationGraph::new();
 	let key = MigrationKey::new(&migration.app_label, &migration.name);
@@ -328,21 +322,9 @@ fn test_ec_mg_03_plan_respects_dependency_order() {
 
 	// Create migrations with dependencies
 	fixture.add_migration("dep_test", "0001_first", vec![]);
-	let second_migration = Migration {
-		app_label: "dep_test".to_string(),
-		name: "0002_second".to_string(),
-		operations: vec![],
-		dependencies: vec![("dep_test".to_string(), "0001_first".to_string())],
-		..Default::default()
-	};
+	let second_migration = Migration::from_parts("0002_second".to_string(), "dep_test".to_string(), vec![], vec![("dep_test".to_string(), "0001_first".to_string())], Vec::new(), true, None, false, false, Vec::new(), Vec::new());
 	fixture.migrations.add_migration(second_migration);
-	let third_migration = Migration {
-		app_label: "dep_test".to_string(),
-		name: "0003_third".to_string(),
-		operations: vec![],
-		dependencies: vec![("dep_test".to_string(), "0002_second".to_string())],
-		..Default::default()
-	};
+	let third_migration = Migration::from_parts("0003_third".to_string(), "dep_test".to_string(), vec![], vec![("dep_test".to_string(), "0002_second".to_string())], Vec::new(), true, None, false, false, Vec::new(), Vec::new());
 	fixture.migrations.add_migration(third_migration);
 
 	// Build graph to verify ordering
@@ -631,13 +613,7 @@ async fn test_ec_mg_05_target_migration_not_found(
 #[rstest]
 fn test_ec_mg_06_missing_dependency() {
 	// Arrange
-	let migration = Migration {
-		app_label: "missing_dep".to_string(),
-		name: "0002_with_dependency".to_string(),
-		operations: vec![],
-		dependencies: vec![("missing_dep".to_string(), "0001_missing".to_string())],
-		..Default::default()
-	};
+	let migration = Migration::from_parts("0002_with_dependency".to_string(), "missing_dep".to_string(), vec![], vec![("missing_dep".to_string(), "0001_missing".to_string())], Vec::new(), true, None, false, false, Vec::new(), Vec::new());
 
 	// Create graph with only the dependent migration
 	let graph = MigrationGraph::new();
@@ -668,21 +644,9 @@ fn test_ec_mg_06_missing_dependency() {
 #[rstest]
 fn test_ec_mg_06_cross_app_dependency() {
 	// Arrange
-	let migration_a = Migration {
-		app_label: "app_a".to_string(),
-		name: "0001_initial".to_string(),
-		operations: vec![],
-		dependencies: vec![],
-		..Default::default()
-	};
+	let migration_a = Migration::from_parts("0001_initial".to_string(), "app_a".to_string(), vec![], vec![], Vec::new(), true, None, false, false, Vec::new(), Vec::new());
 
-	let migration_b = Migration {
-		app_label: "app_b".to_string(),
-		name: "0001_depends_on_a".to_string(),
-		operations: vec![],
-		dependencies: vec![("app_a".to_string(), "0001_initial".to_string())],
-		..Default::default()
-	};
+	let migration_b = Migration::from_parts("0001_depends_on_a".to_string(), "app_b".to_string(), vec![], vec![("app_a".to_string(), "0001_initial".to_string())], Vec::new(), true, None, false, false, Vec::new(), Vec::new());
 
 	let graph = MigrationGraph::new();
 

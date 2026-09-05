@@ -1389,7 +1389,6 @@ fn normalize_native_control_value(
 	}
 }
 
-<<<<<<< HEAD
 fn input_type_removes_line_breaks(input_type: &str) -> bool {
 	["text", "search", "tel", "url", "email", "password"]
 		.iter()

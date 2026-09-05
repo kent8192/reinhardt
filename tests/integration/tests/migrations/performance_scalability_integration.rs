@@ -42,32 +42,12 @@ fn create_test_migration(
 	name: &'static str,
 	operations: Vec<Operation>,
 ) -> Migration {
-	Migration {
-		app_label: app.to_string(),
-		name: name.to_string(),
-		operations,
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-	}
+	Migration::from_parts(name.to_string(), app.to_string(), operations, vec![], vec![], true, None, false, false, Vec::new(), Vec::new())
 }
 
 /// Create a basic column definition
 fn create_basic_column(name: &str, type_def: FieldType) -> ColumnDefinition {
-	ColumnDefinition {
-		name: name.to_string(),
-		type_definition: type_def,
-		not_null: false,
-		unique: false,
-		primary_key: false,
-		auto_increment: false,
-		default: None,
-		generated: None,
-		domain: None,
-	}
+	ColumnDefinition::from_parts(name.to_string(), type_def, false, false, false, false, None, None, None)
 }
 
 /// Create a column with default value
@@ -76,17 +56,7 @@ fn create_column_with_default(
 	type_def: FieldType,
 	default: String,
 ) -> ColumnDefinition {
-	ColumnDefinition {
-		name: name.to_string(),
-		type_definition: type_def,
-		not_null: false,
-		unique: false,
-		primary_key: false,
-		auto_increment: false,
-		default: Some(default),
-		generated: None,
-		domain: None,
-	}
+	ColumnDefinition::from_parts(name.to_string(), type_def, false, false, false, false, Some(default), None, None)
 }
 
 // ============================================================================
@@ -125,18 +95,7 @@ async fn test_incremental_migration_performance(
 		vec![Operation::CreateTable {
 			name: leak_str("users").to_string(),
 			columns: vec![
-				ColumnDefinition {
-					name: "id".to_string(),
-					type_definition: FieldType::Custom("SERIAL PRIMARY KEY".to_string()),
-					not_null: true,
-					unique: false,
-					primary_key: true,
-					auto_increment: true,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
+				ColumnDefinition::from_parts("id".to_string(), FieldType::Custom("SERIAL PRIMARY KEY".to_string()), true, false, true, true, None, None, None),
 				create_basic_column("username", FieldType::VarChar(Some(100))),
 				create_basic_column("email", FieldType::VarChar(Some(255))),
 			],
@@ -372,18 +331,7 @@ async fn test_memory_usage_with_large_state(
 	for model_idx in 0..num_models {
 		let table_name = leak_str(format!("model_{}", model_idx));
 
-		let mut columns = vec![ColumnDefinition {
-			name: "id".to_string(),
-			type_definition: FieldType::Custom("SERIAL PRIMARY KEY".to_string()),
-			not_null: true,
-			unique: false,
-			primary_key: true,
-			auto_increment: true,
-			default: None,
-
-			generated: None,
-			domain: None,
-		}];
+		let mut columns = vec![ColumnDefinition::from_parts("id".to_string(), FieldType::Custom("SERIAL PRIMARY KEY".to_string()), true, false, true, true, None, None, None)];
 
 		// Add fields
 		for field_idx in 0..fields_per_model {
@@ -600,18 +548,7 @@ async fn test_concurrent_migration_throughput(
 				vec![Operation::CreateTable {
 					name: table_name,
 					columns: vec![
-						ColumnDefinition {
-							name: "id".to_string(),
-							type_definition: FieldType::Custom("SERIAL PRIMARY KEY".to_string()),
-							not_null: true,
-							unique: false,
-							primary_key: true,
-							auto_increment: true,
-							default: None,
-
-							generated: None,
-							domain: None,
-						},
+						ColumnDefinition::from_parts("id".to_string(), FieldType::Custom("SERIAL PRIMARY KEY".to_string()), true, false, true, true, None, None, None),
 						create_basic_column("data", FieldType::VarChar(Some(100))),
 					],
 				}],
@@ -681,20 +618,9 @@ async fn test_concurrent_migration_throughput(
 					vec![Operation::CreateTable {
 						name: table_name,
 						columns: vec![
-							ColumnDefinition {
-								name: "id".to_string(),
-								type_definition: FieldType::Custom(
+							ColumnDefinition::from_parts("id".to_string(), FieldType::Custom(
 									"SERIAL PRIMARY KEY".to_string(),
-								),
-								not_null: true,
-								unique: false,
-								primary_key: true,
-								auto_increment: true,
-								default: None,
-
-								generated: None,
-								domain: None,
-							},
+								), true, false, true, true, None, None, None),
 							create_basic_column("data", FieldType::VarChar(Some(100))),
 						],
 					}],
@@ -900,21 +826,13 @@ async fn test_migration_plan_generation_scalability(
 				dependencies.push((prev_app_name, leak_str(format!("{:04}_migration", mig_idx))));
 			}
 
-			let migration = Migration {
-				app_label: app_name,
-				name: mig_name,
-				operations: vec![Operation::RunSQL {
+			let migration = Migration::from_parts(mig_name, app_name, vec![Operation::RunSQL {
 					sql: leak_str(format!(
 						"CREATE TABLE {} (id SERIAL PRIMARY KEY, value INTEGER)",
 						table_name
 					)),
 					reverse_sql: Some(leak_str(format!("DROP TABLE {}", table_name))),
-				}],
-				dependencies,
-				replaces: vec![],
-				atomic: true,
-				initial: None,
-			};
+				}], dependencies, vec![], true, None, false, false, Vec::new(), Vec::new());
 
 			all_migrations.push(migration);
 		}

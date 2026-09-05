@@ -57,49 +57,49 @@ fn create_test_migration_with_deps(
 	operations: Vec<Operation>,
 	dependencies: Vec<(String, String)>,
 ) -> Migration {
-	Migration {
-		app_label: app.to_string(),
-		name: name.to_string(),
+	Migration::from_parts(
+		name.to_string(),
+		app.to_string(),
 		operations,
 		dependencies,
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	}
+		vec![],
+		true,
+		None,
+		false,
+		false,
+		vec![],
+		vec![],
+	)
 }
 
 /// Create a basic column definition
 fn create_basic_column(name: &str, type_def: FieldType) -> ColumnDefinition {
-	ColumnDefinition {
-		name: name.to_string(),
-		type_definition: type_def,
-		not_null: false,
-		unique: false,
-		primary_key: false,
-		auto_increment: false,
-		default: None,
-		generated: None,
-		domain: None,
-	}
+	ColumnDefinition::from_parts(
+		name.to_string(),
+		type_def,
+		false,
+		false,
+		false,
+		false,
+		None,
+		None,
+		None,
+	)
 }
 
 /// Create an auto-increment primary key column
 fn create_auto_pk_column(name: &str, type_def: FieldType) -> ColumnDefinition {
-	ColumnDefinition {
-		name: name.to_string(),
-		type_definition: type_def,
-		not_null: true,
-		unique: false,
-		primary_key: true,
-		auto_increment: true,
-		default: None,
-		generated: None,
-		domain: None,
-	}
+	ColumnDefinition::from_parts(
+		name.to_string(),
+		type_def,
+		true,
+		false,
+		true,
+		true,
+		None,
+		None,
+		None,
+	)
 }
 
 // ============================================================================
@@ -151,10 +151,10 @@ async fn test_postgres_create_index_concurrently(
 
 	// Create index with CONCURRENTLY option
 	// Note: atomic must be false because CONCURRENTLY cannot be used inside a transaction
-	let create_index = Migration {
-		app_label: "testapp".to_string(),
-		name: "0002_create_email_index_concurrent".to_string(),
-		operations: vec![Operation::CreateIndex {
+	let create_index = Migration::from_parts(
+		"0002_create_email_index_concurrent".to_string(),
+		"testapp".to_string(),
+		vec![Operation::CreateIndex {
 			table: leak_str("concurrent_users").to_string(),
 			columns: vec![leak_str("email").to_string()],
 			unique: false,
@@ -165,15 +165,15 @@ async fn test_postgres_create_index_concurrently(
 			mysql_options: None,
 			operator_class: None,
 		}],
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: false, // CONCURRENTLY cannot be used inside a transaction
-		initial: None,
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	};
+		vec![],
+		vec![],
+		false,
+		None,
+		false,
+		false,
+		vec![],
+		vec![],
+	);
 
 	executor
 		.apply_migrations(&[create_index])
@@ -464,10 +464,10 @@ async fn test_postgres_gist_index(
 		.expect("Failed to create table");
 
 	// Create GiST index on name column (for demonstration - normally would be on geometric type)
-	let create_index = Migration {
-		app_label: "testapp".to_string(),
-		name: "0002_create_gist_index".to_string(),
-		operations: vec![Operation::CreateIndex {
+	let create_index = Migration::from_parts(
+		"0002_create_gist_index".to_string(),
+		"testapp".to_string(),
+		vec![Operation::CreateIndex {
 			table: leak_str("gist_locations").to_string(),
 			columns: vec![leak_str("name").to_string()],
 			unique: false,
@@ -478,15 +478,15 @@ async fn test_postgres_gist_index(
 			mysql_options: None,
 			operator_class: None,
 		}],
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	};
+		vec![],
+		vec![],
+		true,
+		None,
+		false,
+		false,
+		vec![],
+		vec![],
+	);
 
 	// GiST index creation may fail on non-geometric types, so we check SQL generation
 	let ops = &create_index.operations;
@@ -540,10 +540,10 @@ async fn test_postgres_gin_index(
 		.expect("Failed to create table");
 
 	// Create GIN index with tsvector expression
-	let create_index = Migration {
-		app_label: "testapp".to_string(),
-		name: "0002_create_gin_index".to_string(),
-		operations: vec![Operation::CreateIndex {
+	let create_index = Migration::from_parts(
+		"0002_create_gin_index".to_string(),
+		"testapp".to_string(),
+		vec![Operation::CreateIndex {
 			table: leak_str("gin_articles").to_string(),
 			columns: vec![],
 			unique: false,
@@ -556,15 +556,15 @@ async fn test_postgres_gin_index(
 			mysql_options: None,
 			operator_class: None,
 		}],
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	};
+		vec![],
+		vec![],
+		true,
+		None,
+		false,
+		false,
+		vec![],
+		vec![],
+	);
 
 	executor
 		.apply_migrations(&[create_index])
@@ -624,18 +624,17 @@ async fn test_postgres_exclude_constraint(
 			name: leak_str("bookings").to_string(),
 			columns: vec![
 				create_auto_pk_column("id", FieldType::Integer),
-				ColumnDefinition {
-					name: "room_id".to_string(),
-					type_definition: FieldType::Integer,
-					not_null: true,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
+				ColumnDefinition::from_parts(
+					"room_id".to_string(),
+					FieldType::Integer,
+					true,
+					false,
+					false,
+					false,
+					None,
+					None,
+					None,
+				),
 				create_basic_column("start_date", FieldType::Date),
 				create_basic_column("end_date", FieldType::Date),
 			],
@@ -827,10 +826,10 @@ async fn test_mysql_algorithm_instant(
 		.expect("Failed to create table");
 
 	// Create index with ALGORITHM=INSTANT
-	let create_index = Migration {
-		app_label: "testapp".to_string(),
-		name: "0002_create_index_instant".to_string(),
-		operations: vec![Operation::CreateIndex {
+	let create_index = Migration::from_parts(
+		"0002_create_index_instant".to_string(),
+		"testapp".to_string(),
+		vec![Operation::CreateIndex {
 			table: leak_str("algo_instant_users").to_string(),
 			columns: vec![leak_str("username").to_string()],
 			unique: false,
@@ -841,15 +840,15 @@ async fn test_mysql_algorithm_instant(
 			mysql_options: Some(AlterTableOptions::new().with_algorithm(MySqlAlgorithm::Instant)),
 			operator_class: None,
 		}],
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	};
+		vec![],
+		vec![],
+		true,
+		None,
+		false,
+		false,
+		vec![],
+		vec![],
+	);
 
 	// Verify the operation has correct MySQL options
 	let ops = &create_index.operations;
@@ -905,10 +904,10 @@ async fn test_mysql_algorithm_inplace(
 		.expect("Failed to create table");
 
 	// Create index with ALGORITHM=INPLACE
-	let create_index = Migration {
-		app_label: "testapp".to_string(),
-		name: "0002_create_index_inplace".to_string(),
-		operations: vec![Operation::CreateIndex {
+	let create_index = Migration::from_parts(
+		"0002_create_index_inplace".to_string(),
+		"testapp".to_string(),
+		vec![Operation::CreateIndex {
 			table: leak_str("algo_inplace_products").to_string(),
 			columns: vec![leak_str("category").to_string()],
 			unique: false,
@@ -919,15 +918,15 @@ async fn test_mysql_algorithm_inplace(
 			mysql_options: Some(AlterTableOptions::new().with_algorithm(MySqlAlgorithm::Inplace)),
 			operator_class: None,
 		}],
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	};
+		vec![],
+		vec![],
+		true,
+		None,
+		false,
+		false,
+		vec![],
+		vec![],
+	);
 
 	// Verify the operation has correct MySQL options
 	let ops = &create_index.operations;
@@ -980,10 +979,10 @@ async fn test_mysql_lock_none(
 		.expect("Failed to create table");
 
 	// Create index with LOCK=NONE
-	let create_index = Migration {
-		app_label: "testapp".to_string(),
-		name: "0002_create_index_lock_none".to_string(),
-		operations: vec![Operation::CreateIndex {
+	let create_index = Migration::from_parts(
+		"0002_create_index_lock_none".to_string(),
+		"testapp".to_string(),
+		vec![Operation::CreateIndex {
 			table: leak_str("lock_none_orders").to_string(),
 			columns: vec![leak_str("status").to_string()],
 			unique: false,
@@ -994,15 +993,15 @@ async fn test_mysql_lock_none(
 			mysql_options: Some(AlterTableOptions::new().with_lock(MySqlLock::None)),
 			operator_class: None,
 		}],
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	};
+		vec![],
+		vec![],
+		true,
+		None,
+		false,
+		false,
+		vec![],
+		vec![],
+	);
 
 	// Verify the operation has correct MySQL options
 	let ops = &create_index.operations;
@@ -1055,10 +1054,10 @@ async fn test_mysql_fulltext_index(
 		.expect("Failed to create table");
 
 	// Create FULLTEXT index
-	let create_index = Migration {
-		app_label: "testapp".to_string(),
-		name: "0002_create_fulltext_index".to_string(),
-		operations: vec![Operation::CreateIndex {
+	let create_index = Migration::from_parts(
+		"0002_create_fulltext_index".to_string(),
+		"testapp".to_string(),
+		vec![Operation::CreateIndex {
 			table: leak_str("ft_articles").to_string(),
 			columns: vec![leak_str("title").to_string(), leak_str("body").to_string()],
 			unique: false,
@@ -1069,15 +1068,15 @@ async fn test_mysql_fulltext_index(
 			mysql_options: None,
 			operator_class: None,
 		}],
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	};
+		vec![],
+		vec![],
+		true,
+		None,
+		false,
+		false,
+		vec![],
+		vec![],
+	);
 
 	executor
 		.apply_migrations(&[create_index])
@@ -1382,18 +1381,17 @@ async fn test_sqlite_without_rowid() {
 	let create_table_op = Operation::CreateTable {
 		name: leak_str("settings").to_string(),
 		columns: vec![
-			ColumnDefinition {
-				name: "key".to_string(),
-				type_definition: FieldType::VarChar(50),
-				not_null: true,
-				unique: false,
-				primary_key: true,
-				auto_increment: false,
-				default: None,
-
-				generated: None,
-				domain: None,
-			},
+			ColumnDefinition::from_parts(
+				"key".to_string(),
+				FieldType::VarChar(50),
+				true,
+				false,
+				true,
+				false,
+				None,
+				None,
+				None,
+			),
 			create_basic_column("value", FieldType::Text),
 		],
 		constraints: vec![],
@@ -1440,37 +1438,35 @@ async fn test_cockroachdb_interleave_table() {
 	let create_orders = Operation::CreateTable {
 		name: leak_str("orders").to_string(),
 		columns: vec![
-			ColumnDefinition {
-				name: "user_id".to_string(),
-				type_definition: FieldType::Integer,
-				not_null: true,
-				unique: false,
-				primary_key: true,
-				auto_increment: false,
-				default: None,
-
-				generated: None,
-				domain: None,
-			},
-			ColumnDefinition {
-				name: "order_id".to_string(),
-				type_definition: FieldType::Integer,
-				not_null: true,
-				unique: false,
-				primary_key: true,
-				auto_increment: true,
-				default: None,
-
-				generated: None,
-				domain: None,
-			},
+			ColumnDefinition::from_parts(
+				"user_id".to_string(),
+				FieldType::Integer,
+				true,
+				false,
+				true,
+				false,
+				None,
+				None,
+				None,
+			),
+			ColumnDefinition::from_parts(
+				"order_id".to_string(),
+				FieldType::Integer,
+				true,
+				false,
+				true,
+				true,
+				None,
+				None,
+				None,
+			),
 		],
 		constraints: vec![],
 		without_rowid: None,
-		interleave_in_parent: Some(InterleaveSpec {
-			parent_table: leak_str("users").to_string(),
-			parent_columns: vec![leak_str("user_id").to_string()],
-		}),
+		interleave_in_parent: Some(InterleaveSpec::new(
+			leak_str("users").to_string(),
+			vec![leak_str("user_id").to_string()],
+		)),
 		partition: None,
 	};
 

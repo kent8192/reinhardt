@@ -75,37 +75,36 @@ async fn test_single_create_table_migration() {
 		.expect("Failed to create schema table");
 
 	// Create and record a migration
-	let migration = Migration {
-		app_label: "testapp".to_string(),
-		name: "0001_initial".to_string(),
-		operations: vec![Operation::CreateTable {
+	let migration = Migration::from_parts(
+		"0001_initial".to_string(),
+		"testapp".to_string(),
+		vec![Operation::CreateTable {
 			name: "test_model".to_string(),
-			columns: vec![ColumnDefinition {
-				name: "id".to_string(),
-				type_definition: FieldType::BigInteger,
-				not_null: true,
-				primary_key: true,
-				unique: false,
-				auto_increment: true,
-				default: None,
-
-				generated: None,
-				domain: None,
-			}],
+			columns: vec![ColumnDefinition::from_parts(
+				"id".to_string(),
+				FieldType::BigInteger,
+				true,
+				false,
+				true,
+				true,
+				None,
+				None,
+				None,
+			)],
 			constraints: vec![],
 			without_rowid: None,
 			interleave_in_parent: None,
 			partition: None,
 		}],
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: Some(true),
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	};
+		vec![],
+		vec![],
+		true,
+		Some(true),
+		false,
+		false,
+		vec![],
+		vec![],
+	);
 
 	// Record the migration as applied
 	recorder
@@ -153,67 +152,65 @@ async fn test_multiple_migrations_in_order() {
 		.expect("Failed to create schema table");
 
 	// First migration: Create table
-	let migration1 = Migration {
-		app_label: "testapp".to_string(),
-		name: "0001_initial".to_string(),
-		operations: vec![Operation::CreateTable {
+	let migration1 = Migration::from_parts(
+		"0001_initial".to_string(),
+		"testapp".to_string(),
+		vec![Operation::CreateTable {
 			name: "users".to_string(),
-			columns: vec![ColumnDefinition {
-				name: "id".to_string(),
-				type_definition: FieldType::BigInteger,
-				not_null: true,
-				primary_key: true,
-				unique: false,
-				auto_increment: true,
-				default: None,
-
-				generated: None,
-				domain: None,
-			}],
+			columns: vec![ColumnDefinition::from_parts(
+				"id".to_string(),
+				FieldType::BigInteger,
+				true,
+				false,
+				true,
+				true,
+				None,
+				None,
+				None,
+			)],
 			constraints: vec![],
 			without_rowid: None,
 			interleave_in_parent: None,
 			partition: None,
 		}],
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: Some(true),
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	};
+		vec![],
+		vec![],
+		true,
+		Some(true),
+		false,
+		false,
+		vec![],
+		vec![],
+	);
 
 	// Second migration: Add column
-	let migration2 = Migration {
-		app_label: "testapp".to_string(),
-		name: "0002_add_email".to_string(),
-		operations: vec![Operation::AddColumn {
+	let migration2 = Migration::from_parts(
+		"0002_add_email".to_string(),
+		"testapp".to_string(),
+		vec![Operation::AddColumn {
 			table: "users".to_string(),
-			column: ColumnDefinition {
-				name: "email".to_string(),
-				type_definition: FieldType::VarChar(255),
-				not_null: false,
-				primary_key: false,
-				unique: false,
-				auto_increment: false,
-				default: None,
-
-				generated: None,
-				domain: None,
-			},
+			column: ColumnDefinition::from_parts(
+				"email".to_string(),
+				FieldType::VarChar(255),
+				false,
+				false,
+				false,
+				false,
+				None,
+				None,
+				None,
+			),
 			mysql_options: None,
 		}],
-		dependencies: vec![("testapp".to_string(), "0001_initial".to_string())],
-		replaces: vec![],
-		atomic: true,
-		initial: Some(false),
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	};
+		vec![("testapp".to_string(), "0001_initial".to_string())],
+		vec![],
+		true,
+		Some(false),
+		false,
+		false,
+		vec![],
+		vec![],
+	);
 
 	// Record both migrations as applied
 	recorder
@@ -264,67 +261,65 @@ async fn test_unapplied_migrations_not_included() {
 		.expect("Failed to create schema table");
 
 	// First migration: Create table (applied)
-	let migration1 = Migration {
-		app_label: "testapp".to_string(),
-		name: "0001_initial".to_string(),
-		operations: vec![Operation::CreateTable {
+	let migration1 = Migration::from_parts(
+		"0001_initial".to_string(),
+		"testapp".to_string(),
+		vec![Operation::CreateTable {
 			name: "users".to_string(),
-			columns: vec![ColumnDefinition {
-				name: "id".to_string(),
-				type_definition: FieldType::BigInteger,
-				not_null: true,
-				primary_key: true,
-				unique: false,
-				auto_increment: true,
-				default: None,
-
-				generated: None,
-				domain: None,
-			}],
+			columns: vec![ColumnDefinition::from_parts(
+				"id".to_string(),
+				FieldType::BigInteger,
+				true,
+				false,
+				true,
+				true,
+				None,
+				None,
+				None,
+			)],
 			constraints: vec![],
 			without_rowid: None,
 			interleave_in_parent: None,
 			partition: None,
 		}],
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: Some(true),
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	};
+		vec![],
+		vec![],
+		true,
+		Some(true),
+		false,
+		false,
+		vec![],
+		vec![],
+	);
 
 	// Second migration: Add column (NOT applied)
-	let migration2 = Migration {
-		app_label: "testapp".to_string(),
-		name: "0002_add_email".to_string(),
-		operations: vec![Operation::AddColumn {
+	let migration2 = Migration::from_parts(
+		"0002_add_email".to_string(),
+		"testapp".to_string(),
+		vec![Operation::AddColumn {
 			table: "users".to_string(),
-			column: ColumnDefinition {
-				name: "email".to_string(),
-				type_definition: FieldType::VarChar(255),
-				not_null: false,
-				primary_key: false,
-				unique: false,
-				auto_increment: false,
-				default: None,
-
-				generated: None,
-				domain: None,
-			},
+			column: ColumnDefinition::from_parts(
+				"email".to_string(),
+				FieldType::VarChar(255),
+				false,
+				false,
+				false,
+				false,
+				None,
+				None,
+				None,
+			),
 			mysql_options: None,
 		}],
-		dependencies: vec![("testapp".to_string(), "0001_initial".to_string())],
-		replaces: vec![],
-		atomic: true,
-		initial: Some(false),
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	};
+		vec![("testapp".to_string(), "0001_initial".to_string())],
+		vec![],
+		true,
+		Some(false),
+		false,
+		false,
+		vec![],
+		vec![],
+	);
 
 	// Only record first migration as applied
 	recorder

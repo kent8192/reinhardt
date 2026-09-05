@@ -129,10 +129,10 @@ fn rendered_data_bearing_source_compiles_with_its_own_imports() {
 				deferrable: Some(DeferrableOption::Deferred),
 			}],
 			without_rowid: None,
-			interleave_in_parent: Some(InterleaveSpec {
-				parent_table: "accounts_parent".to_string(),
-				parent_columns: vec!["id".to_string()],
-			}),
+			interleave_in_parent: Some(InterleaveSpec::new(
+				"accounts_parent".to_string(),
+				vec!["id".to_string()],
+			)),
 			partition: Some(PartitionOptions::new(
 				PartitionType::Range,
 				"id",
@@ -516,20 +516,19 @@ async fn migration_renderer_compatibility_matrix_covers_every_operation_variant(
 			table: "accounts".to_string(),
 			columns: vec!["value".to_string()],
 		},
+		Operation::DropNamedIndex {
+			table: "accounts".to_string(),
+			name: "accounts_value_idx".to_string(),
+			columns: vec!["value".to_string()],
+			unique: false,
+			index_type: None,
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: None,
+		},
 	]);
-	#[cfg(feature = "pgvector")]
-	operations.push(Operation::DropNamedIndex {
-		table: "accounts".to_string(),
-		name: "accounts_value_idx".to_string(),
-		columns: vec!["value".to_string()],
-		unique: false,
-		index_type: None,
-		where_clause: None,
-		concurrently: false,
-		expressions: None,
-		mysql_options: None,
-		operator_class: None,
-	});
 	operations.extend([
 		Operation::RunSQL {
 			sql: "SELECT 1".to_string(),
@@ -605,7 +604,7 @@ async fn migration_renderer_compatibility_matrix_covers_every_operation_variant(
 	#[cfg(feature = "pgvector")]
 	assert_eq!(expected_variants, 33);
 	#[cfg(not(feature = "pgvector"))]
-	assert_eq!(expected_variants, 31);
+	assert_eq!(expected_variants, 32);
 	for (index, operation) in operations.into_iter().enumerate() {
 		let (kind, supported) = match &operation {
 			Operation::CreateTable { .. } => ("CreateTable", true),
@@ -627,7 +626,6 @@ async fn migration_renderer_compatibility_matrix_covers_every_operation_variant(
 			Operation::CreateIndexRepair { .. } => ("CreateIndexRepair", true),
 			Operation::RestoreIndexOnRollback { .. } => ("RestoreIndexOnRollback", true),
 			Operation::DropIndex { .. } => ("DropIndex", true),
-			#[cfg(feature = "pgvector")]
 			Operation::DropNamedIndex { .. } => ("DropNamedIndex", true),
 			Operation::RunSQL { .. } => ("RunSQL", true),
 			Operation::RunRust { .. } => ("RunRust", true),

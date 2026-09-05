@@ -53,52 +53,52 @@ fn create_migration_with_deps(
 	operations: Vec<Operation>,
 	dependencies: Vec<(&str, &str)>,
 ) -> Migration {
-	Migration {
-		app_label: app.to_string(),
-		name: name.to_string(),
+	Migration::from_parts(
+		name.to_string(),
+		app.to_string(),
 		operations,
-		dependencies: dependencies
+		dependencies
 			.into_iter()
 			.map(|(a, n)| (a.to_string(), n.to_string()))
 			.collect(),
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	}
+		vec![],
+		true,
+		None,
+		false,
+		false,
+		vec![],
+		vec![],
+	)
 }
 
 /// Create a basic column definition
 fn create_basic_column(name: &str, type_def: FieldType) -> ColumnDefinition {
-	ColumnDefinition {
-		name: name.to_string(),
-		type_definition: type_def,
-		not_null: false,
-		unique: false,
-		primary_key: false,
-		auto_increment: false,
-		default: None,
-		generated: None,
-		domain: None,
-	}
+	ColumnDefinition::from_parts(
+		name.to_string(),
+		type_def,
+		false,
+		false,
+		false,
+		false,
+		None,
+		None,
+		None,
+	)
 }
 
 /// Create an auto-increment primary key column
 fn create_auto_pk_column(name: &str, type_def: FieldType) -> ColumnDefinition {
-	ColumnDefinition {
-		name: name.to_string(),
-		type_definition: type_def,
-		not_null: true,
-		unique: false,
-		primary_key: true,
-		auto_increment: true,
-		default: None,
-		generated: None,
-		domain: None,
-	}
+	ColumnDefinition::from_parts(
+		name.to_string(),
+		type_def,
+		true,
+		false,
+		true,
+		true,
+		None,
+		None,
+		None,
+	)
 }
 
 /// Check if a table exists
@@ -380,10 +380,10 @@ async fn test_swappable_model_dependency(
 	let mut executor = DatabaseMigrationExecutor::new(connection.clone());
 
 	// Migration 1: Create users table in default auth app
-	let migration_auth = Migration {
-		app_label: "auth".to_string(),
-		name: "0001_initial".to_string(),
-		operations: vec![Operation::CreateTable {
+	let migration_auth = Migration::from_parts(
+		"0001_initial".to_string(),
+		"auth".to_string(),
+		vec![Operation::CreateTable {
 			name: leak_str("auth_users").to_string(),
 			columns: vec![create_auto_pk_column("id", FieldType::Integer)],
 			constraints: vec![],
@@ -391,21 +391,21 @@ async fn test_swappable_model_dependency(
 			interleave_in_parent: None,
 			partition: None,
 		}],
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	};
+		vec![],
+		vec![],
+		true,
+		None,
+		false,
+		false,
+		vec![],
+		vec![],
+	);
 
 	// Migration 2: Create users table in custom auth app
-	let migration_custom_auth = Migration {
-		app_label: "custom_auth".to_string(),
-		name: "0001_initial".to_string(),
-		operations: vec![Operation::CreateTable {
+	let migration_custom_auth = Migration::from_parts(
+		"0001_initial".to_string(),
+		"custom_auth".to_string(),
+		vec![Operation::CreateTable {
 			name: leak_str("custom_auth_users").to_string(),
 			columns: vec![
 				create_auto_pk_column("id", FieldType::Integer),
@@ -416,21 +416,21 @@ async fn test_swappable_model_dependency(
 			interleave_in_parent: None,
 			partition: None,
 		}],
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	};
+		vec![],
+		vec![],
+		true,
+		None,
+		false,
+		false,
+		vec![],
+		vec![],
+	);
 
 	// Migration 3: Profile that depends on swappable User model
-	let migration_profile = Migration {
-		app_label: "profiles".to_string(),
-		name: "0001_create_profile".to_string(),
-		operations: vec![Operation::CreateTable {
+	let migration_profile = Migration::from_parts(
+		"0001_create_profile".to_string(),
+		"profiles".to_string(),
+		vec![Operation::CreateTable {
 			name: leak_str("profiles").to_string(),
 			columns: vec![
 				create_auto_pk_column("id", FieldType::Integer),
@@ -441,20 +441,20 @@ async fn test_swappable_model_dependency(
 			interleave_in_parent: None,
 			partition: None,
 		}],
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![SwappableDependency {
+		vec![],
+		vec![],
+		true,
+		None,
+		false,
+		false,
+		vec![SwappableDependency {
 			setting_key: "AUTH_USER_MODEL".to_string(),
 			default_app: "auth".to_string(),
 			default_model: "User".to_string(),
 			migration_name: "0001_initial".to_string(),
 		}],
-		optional_dependencies: vec![],
-	};
+		vec![],
+	);
 
 	// Test 1: Using MigrationGraph with context to resolve swappable dependency
 	let mut graph = MigrationGraph::new();
@@ -519,28 +519,28 @@ async fn test_conditional_dependencies(
 	let mut executor = DatabaseMigrationExecutor::new(connection.clone());
 
 	// Migration 1: GIS extension setup (optional app)
-	let migration_gis = Migration {
-		app_label: "gis_extension".to_string(),
-		name: "0001_enable_postgis".to_string(),
-		operations: vec![Operation::RunSQL {
+	let migration_gis = Migration::from_parts(
+		"0001_enable_postgis".to_string(),
+		"gis_extension".to_string(),
+		vec![Operation::RunSQL {
 			sql: leak_str("SELECT 1").to_string(), // Placeholder for CREATE EXTENSION postgis
 			reverse_sql: None,
 		}],
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	};
+		vec![],
+		vec![],
+		true,
+		None,
+		false,
+		false,
+		vec![],
+		vec![],
+	);
 
 	// Migration 2: Geo app with optional dependency on GIS extension
-	let migration_geo = Migration {
-		app_label: "geo_app".to_string(),
-		name: "0001_create_locations".to_string(),
-		operations: vec![Operation::CreateTable {
+	let migration_geo = Migration::from_parts(
+		"0001_create_locations".to_string(),
+		"geo_app".to_string(),
+		vec![Operation::CreateTable {
 			name: leak_str("locations").to_string(),
 			columns: vec![
 				create_auto_pk_column("id", FieldType::Integer),
@@ -551,19 +551,19 @@ async fn test_conditional_dependencies(
 			interleave_in_parent: None,
 			partition: None,
 		}],
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![OptionalDependency {
+		vec![],
+		vec![],
+		true,
+		None,
+		false,
+		false,
+		vec![],
+		vec![OptionalDependency {
 			app_label: "gis_extension".to_string(),
 			migration_name: "0001_enable_postgis".to_string(),
 			condition: DependencyCondition::AppInstalled("gis_extension".to_string()),
 		}],
-	};
+	);
 
 	// Test 1: Without gis_extension installed - dependency should be ignored
 	{

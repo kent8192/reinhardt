@@ -22,32 +22,39 @@ fn main() {
 		let runtime = use_form(&form).build();
 		let _ = page!({
 			input {
-				bind: runtime.field(RuntimeFormField::Name)
+				aria_label: "Name",
+				bind: runtime.field(form.name_field())
 			}
 			input {
+				aria_label: "Count",
 				type: "number",
-				bind: runtime.field(RuntimeFormField::Count)
+				bind: runtime.field(form.count_field())
 			}
 			input {
+				aria_label: "Active",
 				type: "checkbox",
-				bind: runtime.field(RuntimeFormField::Active)
+				bind: runtime.field(form.active_field())
 			}
 			input {
+				aria_label: "Choice",
 				type: "radio",
 				value: "yes",
-				bind: runtime.field(RuntimeFormField::Choice)
+				bind: runtime.field(form.choice_field())
 			}
 			input {
+				aria_label: "Typed choice",
 				type: "radio",
 				value: "yes",
-				bind: runtime.field(RuntimeFormField::ChoiceTyped)
+				bind: runtime.field(form.choice_typed_field())
 			}
 			select {
-				bind: runtime.field(RuntimeFormField::Choice)
+				aria_label: "Choice",
+				bind: runtime.field(form.choice_field())
 			}
 			select {
+				aria_label: "Labels",
 				multiple: true,
-				bind: runtime.field(RuntimeFormField::Labels)
+				bind: runtime.field(form.labels_field())
 			}
 		});
 	});

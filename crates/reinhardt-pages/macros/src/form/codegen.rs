@@ -6894,26 +6894,28 @@ fn generate_field_view(
 	} else {
 		control_binding
 	};
-	let hydration_preference = quote! {
-		.prefer_source_on_hydration({
-			let explicitly_reset = self.__explicitly_reset.clone();
-			move || explicitly_reset.get()
-		})
-	};
-	let radio_binding = if let Some(radio_signal) = signal_ident
+	let (radio_reset_capture, radio_binding) = if let Some(radio_signal) = signal_ident
 		&& matches!(field.widget, TypedWidget::RadioSelect)
 		&& is_string_valued_field(&field.field_type)
 	{
-		quote! {
-			.control_binding(
-				#pages_crate::component::ControlBinding::radio(
-					#radio_signal.clone(), choice_value.to_string(),
+		(
+			quote! {
+				let __radio_explicitly_reset = self.__explicitly_reset.clone();
+			},
+			quote! {
+				.control_binding(
+					#pages_crate::component::ControlBinding::radio(
+						#radio_signal.clone(), choice_value.to_string(),
+					)
+					.prefer_source_on_hydration({
+						let explicitly_reset = __radio_explicitly_reset.clone();
+						move || explicitly_reset.get()
+					})
 				)
-				#hydration_preference
-			)
-		}
+			},
+		)
 	} else {
-		event_listener.clone()
+		(TokenStream::new(), event_listener.clone())
 	};
 
 	// Generate input element based on widget type
@@ -7174,6 +7176,7 @@ fn generate_field_view(
 					{
 						let __choices_signal = self.#choices_name.clone();
 						let __choice_items_signal = self.#choice_items_name.clone();
+						#radio_reset_capture
 						#pages_crate::component::Page::reactive(move || {
 							let __choice_items = __choice_items_signal.get();
 							let __choices: ::std::vec::Vec<_> = __choices_signal

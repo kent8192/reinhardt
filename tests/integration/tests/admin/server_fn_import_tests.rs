@@ -121,7 +121,7 @@ async fn test_import_history_failure_rolls_back_record(
 	// Arrange
 	let context = server_fn_context.await;
 	let (site, db, _connection_lease) = &context;
-	assert_eq!(query_history(&context, "0").await.count, 0);
+	assert_eq!(history_row_count(db).await, 0);
 	let mut connection = *db.connection();
 	OrmExecutor::execute(
 		&mut connection,

@@ -29,7 +29,7 @@ use crate::core::history::{NewHistoryEvent, count_object_history, list_object_hi
 #[cfg(server)]
 use crate::core::inline::{InlineSaveOperation, InlineSaveOutcome};
 #[cfg(server)]
-use crate::core::{AdminDatabaseKey, AdminSiteKey};
+use crate::core::{AdminDatabaseKey, AdminQuery, AdminRequestContext, AdminSiteKey};
 use crate::types::HistoryResponse;
 #[cfg(server)]
 use reinhardt_di::KeyedDepends;
@@ -138,10 +138,11 @@ pub(crate) fn new_history_event(
 
 /// Get a stable, paginated history for one admin object.
 ///
-/// The lookup checks model view permission and filters the persistent history
-/// table by the canonical registered model name, table name, and exact object
-/// ID. It does not read the current object row, so deleted-object history
-/// remains available.
+/// The lookup checks model view permission and the request-aware object scope
+/// before filtering the persistent history table by the canonical registered
+/// model name, table name, and exact object ID. The current object must remain
+/// visible through the model admin queryset. History remains persisted after
+/// deletion, but deleted objects are no longer available through this endpoint.
 #[server_fn]
 pub async fn get_history(
 	model_name: String,
@@ -156,10 +157,27 @@ pub async fn get_history(
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::View)
 		.await?;
+	let request_context = AdminRequestContext::new(http_request.into_inner());
+	let admin_query = model_admin
+		.get_queryset(
+			user.as_ref(),
+			&request_context,
+			AdminQuery::new(model_admin.table_name()),
+		)
+		.await
+		.map_server_fn_error()?;
 
 	let model_name = model_admin.model_name().to_string();
 	let table_name = model_admin.table_name().to_string();
 	let object_id = canonicalize_pk_value(&table_name, model_admin.pk_field(), &object_id);
+	if db
+		.get_admin_query(&admin_query, model_admin.pk_field(), &object_id)
+		.await
+		.map_server_fn_error()?
+		.is_none()
+	{
+		return Err(ServerFnError::server(404, "Object not found"));
+	}
 	let page = page.max(1);
 	let page_size = DEFAULT_PAGE_SIZE;
 	let offset = (page - 1)

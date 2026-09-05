@@ -15,6 +15,7 @@ use reinhardt_db::migrations::model_registry::{
 };
 use reinhardt_db::orm::connection::DatabaseConnectionLease;
 use reinhardt_di::KeyedDepends;
+use reinhardt_pages::server_fn::ServerFnErrorKind;
 use reinhardt_test::fixtures::shared_postgres::shared_db_pool;
 use rstest::*;
 use serde_json::json;
@@ -126,7 +127,7 @@ async fn relation_database(
 ) -> (AdminDatabase, RelationDatabaseLease) {
 	let (pool, _) = shared_db_pool.await;
 	pool.execute(
-		"CREATE TABLE admin_relation_articles (id INTEGER PRIMARY KEY, title VARCHAR(200) NOT NULL)",
+		"CREATE TABLE admin_relation_articles (id INTEGER PRIMARY KEY, headline_col VARCHAR(200) NOT NULL)",
 	)
 	.await
 	.unwrap();
@@ -140,7 +141,7 @@ async fn relation_database(
 	)
 	.await
 	.unwrap();
-	pool.execute("INSERT INTO admin_relation_articles (id, title) VALUES (1, 'Selectors')")
+	pool.execute("INSERT INTO admin_relation_articles (id, headline_col) VALUES (1, 'Selectors')")
 		.await
 		.unwrap();
 	pool.execute(
@@ -164,8 +165,10 @@ async fn relation_database(
 		FieldMetadata::new(DatabaseFieldType::Integer),
 	);
 	source.add_field(
-		"title".to_string(),
-		FieldMetadata::new(DatabaseFieldType::VarChar(200)),
+		"headline_col".to_string(),
+		FieldMetadata::new(DatabaseFieldType::VarChar(200))
+			.with_param("rust_field_name", "title")
+			.with_param("db_column", "headline_col"),
 	);
 	source.add_many_to_many(ManyToManyMetadata::new(
 		"tags",
@@ -479,7 +482,7 @@ async fn test_get_fields_field_type_inference(
 
 // ==================== Edge case tests ====================
 
-/// Verify get_fields with non-existent ID returns fields but no values
+/// Verify get_fields rejects a non-existent or out-of-scope edit target.
 #[rstest]
 #[tokio::test]
 async fn test_get_fields_edit_nonexistent_id(
@@ -502,15 +505,10 @@ async fn test_get_fields_edit_nonexistent_id(
 	.await;
 
 	// Assert
-	let response = result.expect("get_fields should succeed even with non-existent ID");
-	assert!(
-		!response.fields.is_empty(),
-		"Should still return field definitions"
-	);
-	assert!(
-		response.values.is_none(),
-		"Should return None values for non-existent record"
-	);
+	let error = result.expect_err("get_fields should reject a non-existent edit target");
+	assert_eq!(error.kind(), ServerFnErrorKind::Server);
+	assert_eq!(error.status(), Some(404));
+	assert_eq!(error.user_message(), "Object not found");
 }
 
 // ==================== Error path tests ====================
@@ -570,6 +568,13 @@ async fn get_fields_retains_selected_relation_options_outside_first_page(
 			.map(|field| field.name.as_str())
 			.collect::<Vec<_>>(),
 		vec!["id", "title", "tags"]
+	);
+	assert_eq!(
+		response
+			.values
+			.as_ref()
+			.and_then(|values| values.get("title")),
+		Some(&json!("Selectors"))
 	);
 	let field = response
 		.fields

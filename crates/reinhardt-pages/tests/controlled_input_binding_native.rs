@@ -774,8 +774,8 @@ fn select_binding_uses_flattened_option_text_when_value_is_omitted(reactive_scop
 	let selected = signal_in_scope(
 		&reactive_scope,
 		vec![
-			"Rust & WebAssembly".to_owned(),
-			"Nested\u{a0}<Choice>".to_owned(),
+			"Rust ignored & WebAssembly".to_owned(),
+			"Nested\u{a0}<Choice>ignored".to_owned(),
 		],
 	);
 	let screen = render(
@@ -811,9 +811,9 @@ fn select_binding_uses_flattened_option_text_when_value_is_omitted(reactive_scop
 			"  <optgroup>\n",
 			"    <option selected=\"selected\">\n",
 			"       \tRust\n\n",
-			"      <script>\n",
+			"      <span>\n",
 			"        ignored\n",
-			"      </script>\n",
+			"      </span>\n",
 			"        &\r\n",
 			"WebAssembly\x0c \n",
 			"    </option>\n",
@@ -822,9 +822,9 @@ fn select_binding_uses_flattened_option_text_when_value_is_omitted(reactive_scop
 			"      <span>\n",
 			"        <Choice>\n",
 			"      </span>\n",
-			"      <script>\n",
+			"      <span>\n",
 			"        ignored\n",
-			"      </script>\n",
+			"      </span>\n",
 			"       \n",
 			"    </option>\n",
 			"  </optgroup>\n",

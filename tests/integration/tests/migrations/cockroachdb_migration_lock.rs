@@ -33,51 +33,49 @@ use serial_test::serial;
 // ============================================================================
 
 fn create_users_migration() -> Migration {
-	Migration {
-		app_label: "testapp".to_string(),
-		name: "0001_create_users".to_string(),
-		operations: vec![Operation::CreateTable {
+	Migration::from_parts(
+		"0001_create_users".to_string(),
+		"testapp".to_string(),
+		vec![Operation::CreateTable {
 			name: "users_crdb_lock_test".to_string(),
 			columns: vec![
-				ColumnDefinition {
-					name: "id".to_string(),
-					type_definition: FieldType::Integer,
-					not_null: true,
-					unique: false,
-					primary_key: true,
-					auto_increment: true,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
-				ColumnDefinition {
-					name: "name".to_string(),
-					type_definition: FieldType::VarChar(100),
-					not_null: true,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
+				ColumnDefinition::from_parts(
+					"id".to_string(),
+					FieldType::Integer,
+					true,
+					false,
+					true,
+					true,
+					None,
+					None,
+					None,
+				),
+				ColumnDefinition::from_parts(
+					"name".to_string(),
+					FieldType::VarChar(100),
+					true,
+					false,
+					false,
+					false,
+					None,
+					None,
+					None,
+				),
 			],
 			constraints: vec![],
 			without_rowid: None,
 			interleave_in_parent: None,
 			partition: None,
 		}],
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	}
+		vec![],
+		vec![],
+		true,
+		None,
+		false,
+		false,
+		vec![],
+		vec![],
+	)
 }
 
 /// Check whether `table_name` exists in the CockroachDB connection.

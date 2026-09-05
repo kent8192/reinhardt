@@ -39,10 +39,10 @@ Add `reinhardt` to your `Cargo.toml`:
 <!-- reinhardt-version-sync:2 -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.4.0-alpha.12", features = ["admin"] }
+reinhardt = { version = "0.4.0-alpha.13", features = ["admin"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.4.0-alpha.12", features = ["full"] }  # All features
+# reinhardt = { version = "0.4.0-alpha.13", features = ["full"] }  # All features
 ```
 
 Then import admin features:
@@ -582,7 +582,7 @@ individual modules under `src/server/`:
 - `get_list` — model list view with pagination
 - `get_list_action_metadata` — primary-key and registered action metadata
 - `get_detail` — detail view for a single record
-- `get_history` — newest-first per-object change history, including deleted records
+- `get_history` — newest-first history for objects visible through the request-aware admin scope; deleted-object history remains persisted but is not exposed after deletion
 - `get_fields` — field metadata for a model
 - `get_relation_options` — search and resolve configured relation field options
 - `create_record` — create a new record

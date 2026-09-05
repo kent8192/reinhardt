@@ -77,6 +77,8 @@ pub mod injectable;
 pub mod metadata;
 #[cfg(feature = "msw")]
 pub mod mockable;
+#[cfg(all(native, feature = "model-server-fnset"))]
+mod model_error;
 pub mod model_set;
 #[cfg(native)]
 mod multipart;

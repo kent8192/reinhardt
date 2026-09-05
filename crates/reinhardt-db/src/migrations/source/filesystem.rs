@@ -63,6 +63,14 @@ impl FilesystemSource {
 				e
 			)))
 		})?;
+		super::super::source_format::validate_source_version(&content).map_err(
+			|error| match error {
+				MigrationError::InvalidMigration(message) => MigrationError::InvalidMigration(
+					format!("Failed to parse {}: {message}", path.display()),
+				),
+				other => other,
+			},
+		)?;
 
 		// Parse with syn
 		let ast: File = syn::parse_file(&content).map_err(|e| {
@@ -278,6 +286,26 @@ mod tests {
 
 		// Assert
 		assert_eq!(source.root_dir, temp_dir.path());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(filesystem_source)]
+	async fn rejects_migration_sources_from_newer_format_versions() {
+		let temp_dir = TempDir::new().unwrap();
+		create_migration_file(
+			temp_dir.path(),
+			"app",
+			"0001_initial",
+			"// reinhardt-migration-source: 2\nfn migration() -> Migration { Migration::new(\"0001\", \"app\") }\n",
+		);
+
+		let error = FilesystemSource::new(temp_dir.path())
+			.all_migrations()
+			.await
+			.expect_err("future source format must be rejected");
+
+		assert!(error.to_string().contains("newer Reinhardt tool"));
 	}
 
 	#[rstest]

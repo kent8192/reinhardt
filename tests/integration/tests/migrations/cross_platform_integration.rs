@@ -41,31 +41,11 @@ fn create_test_migration(
 	name: &'static str,
 	operations: Vec<Operation>,
 ) -> Migration {
-	Migration {
-		app_label: app,
-		name,
-		operations,
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-	}
+	Migration::from_parts(name, app, operations, vec![], vec![], true, None, false, false, Vec::new(), Vec::new())
 }
 
 fn create_basic_column(name: &str, type_def: FieldType) -> ColumnDefinition {
-	ColumnDefinition {
-		name: name.to_string(),
-		type_definition: type_def,
-		not_null: false,
-		unique: false,
-		primary_key: false,
-		auto_increment: false,
-		default: None,
-		generated: None,
-		domain: None,
-	}
+	ColumnDefinition::from_parts(name.to_string(), type_def, false, false, false, false, None, None, None)
 }
 
 // ============================================================================

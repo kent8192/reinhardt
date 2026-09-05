@@ -386,6 +386,27 @@ pub mod db {
 		pub use super::associations::ManyToManyAccessor;
 		pub use serde;
 
+		pub mod naming {
+			pub fn generated_unique_constraint_names(
+				table: &str,
+				fields: &[String],
+				_reserved: &[String],
+			) -> Vec<(String, String)> {
+				fields
+					.iter()
+					.map(|field| (format!("{table}_{field}_uniq"), field.clone()))
+					.collect()
+			}
+
+			pub fn foreign_key_constraint_name(table: &str, column: &str) -> String {
+				format!("fk_{table}_{column}")
+			}
+
+			pub fn enum_domain_constraint_name(table: &str, column: &str) -> String {
+				format!("{table}_{column}_model_enum_check")
+			}
+		}
+
 		pub type FixtureFields = serde_json::Map<String, serde_json::Value>;
 		pub type FixtureValue = serde_json::Value;
 
@@ -494,6 +515,9 @@ pub mod db {
 			fn field_metadata() -> Vec<inspection::FieldInfo>;
 			fn index_metadata() -> Vec<inspection::IndexInfo>;
 			fn constraint_metadata() -> Vec<inspection::ConstraintInfo>;
+			fn constraint_fields(_constraint: &str) -> Option<Vec<&'static str>> {
+				None
+			}
 			fn relationship_metadata() -> Vec<inspection::RelationInfo>;
 			fn generated_field_names() -> &'static [&'static str];
 			fn primary_key_uses_zero_sentinel() -> bool {

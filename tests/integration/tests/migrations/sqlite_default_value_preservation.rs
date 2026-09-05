@@ -24,33 +24,33 @@ use reinhardt_db::migrations::{
 use rstest::*;
 
 fn pk_column(name: &str) -> ColumnDefinition {
-	ColumnDefinition {
-		name: name.to_string(),
-		type_definition: FieldType::Integer,
-		not_null: true,
-		unique: false,
-		primary_key: true,
-		auto_increment: true,
-		default: None,
-		generated: None,
-		domain: None,
-	}
+	ColumnDefinition::from_parts(
+		name.to_string(),
+		FieldType::Integer,
+		true,
+		false,
+		true,
+		true,
+		None,
+		None,
+		None,
+	)
 }
 
 fn migration(app: &str, name: &str, ops: Vec<Operation>) -> Migration {
-	Migration {
-		app_label: app.to_string(),
-		name: name.to_string(),
-		operations: ops,
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	}
+	Migration::from_parts(
+		name.to_string(),
+		app.to_string(),
+		ops,
+		vec![],
+		vec![],
+		true,
+		None,
+		false,
+		false,
+		vec![],
+		vec![],
+	)
 }
 
 /// Reproduces issue #4454 directly:
@@ -84,30 +84,28 @@ async fn issue_4454_string_default_survives_drop_column_recreation() {
 			name: "orders".to_string(),
 			columns: vec![
 				pk_column("id"),
-				ColumnDefinition {
-					name: "status".to_string(),
-					type_definition: FieldType::VarChar(20),
-					not_null: true,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
-					default: Some("'pending'".to_string()),
-
-					generated: None,
-					domain: None,
-				},
-				ColumnDefinition {
-					name: "note".to_string(),
-					type_definition: FieldType::VarChar(255),
-					not_null: false,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
+				ColumnDefinition::from_parts(
+					"status".to_string(),
+					FieldType::VarChar(20),
+					true,
+					false,
+					false,
+					false,
+					Some("'pending'".to_string()),
+					None,
+					None,
+				),
+				ColumnDefinition::from_parts(
+					"note".to_string(),
+					FieldType::VarChar(255),
+					false,
+					false,
+					false,
+					false,
+					None,
+					None,
+					None,
+				),
 			],
 			constraints: vec![],
 			without_rowid: None,

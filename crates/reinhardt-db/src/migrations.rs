@@ -119,6 +119,16 @@
 //! ```
 //!
 //! This file is automatically updated when new migrations are created.
+//!
+//! ## Generated Migration Source Compatibility
+//!
+//! Generated migration files begin with a
+//! `// reinhardt-migration-source: 1` marker and construct framework-owned
+//! values through constructors and builders. Existing unversioned generated
+//! files can be upgraded without a database connection with
+//! `reinhardt-admin migrations upgrade-source migrations`; add `--check` to
+//! fail when any file still needs conversion. The upgrader edits only known
+//! generated spans and leaves surrounding application code and comments intact.
 
 pub mod ast_parser;
 pub mod auto_migration;
@@ -145,6 +155,7 @@ pub mod schema_diff;
 pub mod schema_editor;
 pub mod service;
 pub mod source;
+pub mod source_format;
 pub mod sql_plan;
 #[cfg(feature = "sqlite")]
 pub(crate) mod sqlite_pragma;
@@ -244,6 +255,7 @@ pub use source::{
 	MigrationSource, composite::CompositeSource, filesystem::FilesystemSource,
 	registry::RegistrySource,
 };
+pub use source_format::{CURRENT_SOURCE_FORMAT_VERSION, UpgradeResult, upgrade_source};
 pub use sql_plan::{
 	MigrationDirection, MigrationSqlPlan, PlannedStatement, plan_migration_sql,
 	plan_migration_sql_with_states,

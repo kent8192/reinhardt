@@ -22,47 +22,47 @@ use reinhardt_db::migrations::{
 use rstest::*;
 
 fn pk_column(name: &str) -> ColumnDefinition {
-	ColumnDefinition {
-		name: name.to_string(),
-		type_definition: FieldType::Integer,
-		not_null: true,
-		unique: false,
-		primary_key: true,
-		auto_increment: true,
-		default: None,
-		generated: None,
-		domain: None,
-	}
+	ColumnDefinition::from_parts(
+		name.to_string(),
+		FieldType::Integer,
+		true,
+		false,
+		true,
+		true,
+		None,
+		None,
+		None,
+	)
 }
 
 fn col(name: &str, ty: FieldType, not_null: bool) -> ColumnDefinition {
-	ColumnDefinition {
-		name: name.to_string(),
-		type_definition: ty,
+	ColumnDefinition::from_parts(
+		name.to_string(),
+		ty,
 		not_null,
-		unique: false,
-		primary_key: false,
-		auto_increment: false,
-		default: None,
-		generated: None,
-		domain: None,
-	}
+		false,
+		false,
+		false,
+		None,
+		None,
+		None,
+	)
 }
 
 fn migration(app: &str, name: &str, ops: Vec<Operation>) -> Migration {
-	Migration {
-		app_label: app.to_string(),
-		name: name.to_string(),
-		operations: ops,
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	}
+	Migration::from_parts(
+		name.to_string(),
+		app.to_string(),
+		ops,
+		vec![],
+		vec![],
+		true,
+		None,
+		false,
+		false,
+		vec![],
+		vec![],
+	)
 }
 
 /// Reproduces issue #4447 directly:
@@ -105,20 +105,19 @@ async fn issue_4447_add_column_then_add_constraint_preserves_column() {
 		vec![
 			Operation::AddColumn {
 				table: "users".to_string(),
-				column: ColumnDefinition {
-					name: "is_superuser".to_string(),
-					type_definition: FieldType::Boolean,
-					not_null: true,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
+				column: ColumnDefinition::from_parts(
+					"is_superuser".to_string(),
+					FieldType::Boolean,
+					true,
+					false,
+					false,
+					false,
 					// Note: a default IS provided here. The "no default" path
 					// is exercised by the macro-level regression test.
-					default: Some("false".to_string()),
-
-					generated: None,
-					domain: None,
-				},
+					Some("false".to_string()),
+					None,
+					None,
+				),
 				mysql_options: None,
 			},
 			Operation::AddConstraint {
@@ -244,18 +243,17 @@ async fn issue_4447_failed_add_column_does_not_record_applied() {
 		"0002_add_super_no_default",
 		vec![Operation::AddColumn {
 			table: "users".to_string(),
-			column: ColumnDefinition {
-				name: "is_superuser".to_string(),
-				type_definition: FieldType::Boolean,
-				not_null: true,
-				unique: false,
-				primary_key: false,
-				auto_increment: false,
-				default: None,
-
-				generated: None,
-				domain: None,
-			},
+			column: ColumnDefinition::from_parts(
+				"is_superuser".to_string(),
+				FieldType::Boolean,
+				true,
+				false,
+				false,
+				false,
+				None,
+				None,
+				None,
+			),
 			mysql_options: None,
 		}],
 	);

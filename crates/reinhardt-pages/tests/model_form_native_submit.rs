@@ -2,8 +2,85 @@
 
 include!("ui/form/model_json_support.rs");
 
+#[cfg(feature = "model-server-fnset")]
+use std::collections::HashMap;
+
 use reinhardt_pages::{FieldError, form, server_fn::ServerFnErrorKind, use_form};
 use rstest::rstest;
+
+#[cfg(feature = "model-server-fnset")]
+use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
+#[cfg(feature = "model-server-fnset")]
+use reinhardt_db::orm::{FieldSelector, Manager, Model, inspection::FieldInfo};
+#[cfg(feature = "model-server-fnset")]
+use serde::{Deserialize, Serialize};
+
+#[cfg(feature = "model-server-fnset")]
+#[derive(Clone)]
+struct ConstraintQuestionFields;
+
+#[cfg(feature = "model-server-fnset")]
+impl FieldSelector for ConstraintQuestionFields {
+	fn with_alias(self, _alias: &str) -> Self {
+		self
+	}
+}
+
+#[cfg(feature = "model-server-fnset")]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct ConstraintQuestion {
+	id: Option<i64>,
+	title: String,
+}
+
+#[cfg(feature = "model-server-fnset")]
+impl Model for ConstraintQuestion {
+	type PrimaryKey = i64;
+	type Fields = ConstraintQuestionFields;
+	type Objects = Manager<Self>;
+
+	fn table_name() -> &'static str {
+		"questions"
+	}
+
+	fn new_fields() -> Self::Fields {
+		ConstraintQuestionFields
+	}
+
+	fn primary_key(&self) -> Option<Self::PrimaryKey> {
+		self.id
+	}
+
+	fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+		self.id = Some(value);
+	}
+
+	fn field_metadata() -> Vec<FieldInfo> {
+		vec![FieldInfo {
+			name: "title".to_owned(),
+			field_type: "CharField".to_owned(),
+			storage_kind: None,
+			domain: None,
+			nullable: false,
+			primary_key: false,
+			unique: false,
+			blank: false,
+			editable: true,
+			default: None,
+			db_default: None,
+			db_column: None,
+			choices: None,
+			attributes: HashMap::new(),
+		}]
+	}
+
+	fn constraint_fields(constraint: &str) -> Option<Vec<&'static str>> {
+		match constraint {
+			"questions_title_key" | "questions_title_check" => Some(vec!["title"]),
+			_ => None,
+		}
+	}
+}
 
 #[rstest]
 fn native_generated_submit_routes_snapshot_errors_without_dispatch() {
@@ -177,10 +254,13 @@ fn model_form_routes_structured_server_errors_to_selected_fields() {
 			server_fn: save_question,
 		};
 		let runtime = use_form(&form).build();
-		let error = reinhardt_pages::ServerFnError::validation([
-			("title", "Title is already used"),
-			("owner_id", "Owner is required"),
-		]);
+		let error = reinhardt_pages::ServerFnError::validation_with_message(
+			"Please correct the submitted values",
+			[
+				("title", "Title is already used"),
+				("owner_id", "Owner is required"),
+			],
+		);
 
 		// Act
 		runtime.apply_server_error(&error);
@@ -196,7 +276,67 @@ fn model_form_routes_structured_server_errors_to_selected_fields() {
 		);
 		assert_eq!(
 			runtime.form_state().form_error.get(),
-			Some("Validation failed\nowner_id: Owner is required".to_owned())
+			Some("Please correct the submitted values\nowner_id: Owner is required".to_owned())
+		);
+	});
+}
+
+#[cfg(feature = "model-server-fnset")]
+#[test]
+fn generated_model_form_routes_serialized_database_constraint_errors() {
+	reinhardt_core::reactive::ReactiveScope::run(|| {
+		let unique_form = form! {
+			name: ConstraintQuestionUniqueForm,
+			model: Question,
+			policy: QuestionPolicy,
+			fields: [title],
+			server_fn: save_question,
+		};
+		let unique_runtime = use_form(&unique_form).build();
+		let unique = ServerFnError::try_from_model_error::<ConstraintQuestion>(Error::from(
+			DatabaseError::new(DatabaseErrorKind::UniqueViolation, "private duplicate")
+				.with_table("questions")
+				.with_constraint("questions_title_key")
+				.with_columns(["title"]),
+		))
+		.expect("known unique constraint converts");
+		let serialized = serde_json::to_string(&unique).expect("safe error serializes");
+		let unique: ServerFnError =
+			serde_json::from_str(&serialized).expect("safe error deserializes");
+		unique_runtime.apply_server_error(&unique);
+		assert_eq!(
+			unique_runtime
+				.get_field_state(unique_form.title_field())
+				.error
+				.as_ref()
+				.map(FieldError::message),
+			Some("A record with this value already exists")
+		);
+
+		let check_form = form! {
+			name: ConstraintQuestionCheckForm,
+			model: Question,
+			policy: QuestionPolicy,
+			fields: [title],
+			server_fn: save_question,
+		};
+		let check_runtime = use_form(&check_form).build();
+		let check = ServerFnError::try_from_model_error::<ConstraintQuestion>(Error::from(
+			DatabaseError::new(DatabaseErrorKind::CheckViolation, "private check")
+				.with_table("questions")
+				.with_constraint("questions_title_check"),
+		))
+		.expect("known CHECK constraint converts");
+		check_runtime.apply_server_error(&check);
+		assert_eq!(
+			check_runtime.form_state().form_error.get(),
+			Some("The submitted values violate a data constraint".to_owned())
+		);
+		assert!(
+			check_runtime
+				.get_field_state(check_form.title_field())
+				.error
+				.is_none()
 		);
 	});
 }

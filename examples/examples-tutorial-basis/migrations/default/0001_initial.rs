@@ -1,85 +1,59 @@
+// reinhardt-migration-source: 1
 use reinhardt::db::migrations::FieldType;
 use reinhardt::db::migrations::prelude::*;
 pub(super) fn migration() -> Migration {
-	Migration {
-		app_label: "default".to_string(),
-		name: "0001_initial".to_string(),
-		operations: vec![Operation::CreateTable {
+	Migration::new("0001_initial".to_string(), "default".to_string())
+		.add_operation(Operation::CreateTable {
 			name: "sessions".to_string(),
 			columns: vec![
-				ColumnDefinition {
-					name: "created_at".to_string(),
-					type_definition: FieldType::BigInteger,
-					not_null: true,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
-				ColumnDefinition {
-					name: "expire_date".to_string(),
-					type_definition: FieldType::BigInteger,
-					not_null: true,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
-				ColumnDefinition {
-					name: "last_accessed".to_string(),
-					type_definition: FieldType::BigInteger,
-					not_null: false,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
-				ColumnDefinition {
-					name: "session_data".to_string(),
-					type_definition: FieldType::VarChar(65535u32),
-					not_null: true,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
-				ColumnDefinition {
-					name: "session_key".to_string(),
-					type_definition: FieldType::VarChar(255u32),
-					not_null: true,
-					unique: false,
-					primary_key: true,
-					auto_increment: false,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
+				ColumnDefinition::new("created_at".to_string(), FieldType::BigInteger)
+					.with_not_null(true)
+					.with_unique(false)
+					.with_primary_key(false)
+					.with_auto_increment(false)
+					.with_default(None)
+					.with_generated(None)
+					.with_domain_option(None),
+				ColumnDefinition::new("expire_date".to_string(), FieldType::BigInteger)
+					.with_not_null(true)
+					.with_unique(false)
+					.with_primary_key(false)
+					.with_auto_increment(false)
+					.with_default(None)
+					.with_generated(None)
+					.with_domain_option(None),
+				ColumnDefinition::new("last_accessed".to_string(), FieldType::BigInteger)
+					.with_not_null(false)
+					.with_unique(false)
+					.with_primary_key(false)
+					.with_auto_increment(false)
+					.with_default(None)
+					.with_generated(None)
+					.with_domain_option(None),
+				ColumnDefinition::new("session_data".to_string(), FieldType::VarChar(65535u32))
+					.with_not_null(true)
+					.with_unique(false)
+					.with_primary_key(false)
+					.with_auto_increment(false)
+					.with_default(None)
+					.with_generated(None)
+					.with_domain_option(None),
+				ColumnDefinition::new("session_key".to_string(), FieldType::VarChar(255u32))
+					.with_not_null(true)
+					.with_unique(false)
+					.with_primary_key(true)
+					.with_auto_increment(false)
+					.with_default(None)
+					.with_generated(None)
+					.with_domain_option(None),
 			],
 			constraints: vec![],
 			without_rowid: None,
 			interleave_in_parent: None,
 			partition: None,
-		}],
-		dependencies: vec![],
-		atomic: true,
-		replaces: vec![],
-		initial: Some(true),
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	}
+		})
+		.atomic(true)
+		.with_initial(Some(true))
+		.state_only(false)
+		.database_only(false)
 }

@@ -259,10 +259,7 @@ impl ToTokens for PartitionDef {
 		let name = &self.name;
 		let values = &self.values;
 		tokens.extend(quote! {
-			PartitionDef {
-				name: #name.to_string(),
-				values: #values,
-			}
+			PartitionDef::new(#name, #values)
 		});
 	}
 }
@@ -283,10 +280,7 @@ impl ToTokens for InterleaveSpec {
 		let parent_table = &self.parent_table;
 		let parent_columns = &self.parent_columns;
 		tokens.extend(quote! {
-			InterleaveSpec {
-				parent_table: #parent_table.to_string(),
-				parent_columns: vec![#(#parent_columns.to_string()),*],
-			}
+			InterleaveSpec::new(#parent_table, vec![#(#parent_columns.to_string()),*])
 		});
 	}
 }
@@ -1100,17 +1094,16 @@ impl ToTokens for Operation {
 						table: #table.to_string(),
 						source: #source_tokens,
 						format: #format_tokens,
-						options: BulkLoadOptions {
-							delimiter: #delimiter_token,
-							null_string: #null_string_token,
-							header: #header,
-							columns: #columns_token,
-							local: #local,
-							quote: #quote_token,
-							escape: #escape_token,
-							line_terminator: #line_terminator_token,
-							encoding: #encoding_token,
-						},
+						options: BulkLoadOptions::new()
+							.with_delimiter_option(#delimiter_token)
+							.with_null_string_option(#null_string_token)
+							.with_header(#header)
+							.with_columns_option(#columns_token)
+							.with_local(#local)
+							.with_quote_option(#quote_token)
+							.with_escape_option(#escape_token)
+							.with_line_terminator_option(#line_terminator_token)
+							.with_encoding_option(#encoding_token),
 					}
 				});
 			}
@@ -1296,17 +1289,14 @@ impl ToTokens for ColumnDefinition {
 		};
 
 		tokens.extend(quote! {
-			ColumnDefinition {
-				name: #name.to_string(),
-				type_definition: #field_type_token,
-				not_null: #not_null,
-				unique: #unique,
-				primary_key: #primary_key,
-				auto_increment: #auto_increment,
-				default: #default_token,
-				generated: #generated_token,
-				domain: #domain_token,
-			}
+			ColumnDefinition::new(#name, #field_type_token)
+				.with_not_null(#not_null)
+				.with_unique(#unique)
+				.with_primary_key(#primary_key)
+				.with_auto_increment(#auto_increment)
+				.with_default(#default_token)
+				.with_generated(#generated_token)
+				.with_domain_option(#domain_token)
 		});
 	}
 }
@@ -1321,30 +1311,26 @@ impl ToTokens for GeneratedColumnDefinition {
 
 		let canonical_expr = self.typed_expr();
 		let canonical_expr_tokens = canonical_expr.as_ref().map(schema_expr_to_tokens);
-		let expr_token = match &canonical_expr_tokens {
-			Some(expr_stream) => quote! { Some(Box::new(#expr_stream)) },
-			None => quote! { None },
-		};
-		let expr_tokens_token = match &canonical_expr_tokens {
-			Some(expr_stream) => {
-				let expr_tokens = expr_stream.to_string();
-				quote! { Some(#expr_tokens.to_string()) }
-			}
-			None => quote! { None },
-		};
-		let raw_sql_token = match &self.raw_sql {
-			Some(raw_sql) => quote! { Some(#raw_sql.to_string()) },
-			None => quote! { None },
-		};
-
-		tokens.extend(quote! {
-			GeneratedColumnDefinition {
-				expr: #expr_token,
-				expr_tokens: #expr_tokens_token,
-				raw_sql: #raw_sql_token,
-				storage: #storage_token,
-			}
-		});
+		if let Some(expr_stream) = canonical_expr_tokens {
+			let expr_tokens = expr_stream.to_string();
+			tokens.extend(quote! {
+				GeneratedColumnDefinition::typed(
+					#expr_stream,
+					#expr_tokens,
+					#storage_token,
+				)
+			});
+		} else if let Some(raw_sql) = &self.raw_sql {
+			tokens.extend(quote! {
+				GeneratedColumnDefinition::raw_sql(#raw_sql, #storage_token)
+			});
+		} else if let Some(expr_tokens) = &self.expr_tokens {
+			tokens.extend(quote! {
+				GeneratedColumnDefinition::tokens(#expr_tokens, #storage_token)
+			});
+		} else {
+			panic!("generated-column definition has no expression or raw SQL");
+		}
 	}
 }
 
@@ -1558,17 +1544,16 @@ impl ToTokens for super::BulkLoadOptions {
 		};
 
 		tokens.extend(quote! {
-			BulkLoadOptions {
-				delimiter: #delimiter,
-				null_string: #null_string,
-				header: #header,
-				columns: #columns,
-				local: #local,
-				quote: #quote_char,
-				escape: #escape,
-				line_terminator: #line_terminator,
-				encoding: #encoding,
-			}
+			BulkLoadOptions::new()
+				.with_delimiter_option(#delimiter)
+				.with_null_string_option(#null_string)
+				.with_header(#header)
+				.with_columns_option(#columns)
+				.with_local(#local)
+				.with_quote_option(#quote_char)
+				.with_escape_option(#escape)
+				.with_line_terminator_option(#line_terminator)
+				.with_encoding_option(#encoding)
 		});
 	}
 }
@@ -1577,6 +1562,7 @@ impl ToTokens for super::BulkLoadOptions {
 mod tests {
 	use super::*;
 	use quote::ToTokens;
+	use rstest::rstest;
 
 	#[test]
 	fn drop_constraint_definition_tokens_preserve_typed_constraint() {
@@ -1615,7 +1601,7 @@ mod tests {
 
 		let tokens = column.to_token_stream().to_string();
 
-		assert!(tokens.contains("domain : Some (FieldDomain :: Enum"));
+		assert!(tokens.contains("with_domain_option (Some (FieldDomain :: Enum"));
 		assert!(tokens.contains("ModelEnumRepr :: String"));
 		assert!(tokens.contains("ModelEnumValue :: String (\"queued\" . to_string ())"));
 	}
@@ -1689,6 +1675,23 @@ mod tests {
 				"tokens must preserve suffixed literal types: {tokens}"
 			);
 		}
+	}
+
+	#[rstest]
+	#[case::i8(SchemaExpr::Value(Value::TinyInt(Some(i8::MIN))))]
+	#[case::i16(SchemaExpr::Value(Value::SmallInt(Some(i16::MIN))))]
+	#[case::i32(SchemaExpr::Value(Value::Int(Some(i32::MIN))))]
+	#[case::i64(SchemaExpr::Value(Value::BigInt(Some(i64::MIN))))]
+	fn generated_schema_expr_tokens_reparse_minimum_signed_literals(
+		#[case] expression: SchemaExpr,
+	) {
+		let tokens = schema_expr_to_tokens(&expression).to_string();
+
+		assert_eq!(
+			crate::migrations::ast_parser::parse_schema_expr_tokens(&tokens),
+			Some(expression),
+			"tokens must preserve minimum signed literal: {tokens}"
+		);
 	}
 
 	#[test]
@@ -1885,28 +1888,23 @@ mod tests {
 				PartitionType::Range,
 				"id",
 				vec![
-					PartitionDef {
-						name: "before_100".to_string(),
-						values: PartitionValues::LessThan("100".to_string()),
-					},
-					PartitionDef {
-						name: "after_100".to_string(),
-						values: PartitionValues::LessThan("MAXVALUE".to_string()),
-					}
+					PartitionDef::new("before_100", PartitionValues::LessThan("100".to_string())),
+					PartitionDef::new(
+						"after_100",
+						PartitionValues::LessThan("MAXVALUE".to_string())
+					)
 				]
 			)),
 		);
 
-		let interleave = InterleaveSpec {
-			parent_table: "accounts".to_string(),
-			parent_columns: vec!["tenant_id".to_string(), "id".to_string()],
-		};
+		let interleave =
+			InterleaveSpec::new("accounts", vec!["tenant_id".to_string(), "id".to_string()]);
 		assert_tokens(
 			&interleave,
-			quote!(InterleaveSpec {
-				parent_table: "accounts".to_string(),
-				parent_columns: vec!["tenant_id".to_string(), "id".to_string()],
-			}),
+			quote!(InterleaveSpec::new(
+				"accounts",
+				vec!["tenant_id".to_string(), "id".to_string()]
+			)),
 		);
 	}
 
@@ -1917,17 +1915,14 @@ mod tests {
 		let value = column("value", field_type);
 		assert_tokens(
 			&value,
-			quote!(ColumnDefinition {
-				name: "value".to_string(),
-				type_definition: #expected_field_type,
-				not_null: false,
-				unique: false,
-				primary_key: false,
-				auto_increment: false,
-				default: None,
-				generated: None,
-				domain: None,
-			}),
+			quote!(ColumnDefinition::new("value", #expected_field_type)
+				.with_not_null(false)
+				.with_unique(false)
+				.with_primary_key(false)
+				.with_auto_increment(false)
+				.with_default(None)
+				.with_generated(None)
+				.with_domain_option(None)),
 		);
 	}
 
@@ -2105,33 +2100,31 @@ mod tests {
 		};
 		assert_tokens(
 			&fully_populated,
-			quote!(ColumnDefinition {
-				name: "id".to_string(),
-				type_definition: FieldType::BigInteger,
-				not_null: true,
-				unique: true,
-				primary_key: true,
-				auto_increment: true,
-				default: Some("42".to_string()),
-				generated: None,
-				domain: None,
-			}),
+			quote!(
+				ColumnDefinition::new("id", FieldType::BigInteger)
+					.with_not_null(true)
+					.with_unique(true)
+					.with_primary_key(true)
+					.with_auto_increment(true)
+					.with_default(Some("42".to_string()))
+					.with_generated(None)
+					.with_domain_option(None)
+			),
 		);
 
 		let minimal = column("name", FieldType::VarChar(255));
 		assert_tokens(
 			&minimal,
-			quote!(ColumnDefinition {
-				name: "name".to_string(),
-				type_definition: FieldType::VarChar(255u32),
-				not_null: false,
-				unique: false,
-				primary_key: false,
-				auto_increment: false,
-				default: None,
-				generated: None,
-				domain: None,
-			}),
+			quote!(
+				ColumnDefinition::new("name", FieldType::VarChar(255u32))
+					.with_not_null(false)
+					.with_unique(false)
+					.with_primary_key(false)
+					.with_auto_increment(false)
+					.with_default(None)
+					.with_generated(None)
+					.with_domain_option(None)
+			),
 		);
 	}
 
@@ -2320,33 +2313,32 @@ mod tests {
 			&create,
 			quote!(Operation::CreateTable {
 				name: "bookings".to_string(),
-				columns: vec![ColumnDefinition {
-					name: "id".to_string(),
-					type_definition: FieldType::BigInteger,
-					not_null: true,
-					unique: true,
-					primary_key: true,
-					auto_increment: true,
-					default: Some("1".to_string()),
-					generated: None,
-					domain: None,
-				}],
+				columns: vec![
+					ColumnDefinition::new("id", FieldType::BigInteger)
+						.with_not_null(true)
+						.with_unique(true)
+						.with_primary_key(true)
+						.with_auto_increment(true)
+						.with_default(Some("1".to_string()))
+						.with_generated(None)
+						.with_domain_option(None)
+				],
 				constraints: vec![Constraint::PrimaryKey {
 					name: "pk_bookings".to_string(),
 					columns: vec!["id".to_string()],
 				}],
 				without_rowid: Some(true),
-				interleave_in_parent: Some(InterleaveSpec {
-					parent_table: "accounts".to_string(),
-					parent_columns: vec!["tenant_id".to_string(), "id".to_string()],
-				}),
+				interleave_in_parent: Some(InterleaveSpec::new(
+					"accounts",
+					vec!["tenant_id".to_string(), "id".to_string()]
+				)),
 				partition: Some(PartitionOptions::new(
 					PartitionType::Range,
 					"id",
-					vec![PartitionDef {
-						name: "before_100".to_string(),
-						values: PartitionValues::LessThan("100".to_string()),
-					}]
+					vec![PartitionDef::new(
+						"before_100",
+						PartitionValues::LessThan("100".to_string())
+					)]
 				)),
 			}),
 		);
@@ -2403,17 +2395,14 @@ mod tests {
 			&add_column,
 			quote!(Operation::AddColumn {
 				table: "bookings".to_string(),
-				column: ColumnDefinition {
-					name: "id".to_string(),
-					type_definition: FieldType::BigInteger,
-					not_null: true,
-					unique: true,
-					primary_key: true,
-					auto_increment: true,
-					default: Some("1".to_string()),
-					generated: None,
-					domain: None,
-				},
+				column: ColumnDefinition::new("id", FieldType::BigInteger)
+					.with_not_null(true)
+					.with_unique(true)
+					.with_primary_key(true)
+					.with_auto_increment(true)
+					.with_default(Some("1".to_string()))
+					.with_generated(None)
+					.with_domain_option(None),
 				mysql_options: Some(
 					AlterTableOptions::new()
 						.with_algorithm(MySqlAlgorithm::Instant)
@@ -2429,17 +2418,14 @@ mod tests {
 			},
 			quote!(Operation::AddColumn {
 				table: "bookings".to_string(),
-				column: ColumnDefinition {
-					name: "status".to_string(),
-					type_definition: FieldType::Text,
-					not_null: false,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
-					default: None,
-					generated: None,
-					domain: None,
-				},
+				column: ColumnDefinition::new("status", FieldType::Text)
+					.with_not_null(false)
+					.with_unique(false)
+					.with_primary_key(false)
+					.with_auto_increment(false)
+					.with_default(None)
+					.with_generated(None)
+					.with_domain_option(None),
 				mysql_options: None,
 			}),
 		);
@@ -2475,28 +2461,24 @@ mod tests {
 			quote!(Operation::AlterColumn {
 				table: "bookings".to_string(),
 				column: "status".to_string(),
-				old_definition: Some(ColumnDefinition {
-					name: "status".to_string(),
-					type_definition: FieldType::Text,
-					not_null: false,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
-					default: None,
-					generated: None,
-					domain: None,
-				}),
-				new_definition: ColumnDefinition {
-					name: "status".to_string(),
-					type_definition: FieldType::VarChar(32u32),
-					not_null: false,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
-					default: None,
-					generated: None,
-					domain: None,
-				},
+				old_definition: Some(
+					ColumnDefinition::new("status", FieldType::Text)
+						.with_not_null(false)
+						.with_unique(false)
+						.with_primary_key(false)
+						.with_auto_increment(false)
+						.with_default(None)
+						.with_generated(None)
+						.with_domain_option(None)
+				),
+				new_definition: ColumnDefinition::new("status", FieldType::VarChar(32u32))
+					.with_not_null(false)
+					.with_unique(false)
+					.with_primary_key(false)
+					.with_auto_increment(false)
+					.with_default(None)
+					.with_generated(None)
+					.with_domain_option(None),
 				mysql_options: Some(AlterTableOptions::new().with_algorithm(MySqlAlgorithm::Copy)),
 			}),
 		);
@@ -2512,17 +2494,14 @@ mod tests {
 				table: "bookings".to_string(),
 				column: "status".to_string(),
 				old_definition: None,
-				new_definition: ColumnDefinition {
-					name: "status".to_string(),
-					type_definition: FieldType::Text,
-					not_null: false,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
-					default: None,
-					generated: None,
-					domain: None,
-				},
+				new_definition: ColumnDefinition::new("status", FieldType::Text)
+					.with_not_null(false)
+					.with_unique(false)
+					.with_primary_key(false)
+					.with_auto_increment(false)
+					.with_default(None)
+					.with_generated(None)
+					.with_domain_option(None),
 				mysql_options: None,
 			}),
 		);
@@ -2735,17 +2714,16 @@ mod tests {
 			},
 			quote!(Operation::CreateInheritedTable {
 				name: "premium_booking".to_string(),
-				columns: vec![ColumnDefinition {
-					name: "priority".to_string(),
-					type_definition: FieldType::Integer,
-					not_null: false,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
-					default: None,
-					generated: None,
-					domain: None,
-				}],
+				columns: vec![
+					ColumnDefinition::new("priority", FieldType::Integer)
+						.with_not_null(false)
+						.with_unique(false)
+						.with_primary_key(false)
+						.with_auto_increment(false)
+						.with_default(None)
+						.with_generated(None)
+						.with_domain_option(None)
+				],
 				base_table: "bookings".to_string(),
 				join_column: "booking_id".to_string(),
 			}),
@@ -2872,17 +2850,16 @@ mod tests {
 				table: "events".to_string(),
 				source: BulkLoadSource::File("/tmp/events.csv".to_string()),
 				format: BulkLoadFormat::Csv,
-				options: BulkLoadOptions {
-					delimiter: Some(','),
-					null_string: Some("NULL".to_string()),
-					header: true,
-					columns: Some(vec!["id".to_string(), "name".to_string()]),
-					local: false,
-					quote: Some('"'),
-					escape: Some('\\'),
-					line_terminator: Some("\n".to_string()),
-					encoding: Some("UTF-8".to_string()),
-				},
+				options: BulkLoadOptions::new()
+					.with_delimiter_option(Some(','))
+					.with_null_string_option(Some("NULL".to_string()))
+					.with_header(true)
+					.with_columns_option(Some(vec!["id".to_string(), "name".to_string()]))
+					.with_local(false)
+					.with_quote_option(Some('"'))
+					.with_escape_option(Some('\\'))
+					.with_line_terminator_option(Some("\n".to_string()))
+					.with_encoding_option(Some("UTF-8".to_string())),
 			}),
 		);
 
@@ -2925,17 +2902,18 @@ mod tests {
 		};
 		assert_tokens(
 			&no_option_values,
-			quote!(BulkLoadOptions {
-				delimiter: None,
-				null_string: None,
-				header: false,
-				columns: None,
-				local: true,
-				quote: None,
-				escape: None,
-				line_terminator: None,
-				encoding: None,
-			}),
+			quote!(
+				BulkLoadOptions::new()
+					.with_delimiter_option(None)
+					.with_null_string_option(None)
+					.with_header(false)
+					.with_columns_option(None)
+					.with_local(true)
+					.with_quote_option(None)
+					.with_escape_option(None)
+					.with_line_terminator_option(None)
+					.with_encoding_option(None)
+			),
 		);
 		assert_tokens(
 			&Operation::SetAutoIncrementValue {

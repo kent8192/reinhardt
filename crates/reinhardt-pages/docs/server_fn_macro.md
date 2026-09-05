@@ -877,6 +877,38 @@ pub async fn safe_operation(
 }
 ```
 
+### 5. Map Proven Constraint Violations Safely
+
+With the native `model-server-fnset` feature, map only constraint violations
+that the framework can prove belong to the model. An optional callback may
+replace the default with fixed, client-safe text:
+
+```rust,ignore
+let server_error = ServerFnError::try_from_model_error_with::<User, _>(
+	error,
+	|database_error, _fields| {
+		(database_error.constraint() == Some("users_email_unique"))
+			.then(|| "This email is already registered".to_owned())
+	},
+)
+.unwrap_or_else(|error| {
+	tracing::error!(error = %error, "user write failed");
+	ServerFnError::application("Failed to save user")
+});
+```
+
+Never return `DatabaseError::message()`, rejected values, table names,
+constraint names, or vendor diagnostics to the browser. A known single-field
+violation becomes a field error; composite `UNIQUE` and `CHECK` violations are
+form-level errors. Unmapped or unproven errors remain the original framework
+error. The mapping helper is native-only; client code handles the serialized
+`ServerFnError` response.
+
+Conversion keeps the existing serialized `ServerFnError` wire shape and adds
+no database metadata to that response. Generated client forms route field
+errors by logical model field names. Composite `UNIQUE` and `CHECK` violations
+have no single logical field, so they reach the form error.
+
 ## Troubleshooting
 
 ### Issue: "cannot find type `X` in this scope" in WASM build

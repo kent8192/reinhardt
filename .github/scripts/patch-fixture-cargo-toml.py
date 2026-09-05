@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Rewrite a generated fixture's Cargo.toml to point at this PR's HEAD
 (workspace path) or at extracted .crate tarballs (publish-form mode).
+Registry dependencies retain their consumer-declared versions.
 
 Usage:
   patch-fixture-cargo-toml.py --manifest Cargo.toml --reinhardt-path /path/to/repo
@@ -239,40 +240,6 @@ def packaged_form(manifest: Path, pkg_stage: Path) -> None:
 	enable_features(manifest, ["client-router"])
 
 
-def pin_isolated_fixture_registry_crates(manifest: Path) -> None:
-	"""Pin crates.io releases that break isolated fixture resolution.
-
-	Isolated fixtures do not use the workspace Cargo.lock, so they resolve the
-	latest compatible registry versions. tinyvec 1.13.0 does not compile when
-	the `alloc` feature is enabled without `std` (Lokathor/tinyvec#225, tracked
-	in reinhardt-web#6260).
-	"""
-	text = manifest.read_text()
-	if re.search(r"^tinyvec\s*=", text, re.MULTILINE):
-		return
-	# Workaround for Lokathor/tinyvec#225 (tracked in reinhardt-web#6260)
-	# Remove this workaround when tinyvec publishes a release that compiles with
-	# the `alloc` feature without `std`.
-	#
-	# Ideal implementation (without workaround):
-	# omit this direct pin and let isolated fixtures resolve tinyvec from crates.io.
-	pin_lines = (
-		"# Workaround for Lokathor/tinyvec#225 (tracked in reinhardt-web#6260)\n"
-		"# Remove this workaround when tinyvec publishes a release that compiles with\n"
-		"# the `alloc` feature without `std`.\n"
-		"#\n"
-		"# Ideal implementation (without workaround):\n"
-		"# omit this direct pin and let isolated fixtures resolve tinyvec from crates.io.\n"
-		'tinyvec = "=1.12.0"\n'
-	)
-	match = re.search(r"(^\[dependencies\]\s*\n)", text, re.MULTILINE)
-	if match is None:
-		suffix = "" if text.endswith("\n") else "\n"
-		manifest.write_text(text + suffix + "\n[dependencies]\n" + pin_lines)
-		return
-	manifest.write_text(text[: match.end()] + pin_lines + text[match.end() :])
-
-
 def main() -> int:
 	ap = argparse.ArgumentParser()
 	ap.add_argument("--manifest", required=True, type=Path)
@@ -294,7 +261,6 @@ def main() -> int:
 			ap.error("workspace form requires --reinhardt-path")
 		workspace_form(args.manifest, args.reinhardt_path)
 
-	pin_isolated_fixture_registry_crates(args.manifest)
 	return 0
 
 

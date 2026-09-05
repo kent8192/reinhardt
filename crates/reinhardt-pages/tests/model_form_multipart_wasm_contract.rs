@@ -5,14 +5,6 @@ use std::process::Command;
 
 use tempfile::TempDir;
 
-// Workaround for Lokathor/tinyvec#225 (tracked in reinhardt-web#6260)
-// Remove this workaround when tinyvec publishes a release that compiles with
-// the `alloc` feature without `std`.
-//
-// Ideal implementation (without workaround):
-// omit the direct tinyvec pin and let isolated fixtures resolve from crates.io.
-const TINYVEC_ISOLATED_FIXTURE_PIN: &str = r#"tinyvec = "=1.12.0""#;
-
 fn check_wasm_fixture(crate_name: &str, form_expression: &str, diagnostic: &str) {
 	let crate_dir = TempDir::new().expect("create mismatch fixture");
 	let target_dir = TempDir::new().expect("create mismatch target directory");
@@ -35,7 +27,6 @@ edition = "2024"
 reinhardt-core = {{ path = {core_dir:?}, default-features = false, features = ["parsers"] }}
 reinhardt-pages = {{ path = {pages_dir:?}, default-features = false }}
 serde_json = "1"
-{TINYVEC_ISOLATED_FIXTURE_PIN}
 "#,
 		),
 	)

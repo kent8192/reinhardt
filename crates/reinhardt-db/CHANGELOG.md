@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 
-- *(db)* pin tinyvec 1.12.0 in isolated consumer fixtures
+- *(db)* remove obsolete tinyvec version pins from isolated consumer fixtures
 
 ### Changed
 

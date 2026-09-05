@@ -25,13 +25,6 @@ server = []
 
 [dependencies]
 reinhardt = {{ path = "{}", package = "reinhardt-web", default-features = false, features = ["client-router"] }}
-# Workaround for Lokathor/tinyvec#225 (tracked in reinhardt-web#6260)
-# Remove this workaround when tinyvec publishes a release that compiles with
-# the `alloc` feature without `std`.
-#
-# Ideal implementation (without workaround):
-# omit this direct pin and let isolated fixtures resolve tinyvec from crates.io.
-tinyvec = "=1.12.0"
 "#,
 		repo_root.display(),
 	);

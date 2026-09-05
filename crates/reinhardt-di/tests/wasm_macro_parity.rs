@@ -23,13 +23,6 @@ publish = false
 
 [dependencies]
 reinhardt-di = {{ path = "{}", features = ["macros"] }}
-# Workaround for Lokathor/tinyvec#225 (tracked in reinhardt-web#6260)
-# Remove this workaround when tinyvec publishes a release that compiles with
-# the `alloc` feature without `std`.
-#
-# Ideal implementation (without workaround):
-# omit this direct pin and let isolated fixtures resolve tinyvec from crates.io.
-tinyvec = "=1.12.0"
 "#,
 			env!("CARGO_MANIFEST_DIR")
 		),

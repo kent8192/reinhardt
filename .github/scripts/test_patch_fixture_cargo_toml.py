@@ -74,7 +74,7 @@ package = "reinhardt-query"
 			manifest["dev-dependencies"]["query"]["path"],
 			str(REPOSITORY_ROOT / "crates/reinhardt-query"),
 		)
-		self.assertEqual(manifest["dependencies"]["tinyvec"], "=1.12.0")
+		self.assertEqual(set(manifest["dependencies"]), {"reinhardt-commands", "framework"})
 
 	def test_resolves_nested_workspace_crate(self) -> None:
 		result, rewritten = self.run_script(
@@ -87,6 +87,7 @@ version = "0.1.0"
 reinhardt-commands = { version = "0.4", features = ["shell"] }
 reinhardt = { version = "0.4", package = "reinhardt-web", features = ["pages"] }
 query-macros = { version = "0.4", package = "reinhardt-query-macros" }
+tinyvec = "1"
 
 [features]
 default = []
@@ -99,7 +100,7 @@ default = []
 			manifest["dependencies"]["query-macros"]["path"],
 			str(REPOSITORY_ROOT / "crates/reinhardt-query/macros"),
 		)
-		self.assertEqual(manifest["dependencies"]["tinyvec"], "=1.12.0")
+		self.assertEqual(manifest["dependencies"]["tinyvec"], "1")
 
 	def test_rejects_any_unresolved_reinhardt_dependency(self) -> None:
 		original = """

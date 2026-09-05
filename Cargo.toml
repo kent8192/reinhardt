@@ -423,13 +423,6 @@ reinhardt-core = {workspace = true, default-features = false, features = ["types
 reinhardt-macros = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-# Workaround for Lokathor/tinyvec#225 (tracked in reinhardt-web#6260)
-# Remove this pin when tinyvec publishes a release that compiles with the
-# `alloc` feature without `std`.
-#
-# Ideal implementation (without workaround):
-#   omit this direct tinyvec dependency.
-tinyvec = { workspace = true }
 
 # Server-side dependencies (NOT for WASM)
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
@@ -787,13 +780,6 @@ brotli = "8.0.2"
 
 # Collections & data structures
 smallvec = { version = "1.13", default-features = false, features = ["union", "const_generics"] }
-# Workaround for Lokathor/tinyvec#225 (tracked in reinhardt-web#6260)
-# Remove this pin when tinyvec publishes a release that compiles with the
-# `alloc` feature without `std`.
-#
-# Ideal implementation (without workaround):
-#   omit this direct tinyvec pin and let Cargo.lock select the version.
-tinyvec = "=1.12.0"
 
 # Phone Number Validation
 phonenumber = "0.3.9"

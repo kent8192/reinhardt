@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 
-- *(macros)* pin tinyvec 1.12.0 in isolated consumer fixtures
+- *(macros)* remove obsolete tinyvec version pins from isolated consumer fixtures
 
 ## [0.4.0-alpha.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.4.0-alpha.11...reinhardt-macros@v0.4.0-alpha.12) - 2026-08-30
 

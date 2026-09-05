@@ -699,7 +699,7 @@ where
 		downcast!(chrono::DateTime<chrono::Utc>, |value: chrono::DateTime<
 			chrono::Utc,
 		>| {
-			serde_json::Value::String(value.to_rfc3339())
+			serde_json::Value::String(value.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true))
 		});
 		downcast!(Option<chrono::NaiveDate>, |value: Option<
 			chrono::NaiveDate,
@@ -726,7 +726,9 @@ where
 			chrono::DateTime<chrono::Utc>,
 		>| {
 			value.map_or(serde_json::Value::Null, |value| {
-				serde_json::Value::String(value.to_rfc3339())
+				serde_json::Value::String(
+					value.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true),
+				)
 			})
 		});
 	}

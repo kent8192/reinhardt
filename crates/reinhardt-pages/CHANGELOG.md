@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- *(model-form)* preserve UTC datetime values and fractional seconds in typed runtime updates
 - *(pages)* keep uuid and chrono available for named model-form contracts
 
 ### Testing

@@ -66,6 +66,11 @@ primitives `i32`, `i64`, `f32`, and `f64`,
 relationship identifiers, file/image fields, collections, and custom types
 are intentionally unsupported.
 
+`use_form(&form).build().set_value(field, value)` accepts UUID and chrono
+values, including `Option<T>`, on native and WASM without enabling the Pages
+`uuid` or `chrono` compatibility features. UTC datetimes use the `Z` suffix
+and retain their fractional-second precision in the submission payload.
+
 On native targets, construct the existing `ModelForm` from the concrete
 payload and inject server-owned values only after authorization:
 

@@ -137,6 +137,10 @@ pub struct TypedFormMacro {
 }
 
 /// Validated source configuration for a model-backed form.
+///
+/// Named target-neutral contracts use [`TypedModelFormSource::contract`] and
+/// can be identified with [`TypedModelFormSource::contract_path`]. The four
+/// public fields remain unchanged for compatibility with existing AST users.
 #[derive(Debug, Clone)]
 pub struct TypedModelFormSource {
 	/// Model type used to generate form fields.
@@ -147,6 +151,28 @@ pub struct TypedModelFormSource {
 	pub selection: TypedModelFieldSelection,
 	/// Validated presentation overrides for selected fields.
 	pub overrides: Vec<TypedModelFieldOverride>,
+}
+
+impl TypedModelFormSource {
+	/// Creates a source backed by a named target-neutral model-form contract.
+	pub fn contract(contract: Path, overrides: Vec<TypedModelFieldOverride>) -> Self {
+		Self {
+			model: contract,
+			// Keep the legacy four-field public shape and reserve an empty policy
+			// path as the internal marker for a contract source.
+			policy: Path {
+				leading_colon: None,
+				segments: Default::default(),
+			},
+			selection: TypedModelFieldSelection::Fields(Vec::new()),
+			overrides,
+		}
+	}
+
+	/// Returns the contract path when this source is backed by a named contract.
+	pub fn contract_path(&self) -> Option<&Path> {
+		self.policy.segments.is_empty().then_some(&self.model)
+	}
 }
 
 /// Validated selection policy for a model-backed form.

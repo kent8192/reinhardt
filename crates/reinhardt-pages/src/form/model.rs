@@ -10,8 +10,8 @@ use std::str::FromStr;
 use std::sync::LazyLock;
 
 use reinhardt_core::model_form::{
-	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError,
-	ModelFormPolicy, ModelFormSchema,
+	ModelFormContractSchema, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload,
+	ModelFormPayloadError, ModelFormPolicy,
 };
 
 /// Hidden compile-time selection marker for one model-form argument.
@@ -110,7 +110,7 @@ pub trait ModelFormSelectionCount<const COUNT: usize> {}
 #[doc(hidden)]
 pub trait ModelFormSelectionPayload<S, P>
 where
-	S: ModelFormSchema,
+	S: ModelFormContractSchema,
 	P: ModelFormPolicy,
 {
 	/// Payload passed to the JSON server function.
@@ -126,7 +126,7 @@ pub struct ModelFormPayloadSelection<D, Q>(PhantomData<fn() -> (D, Q)>);
 
 impl<S, P, D, Q> ModelFormSelectionPayload<S, P> for ModelFormPayloadSelection<D, Q>
 where
-	S: ModelFormSchema,
+	S: ModelFormContractSchema,
 	P: ModelFormPolicy,
 	D: Default + ModelFormPayload<Q>,
 	Q: ModelFormPolicy,
@@ -142,7 +142,7 @@ where
 #[doc(hidden)]
 pub trait ModelFormServerFn<Selection, S, P>
 where
-	S: ModelFormSchema,
+	S: ModelFormContractSchema,
 	P: ModelFormPolicy,
 {
 	/// Forces compile-time validation of a multipart selection.
@@ -164,7 +164,7 @@ where
 #[doc(hidden)]
 pub const fn assert_model_form_error_compatibility<ServerFn, Selection, S, P>()
 where
-	S: ModelFormSchema,
+	S: ModelFormContractSchema,
 	P: ModelFormPolicy,
 	ServerFn: ModelFormServerFn<Selection, S, P>,
 	<ServerFn as ModelFormServerFn<Selection, S, P>>::Error: Into<crate::ServerFnError>,
@@ -174,7 +174,7 @@ where
 /// Dynamic control state for a model-backed form.
 pub struct ModelFormState<S, P>
 where
-	S: ModelFormSchema,
+	S: ModelFormContractSchema,
 	P: ModelFormPolicy,
 {
 	values: HashMap<&'static str, serde_json::Value>,
@@ -186,7 +186,7 @@ where
 
 impl<S, P> Clone for ModelFormState<S, P>
 where
-	S: ModelFormSchema,
+	S: ModelFormContractSchema,
 	P: ModelFormPolicy,
 {
 	fn clone(&self) -> Self {
@@ -202,13 +202,13 @@ where
 
 impl<S, P> ModelFormState<S, P>
 where
-	S: ModelFormSchema,
+	S: ModelFormContractSchema,
 	P: ModelFormPolicy,
 {
 	/// Creates empty model-form control state.
 	pub fn new() -> Self {
 		let mut values = HashMap::new();
-		for descriptor in S::fields() {
+		for descriptor in S::contract_fields() {
 			if descriptor.editable
 				&& P::allows(descriptor.name)
 				&& !descriptor.nullable
@@ -239,7 +239,7 @@ where
 		field: &str,
 		value: serde_json::Value,
 	) -> Result<(), ModelFormPayloadError> {
-		let descriptor = S::fields()
+		let descriptor = S::contract_fields()
 			.iter()
 			.find(|descriptor| descriptor.name == field)
 			.ok_or_else(|| ModelFormPayloadError::UnknownField {
@@ -318,7 +318,7 @@ where
 	/// Removes one model-form value and any selected file associated with it.
 	#[doc(hidden)]
 	pub fn clear_value(&mut self, field: &str) -> Result<(), ModelFormPayloadError> {
-		let descriptor = S::fields()
+		let descriptor = S::contract_fields()
 			.iter()
 			.find(|descriptor| descriptor.name == field)
 			.ok_or_else(|| ModelFormPayloadError::UnknownField {
@@ -353,7 +353,7 @@ where
 	where
 		T: serde::de::DeserializeOwned,
 	{
-		let descriptor = S::fields()
+		let descriptor = S::contract_fields()
 			.iter()
 			.find(|descriptor| descriptor.name == field)
 			.ok_or_else(|| ModelFormPayloadError::UnknownField {
@@ -468,7 +468,7 @@ where
 
 	/// Returns selected editable descriptors in generated schema order.
 	pub fn selected_descriptors(&self) -> Vec<&'static ModelFormFieldDescriptor> {
-		S::fields()
+		S::contract_fields()
 			.iter()
 			.filter(|descriptor| descriptor.editable && P::allows(descriptor.name))
 			.collect()
@@ -477,13 +477,13 @@ where
 	/// Clears every value that belongs to the active form policy.
 	pub fn clear_selected_values(&mut self) {
 		self.values.retain(|field, _| {
-			!S::fields().iter().any(|descriptor| {
+			!S::contract_fields().iter().any(|descriptor| {
 				descriptor.name == *field && descriptor.editable && P::allows(field)
 			})
 		});
 		#[cfg(wasm)]
 		self.selected_files.retain(|field, _| {
-			!S::fields().iter().any(|descriptor| {
+			!S::contract_fields().iter().any(|descriptor| {
 				descriptor.name == *field && descriptor.editable && P::allows(field)
 			})
 		});
@@ -562,7 +562,7 @@ where
 	fn file_descriptor(
 		field: &str,
 	) -> Result<&'static ModelFormFieldDescriptor, ModelFormPayloadError> {
-		let descriptor = S::fields()
+		let descriptor = S::contract_fields()
 			.iter()
 			.find(|descriptor| descriptor.name == field)
 			.ok_or_else(|| ModelFormPayloadError::UnknownField {
@@ -686,7 +686,6 @@ where
 		})
 	});
 
-	#[cfg(feature = "chrono")]
 	{
 		downcast!(chrono::NaiveDate, |value: chrono::NaiveDate| {
 			serde_json::Value::String(value.to_string())
@@ -700,7 +699,7 @@ where
 		downcast!(chrono::DateTime<chrono::Utc>, |value: chrono::DateTime<
 			chrono::Utc,
 		>| {
-			serde_json::Value::String(value.to_rfc3339())
+			serde_json::Value::String(value.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true))
 		});
 		downcast!(Option<chrono::NaiveDate>, |value: Option<
 			chrono::NaiveDate,
@@ -727,12 +726,13 @@ where
 			chrono::DateTime<chrono::Utc>,
 		>| {
 			value.map_or(serde_json::Value::Null, |value| {
-				serde_json::Value::String(value.to_rfc3339())
+				serde_json::Value::String(
+					value.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true),
+				)
 			})
 		});
 	}
 
-	#[cfg(feature = "uuid")]
 	{
 		downcast!(uuid::Uuid, |value: uuid::Uuid| {
 			serde_json::Value::String(value.to_string())
@@ -750,7 +750,7 @@ where
 
 impl<S, P> Default for ModelFormState<S, P>
 where
-	S: ModelFormSchema,
+	S: ModelFormContractSchema,
 	P: ModelFormPolicy,
 {
 	fn default() -> Self {
@@ -1241,7 +1241,6 @@ mod tests {
 		);
 	}
 
-	#[cfg(feature = "chrono")]
 	#[test]
 	fn native_chrono_values_convert_to_form_strings() {
 		use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
@@ -1262,7 +1261,6 @@ mod tests {
 		);
 	}
 
-	#[cfg(feature = "uuid")]
 	#[test]
 	fn native_uuid_values_convert_to_form_strings() {
 		let uuid = uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000042").unwrap();

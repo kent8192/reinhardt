@@ -1,0 +1,5 @@
+error: named model form field `csrfmiddlewaretoken` is reserved for the CSRF control
+ --> tests/ui/model/fail/named_form_csrfmiddlewaretoken_collision.rs:7:41
+  |
+7 |     form(name = DocumentCreateForm, fields(csrfmiddlewaretoken))
+  |                                            ^^^^^^^^^^^^^^^^^^^

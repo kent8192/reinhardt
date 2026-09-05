@@ -1,0 +1,5 @@
+error: named model form field `count` has unsupported Rust type `i8`
+ --> tests/ui/model/fail/named_form_unsupported_integer.rs:7:41
+  |
+7 |     form(name = DocumentCreateForm, fields(count))
+  |                                            ^^^^^

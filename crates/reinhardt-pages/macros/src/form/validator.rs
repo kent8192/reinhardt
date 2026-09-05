@@ -16,6 +16,7 @@ use proc_macro2::Span;
 use std::collections::HashSet;
 use syn::{Error, Result};
 
+use reinhardt_manouche::core::attr_utils::ident_to_wire_name;
 use reinhardt_manouche::core::{
 	AmbientArgumentsSource, FormAction, FormCallbacks, FormChoiceItem, FormControlEntryDef,
 	FormControlEntryKind, FormCustomWidgetSpec, FormDatalistDef, FormDerived, FormFieldCollection,
@@ -186,14 +187,15 @@ pub(super) fn validate(
 	let fields = transform_fields(&ast.fields)?;
 	validate_list_references(&fields)?;
 	let model_source = transform_model_source(&ast.model_source)?;
+	let model_backed = model_source.is_some();
 
-	if model_source.is_some() && !matches!(action, TypedFormAction::ServerFn(_)) {
+	if model_backed && !matches!(action, TypedFormAction::ServerFn(_)) {
 		return Err(Error::new(
 			ast.span,
 			"model-backed form! requires an explicit `server_fn`",
 		));
 	}
-	if model_source.is_some() && !ast.strip_arguments.is_empty() {
+	if model_backed && !ast.strip_arguments.is_empty() {
 		let keyword = ambient_arguments_keyword(ambient_arguments_source);
 		return Err(Error::new(
 			ast.span,
@@ -202,43 +204,43 @@ pub(super) fn validate(
 			),
 		));
 	}
-	if model_source.is_some() && (redirect_on_success.is_some() || success_url.is_some()) {
+	if model_backed && (redirect_on_success.is_some() || success_url.is_some()) {
 		return Err(Error::new(
 			ast.span,
 			"model-backed form! does not support `redirect_on_success` or `success_url`; configure submission lifecycle through `use_form(&form)`",
 		));
 	}
-	if model_source.is_some() && initial_loader.is_some() {
+	if model_backed && initial_loader.is_some() {
 		return Err(Error::new(
 			ast.span,
 			"model-backed form! does not support `initial_loader`; initialize values through the generated form state",
 		));
 	}
-	if model_source.is_some() && choices_loader.is_some() {
+	if model_backed && choices_loader.is_some() {
 		return Err(Error::new(
 			ast.span,
 			"model-backed form! does not support `choices_loader`; configure static choices through the generated model schema",
 		));
 	}
-	if model_source.is_some() && !matches!(method, FormMethod::Post) {
+	if model_backed && !matches!(method, FormMethod::Post) {
 		return Err(Error::new(
 			ast.span,
 			"model-backed form! requires `method: Post` for its server_fn action",
 		));
 	}
-	if model_source.is_some() && slots.is_some() {
+	if model_backed && slots.is_some() {
 		return Err(Error::new(
 			ast.span,
 			"model-backed form! does not support `slots`; compose surrounding page content outside the generated form",
 		));
 	}
-	if model_source.is_some() && (watch.is_some() || derived.is_some()) {
+	if model_backed && (watch.is_some() || derived.is_some()) {
 		return Err(Error::new(
 			ast.span,
 			"model-backed form! does not support `watch` or `derived` clauses",
 		));
 	}
-	if model_source.is_some() && callbacks.has_any() {
+	if model_backed && callbacks.has_any() {
 		return Err(Error::new(
 			ast.span,
 			"model-backed form! does not support callback clauses; configure submission lifecycle through `use_form(&form)`",
@@ -293,8 +295,44 @@ fn transform_model_source(
 	let Some(source) = source else {
 		return Ok(None);
 	};
+	if let Some(contract) = source.contract_path() {
+		let mut seen_overrides = HashSet::new();
+		let overrides = source
+			.overrides
+			.iter()
+			.map(|override_| {
+				let field = ident_to_wire_name(&override_.field);
+				if !seen_overrides.insert(field.clone()) {
+					return Err(Error::new(
+						override_.field.span(),
+						format!("duplicate `overrides` entry for field '{field}'"),
+					));
+				}
+				Ok(TypedModelFieldOverride {
+					field: override_.field.clone(),
+					widget: override_
+						.widget
+						.as_ref()
+						.map(parse_model_widget)
+						.transpose()?,
+					label: override_.label.as_ref().map(syn::LitStr::value),
+					help_text: override_.help_text.as_ref().map(syn::LitStr::value),
+				})
+			})
+			.collect::<Result<Vec<_>>>()?;
+		return Ok(Some(TypedModelFormSource::contract(
+			contract.clone(),
+			overrides,
+		)));
+	}
+	let ModelFormSource {
+		model,
+		policy,
+		selection,
+		overrides,
+	} = source;
 
-	let selection = match &source.selection {
+	let selection = match selection {
 		ModelFieldSelection::Fields(fields) => {
 			validate_unique_model_field_names(fields, "fields")?;
 			TypedModelFieldSelection::Fields(fields.clone())
@@ -309,7 +347,7 @@ fn transform_model_source(
 		TypedModelFieldSelection::Fields(fields) => Some(
 			fields
 				.iter()
-				.map(ToString::to_string)
+				.map(ident_to_wire_name)
 				.collect::<HashSet<_>>(),
 		),
 		TypedModelFieldSelection::Exclude(_) => None,
@@ -317,17 +355,16 @@ fn transform_model_source(
 	let excluded_names = match &selection {
 		TypedModelFieldSelection::Exclude(fields) => fields
 			.iter()
-			.map(ToString::to_string)
+			.map(ident_to_wire_name)
 			.collect::<HashSet<_>>(),
 		TypedModelFieldSelection::Fields(_) => HashSet::new(),
 	};
 
 	let mut seen_overrides = HashSet::new();
-	let overrides = source
-		.overrides
+	let overrides = overrides
 		.iter()
 		.map(|override_| {
-			let field = override_.field.to_string();
+			let field = ident_to_wire_name(&override_.field);
 			if !seen_overrides.insert(field.clone()) {
 				return Err(Error::new(
 					override_.field.span(),
@@ -364,8 +401,8 @@ fn transform_model_source(
 		.collect::<Result<Vec<_>>>()?;
 
 	Ok(Some(TypedModelFormSource {
-		model: source.model.clone(),
-		policy: source.policy.clone(),
+		model: model.clone(),
+		policy: policy.clone(),
 		selection,
 		overrides,
 	}))
@@ -374,7 +411,7 @@ fn transform_model_source(
 fn validate_unique_model_field_names(fields: &[syn::Ident], clause: &str) -> Result<()> {
 	let mut seen = HashSet::new();
 	for field in fields {
-		let name = field.to_string();
+		let name = ident_to_wire_name(field);
 		if !seen.insert(name.clone()) {
 			return Err(Error::new(
 				field.span(),

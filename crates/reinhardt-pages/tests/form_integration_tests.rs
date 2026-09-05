@@ -24,11 +24,54 @@
 use reinhardt_pages::{FieldMetadata, FormComponent, FormMetadata, Widget};
 use std::collections::HashMap;
 
+#[path = "ui/form/model_contract_support.rs"]
+mod model_contract_support;
+
+use model_contract_support::{QuestionCreateForm, QuestionCreateFormField, save_question};
+
 use reinhardt_core::model_form::{
 	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError,
 	ModelFormPolicy, ModelFormSchema,
 };
 use reinhardt_pages::form::ModelFormState;
+use reinhardt_pages::{FieldError, form, use_form};
+
+#[test]
+fn named_model_form_routes_contract_and_server_owned_errors() {
+	reinhardt_core::reactive::ReactiveScope::run(|| {
+		let form = form! {
+			name: QuestionContractForm,
+			model_form: QuestionCreateForm,
+			server_fn: save_question,
+		};
+		let runtime = use_form(&form).build();
+		let error = reinhardt_pages::ServerFnError::validation_with_message(
+			"Please correct the submitted values",
+			[
+				("title", "Title is already used"),
+				("organization_id", "Organization is required"),
+			],
+		);
+
+		runtime.apply_server_error(&error);
+
+		assert_eq!(
+			runtime
+				.get_field_state(QuestionCreateFormField::Title)
+				.error
+				.as_ref()
+				.map(FieldError::message),
+			Some("Title is already used")
+		);
+		assert_eq!(
+			runtime.form_state().form_error.get(),
+			Some(
+				"Please correct the submitted values\norganization_id: Organization is required"
+					.to_owned()
+			)
+		);
+	});
+}
 
 struct ModelFormQuestion;
 

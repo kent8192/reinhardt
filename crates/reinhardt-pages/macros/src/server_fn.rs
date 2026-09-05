@@ -903,6 +903,13 @@ fn add_native_mock_probe(
 	regular_params: &[&syn::PatType],
 	pages_crate_info: &CratePathInfo,
 ) -> Result<ItemFn, proc_macro2::TokenStream> {
+	// Restricted functions intentionally do not emit the public MSW `Args`
+	// metadata. Keep the native function free of the matching probe as well;
+	// otherwise the probe would reference an `Args` type that was not emitted.
+	if !info.emits_typed_response_metadata() {
+		return Ok(clean_func.clone());
+	}
+
 	let mut param_idents = Vec::new();
 	for param in regular_params {
 		let syn::Pat::Ident(pat_ident) = &*param.pat else {
@@ -2178,7 +2185,7 @@ fn generate_server_handler(
 			.zip(regular_param_types.iter())
 			.map(|(parameter, parameter_type)| {
 				let parameter_name = &parameter.name;
-				let field_name = parameter.name.to_string();
+				let field_name = wire_param_name(parameter);
 				match parameter.kind {
 					WireParamKind::Json => quote! {
 						let #parameter_name: #parameter_type = state
@@ -2208,7 +2215,7 @@ fn generate_server_handler(
 					__ReinhardtPolicy,
 				> for marker
 			where
-				__ReinhardtSchema: #pages_crate::form::ModelFormSchema,
+				__ReinhardtSchema: #pages_crate::form::ModelFormContractSchema,
 				__ReinhardtPolicy: #pages_crate::form::ModelFormPolicy,
 				__ReinhardtSelection:
 					#pages_crate::form::ModelFormSelectionCount<#argument_count>
@@ -2263,7 +2270,7 @@ fn generate_server_handler(
 						__ReinhardtPolicy,
 					> for marker
 				where
-					__ReinhardtSchema: #pages_crate::form::ModelFormSchema,
+					__ReinhardtSchema: #pages_crate::form::ModelFormContractSchema,
 					__ReinhardtPolicy: #pages_crate::form::ModelFormPolicy,
 					__ReinhardtSelection: #pages_crate::form::ModelFormSelectionPayload<
 						__ReinhardtSchema,
@@ -3245,6 +3252,39 @@ mod tests {
 		let generated = generate_server_fn(&info).to_string();
 
 		assert!(generated.contains("take_optional_json"));
+	}
+
+	#[test]
+	fn multipart_model_form_uses_wire_name_for_raw_identifier_lookup() {
+		use syn::parse_quote;
+
+		let func: ItemFn = parse_quote! {
+			async fn upload(
+				r#type: String,
+				attachment: UploadedFile,
+			) -> Result<(), ServerFnError> {
+				Ok(())
+			}
+		};
+		let info = ServerFnInfo {
+			func,
+			options: ServerFnOptions {
+				model_form: true,
+				..ServerFnOptions::default()
+			},
+			codec_explicit: false,
+			metadata_name: None,
+			endpoint_tokens: None,
+			metadata_name_tokens: None,
+			detail: false,
+			transactional: false,
+			structured_error: false,
+		};
+
+		let generated = generate_server_fn(&info).to_string();
+
+		assert_eq!(generated.matches("json_argument (\"type\")").count(), 2);
+		assert_eq!(generated.matches("json_argument (\"r#type\")").count(), 0);
 	}
 
 	#[test]

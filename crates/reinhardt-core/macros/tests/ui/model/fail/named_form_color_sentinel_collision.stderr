@@ -1,0 +1,5 @@
+error: named model form field `__reinhardt_color_accent` collides with generated model-form API
+ --> tests/ui/model/fail/named_form_color_sentinel_collision.rs:7:41
+  |
+7 |     form(name = DocumentCreateForm, fields(__reinhardt_color_accent))
+  |                                            ^^^^^^^^^^^^^^^^^^^^^^^^

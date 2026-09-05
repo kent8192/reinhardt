@@ -3,32 +3,32 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
-/// Resolves the path to the `serde` crate dynamically.
-pub(crate) fn get_serde_crate() -> TokenStream {
+/// Resolves a dependency package to the crate name selected by the consumer.
+pub(crate) fn get_dependency_crate(package_name: &str) -> TokenStream {
 	use proc_macro_crate::{FoundCrate, crate_name};
 
-	match crate_name("serde") {
+	match crate_name(package_name) {
 		Ok(FoundCrate::Itself) => quote!(crate),
 		Ok(FoundCrate::Name(name)) => {
 			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
 			quote!(::#ident)
 		}
-		Err(_) => quote!(::serde),
+		Err(_) => {
+			let fallback = package_name.replace('-', "_");
+			let ident = syn::Ident::new(&fallback, proc_macro2::Span::call_site());
+			quote!(::#ident)
+		}
 	}
+}
+
+/// Resolves the path to the `serde` crate dynamically.
+pub(crate) fn get_serde_crate() -> TokenStream {
+	get_dependency_crate("serde")
 }
 
 /// Resolves the path to the `serde_json` crate dynamically.
 pub(crate) fn get_serde_json_crate() -> TokenStream {
-	use proc_macro_crate::{FoundCrate, crate_name};
-
-	match crate_name("serde_json") {
-		Ok(FoundCrate::Itself) => quote!(crate),
-		Ok(FoundCrate::Name(name)) => {
-			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
-			quote!(::#ident)
-		}
-		Err(_) => quote!(::serde_json),
-	}
+	get_dependency_crate("serde_json")
 }
 
 /// Resolves the path to the Reinhardt crate dynamically.

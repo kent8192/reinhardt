@@ -1,0 +1,5 @@
+error: named model form field `secret` is not editable
+ --> tests/ui/model/fail/named_form_noneditable_field.rs:7:40
+  |
+7 |     form(name = ClusterCreateForm, fields(secret))
+  |                                           ^^^^^^

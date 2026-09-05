@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-db"
-version = "0.4.0-alpha.12"
+version = "0.4.0-alpha.13"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -14,7 +14,7 @@ documentation = "https://docs.rs/reinhardt-db"
 
 [dependencies]
 # Internal crates (optional)
-reinhardt-storages = { path = "../reinhardt-storages", version = "0.4.0-alpha.12", default-features = false, optional = true }
+reinhardt-storages = { path = "../reinhardt-storages", version = "0.4.0-alpha.13", default-features = false, optional = true }
 
 # Database drivers and query builders
 sqlx = { version = "0.8", features = [
@@ -77,9 +77,9 @@ strsim = { version = "0.11", optional = true }
 indexmap = { version = "2.7", optional = true }
 linkme = { workspace = true, optional = true }
 toml = { workspace = true, optional = true }
-syn = { version = "2.0", features = ["full", "parsing"], optional = true }
+syn = { version = "2.0", features = ["full", "parsing", "visit"], optional = true }
 quote = { version = "1.0", optional = true }
-proc-macro2 = { version = "1.0", optional = true }
+proc-macro2 = { version = "1.0", features = ["span-locations"], optional = true }
 prettyplease = { version = "0.2", optional = true }
 walkdir = { version = "2.5", optional = true }
 cap-std = { version = "3.4.5", optional = true }

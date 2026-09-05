@@ -201,15 +201,7 @@ async fn test_scenario_2_rapid_successive_makemigrations() {
 	assert_eq!(result1.operation_count, 1);
 
 	// Save the first migration to repository (caller's responsibility)
-	let migration1 = Migration {
-		app_label,
-		name: "0001_initial".to_string(),
-		operations: result1.operations.clone(),
-		dependencies: Vec::new(),
-		replaces: Vec::new(),
-		atomic: true,
-		initial: Some(true),
-	};
+	let migration1 = Migration::from_parts("0001_initial".to_string(), app_label, result1.operations.clone(), Vec::new(), Vec::new(), true, Some(true), false, false, Vec::new(), Vec::new());
 	{
 		let mut repo = repository.lock().await;
 		repo.save(&migration1)
@@ -330,15 +322,7 @@ async fn test_duplicate_operations_detected() {
 	assert_eq!(result1.operation_count, 1);
 
 	// Save the first migration to repository (caller's responsibility)
-	let migration1 = Migration {
-		app_label,
-		name: "0001_initial".to_string(),
-		operations: result1.operations.clone(),
-		dependencies: Vec::new(),
-		replaces: Vec::new(),
-		atomic: true,
-		initial: Some(true),
-	};
+	let migration1 = Migration::from_parts("0001_initial".to_string(), app_label, result1.operations.clone(), Vec::new(), Vec::new(), true, Some(true), false, false, Vec::new(), Vec::new());
 	{
 		let mut repo = repository.lock().await;
 		repo.save(&migration1)
@@ -419,15 +403,7 @@ async fn test_semantic_duplicate_with_different_column_order() {
 	assert_eq!(result1.operation_count, 1);
 
 	// Save the first migration to repository (caller's responsibility)
-	let migration1 = Migration {
-		app_label,
-		name: "0001_initial".to_string(),
-		operations: result1.operations.clone(),
-		dependencies: Vec::new(),
-		replaces: Vec::new(),
-		atomic: true,
-		initial: Some(true),
-	};
+	let migration1 = Migration::from_parts("0001_initial".to_string(), app_label, result1.operations.clone(), Vec::new(), Vec::new(), true, Some(true), false, false, Vec::new(), Vec::new());
 	{
 		let mut repo = repository.lock().await;
 		repo.save(&migration1)

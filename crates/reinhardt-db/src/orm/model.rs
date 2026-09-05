@@ -627,6 +627,15 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 		Vec::new()
 	}
 
+	/// Returns public model fields owned by an exact physical constraint name.
+	///
+	/// `Some(fields)` proves ownership. `Some(Vec::new())` represents a known
+	/// form-level constraint. Manual implementations opt in by overriding this
+	/// method; unknown names return `None`.
+	fn constraint_fields(_constraint: &str) -> Option<Vec<&'static str>> {
+		None
+	}
+
 	/// Get database-generated column names that must be omitted from ORM writes.
 	fn generated_field_names() -> &'static [&'static str] {
 		&[]

@@ -14,7 +14,7 @@ the latest stable release. The literal below is release-managed.
 
 <!-- reinhardt-version-sync -->
 ```bash
-cargo install reinhardt-admin-cli --version "0.4.0-alpha.12"
+cargo install reinhardt-admin-cli --version "0.4.0-alpha.13"
 ```
 
 This installs the `reinhardt-admin` command.
@@ -40,7 +40,7 @@ reinhardt-admin startproject myproject --with-rest /path/to/directory
 
 # Pin the generated Reinhardt dependency
 reinhardt-admin startproject myproject --with-rest \
-  --reinhardt-version 0.4.0-alpha.12 \
+  --reinhardt-version 0.4.0-alpha.13 \
   --features standard,admin \
   --no-interactive
 ```
@@ -58,7 +58,7 @@ reinhardt-admin configure
 
 # Update a project without prompts
 reinhardt-admin configure /path/to/project \
-  --reinhardt-version 0.4.0-alpha.12 \
+  --reinhardt-version 0.4.0-alpha.13 \
   --features minimal,db-sqlite \
   --no-interactive
 ```
@@ -90,6 +90,22 @@ reinhardt-admin --help
 reinhardt-admin --version
 ```
 
+### Upgrade Generated Migration Sources
+
+Generated migration files use a version marker and stable constructors. Upgrade
+older generated files without connecting to a database:
+
+```bash
+reinhardt-admin migrations upgrade-source migrations
+
+# Check only; exits unsuccessfully when a file needs upgrading
+reinhardt-admin migrations upgrade-source --check migrations
+```
+
+The optional positional path may name one migration directory or one `.rs`
+file. The command updates only recognized generated spans and preserves custom
+code and comments.
+
 ### Manage Plugins
 
 Manage Reinhardt plugins (Dentdelion):
@@ -108,7 +124,7 @@ reinhardt-admin plugin info auth-delion --remote
 
 # Install a plugin
 reinhardt-admin plugin install auth-delion
-reinhardt-admin plugin install auth-delion --version 0.4.0-alpha.12
+reinhardt-admin plugin install auth-delion --version 0.4.0-alpha.13
 
 # Remove a plugin
 reinhardt-admin plugin remove auth-delion

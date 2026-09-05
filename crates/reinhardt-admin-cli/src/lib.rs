@@ -7,3 +7,4 @@
 #![warn(missing_docs)]
 
 pub mod migrate_v2;
+pub mod migration_source;

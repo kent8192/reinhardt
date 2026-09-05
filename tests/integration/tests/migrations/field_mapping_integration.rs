@@ -322,18 +322,17 @@ fn test_registry_preserves_field_metadata() {
 #[case::json(FieldType::Json, "data")]
 fn test_column_definition_field_types(#[case] field_type: FieldType, #[case] name: &str) {
 	// Arrange & Act
-	let column = ColumnDefinition {
-		name: name.to_string(),
-		type_definition: field_type.clone(),
-		not_null: false,
-		unique: false,
-		primary_key: false,
-		auto_increment: false,
-		default: None,
-
-		generated: None,
-		domain: None,
-	};
+	let column = ColumnDefinition::from_parts(
+		name.to_string(),
+		field_type.clone(),
+		false,
+		false,
+		false,
+		false,
+		None,
+		None,
+		None,
+	);
 
 	// Assert
 	assert_eq!(column.name, name);
@@ -351,18 +350,17 @@ fn test_column_definition_field_types(#[case] field_type: FieldType, #[case] nam
 #[rstest]
 fn test_column_definition_not_null() {
 	// Arrange & Act
-	let column = ColumnDefinition {
-		name: "username".to_string(),
-		type_definition: FieldType::VarChar(150),
-		not_null: true,
-		unique: false,
-		primary_key: false,
-		auto_increment: false,
-		default: None,
-
-		generated: None,
-		domain: None,
-	};
+	let column = ColumnDefinition::from_parts(
+		"username".to_string(),
+		FieldType::VarChar(150),
+		true,
+		false,
+		false,
+		false,
+		None,
+		None,
+		None,
+	);
 
 	// Assert
 	assert!(column.not_null, "Column should be NOT NULL");
@@ -374,18 +372,17 @@ fn test_column_definition_not_null() {
 #[rstest]
 fn test_column_definition_with_default() {
 	// Arrange & Act
-	let column = ColumnDefinition {
-		name: "status".to_string(),
-		type_definition: FieldType::VarChar(20),
-		not_null: true,
-		unique: false,
-		primary_key: false,
-		auto_increment: false,
-		default: Some("'active'".to_string()),
-
-		generated: None,
-		domain: None,
-	};
+	let column = ColumnDefinition::from_parts(
+		"status".to_string(),
+		FieldType::VarChar(20),
+		true,
+		false,
+		false,
+		false,
+		Some("'active'".to_string()),
+		None,
+		None,
+	);
 
 	// Assert
 	assert_eq!(column.default, Some("'active'".to_string()));
@@ -397,18 +394,17 @@ fn test_column_definition_with_default() {
 #[rstest]
 fn test_column_definition_unique() {
 	// Arrange & Act
-	let column = ColumnDefinition {
-		name: "email".to_string(),
-		type_definition: FieldType::VarChar(255),
-		not_null: true,
-		unique: true,
-		primary_key: false,
-		auto_increment: false,
-		default: None,
-
-		generated: None,
-		domain: None,
-	};
+	let column = ColumnDefinition::from_parts(
+		"email".to_string(),
+		FieldType::VarChar(255),
+		true,
+		true,
+		false,
+		false,
+		None,
+		None,
+		None,
+	);
 
 	// Assert
 	assert!(column.unique, "Column should be UNIQUE");
@@ -420,18 +416,17 @@ fn test_column_definition_unique() {
 #[rstest]
 fn test_column_definition_auto_increment_integer() {
 	// Arrange & Act
-	let column = ColumnDefinition {
-		name: "id".to_string(),
-		type_definition: FieldType::Integer,
-		not_null: true,
-		unique: false,
-		primary_key: true,
-		auto_increment: true,
-		default: None,
-
-		generated: None,
-		domain: None,
-	};
+	let column = ColumnDefinition::from_parts(
+		"id".to_string(),
+		FieldType::Integer,
+		true,
+		false,
+		true,
+		true,
+		None,
+		None,
+		None,
+	);
 
 	// Assert
 	assert!(column.auto_increment);
@@ -446,18 +441,17 @@ fn test_column_definition_auto_increment_integer() {
 #[rstest]
 fn test_column_definition_auto_increment_big_integer() {
 	// Arrange & Act
-	let column = ColumnDefinition {
-		name: "id".to_string(),
-		type_definition: FieldType::BigInteger,
-		not_null: true,
-		unique: false,
-		primary_key: true,
-		auto_increment: true,
-		default: None,
-
-		generated: None,
-		domain: None,
-	};
+	let column = ColumnDefinition::from_parts(
+		"id".to_string(),
+		FieldType::BigInteger,
+		true,
+		false,
+		true,
+		true,
+		None,
+		None,
+		None,
+	);
 
 	// Assert
 	assert!(column.auto_increment);
@@ -471,18 +465,17 @@ fn test_column_definition_auto_increment_big_integer() {
 #[rstest]
 fn test_column_definition_auto_increment_small_integer() {
 	// Arrange & Act
-	let column = ColumnDefinition {
-		name: "id".to_string(),
-		type_definition: FieldType::SmallInteger,
-		not_null: true,
-		unique: false,
-		primary_key: true,
-		auto_increment: true,
-		default: None,
-
-		generated: None,
-		domain: None,
-	};
+	let column = ColumnDefinition::from_parts(
+		"id".to_string(),
+		FieldType::SmallInteger,
+		true,
+		false,
+		true,
+		true,
+		None,
+		None,
+		None,
+	);
 
 	// Assert
 	assert!(column.auto_increment);

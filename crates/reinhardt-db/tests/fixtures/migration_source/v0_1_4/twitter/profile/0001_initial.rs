@@ -1,0 +1,96 @@
+use reinhardt::db::migrations::FieldType;
+use reinhardt::db::migrations::prelude::*;
+pub(super) fn migration() -> Migration {
+	Migration {
+		app_label: "profile".to_string(),
+		name: "0001_initial".to_string(),
+		operations: vec![Operation::CreateTable {
+			name: "profile_profile".to_string(),
+			columns: vec![
+				ColumnDefinition {
+					name: "avatar_url".to_string(),
+					type_definition: FieldType::VarChar(255u32),
+					not_null: false,
+					unique: false,
+					primary_key: false,
+					auto_increment: false,
+					default: None,
+				},
+				ColumnDefinition {
+					name: "bio".to_string(),
+					type_definition: FieldType::VarChar(500u32),
+					not_null: false,
+					unique: false,
+					primary_key: false,
+					auto_increment: false,
+					default: None,
+				},
+				ColumnDefinition {
+					name: "created_at".to_string(),
+					type_definition: FieldType::TimestampTz,
+					not_null: false,
+					unique: false,
+					primary_key: false,
+					auto_increment: false,
+					default: None,
+				},
+				ColumnDefinition {
+					name: "id".to_string(),
+					type_definition: FieldType::Uuid,
+					not_null: true,
+					unique: false,
+					primary_key: true,
+					auto_increment: false,
+					default: None,
+				},
+				ColumnDefinition {
+					name: "location".to_string(),
+					type_definition: FieldType::VarChar(255u32),
+					not_null: false,
+					unique: false,
+					primary_key: false,
+					auto_increment: false,
+					default: None,
+				},
+				ColumnDefinition {
+					name: "updated_at".to_string(),
+					type_definition: FieldType::TimestampTz,
+					not_null: false,
+					unique: false,
+					primary_key: false,
+					auto_increment: false,
+					default: None,
+				},
+				ColumnDefinition {
+					name: "user_id".to_string(),
+					type_definition: FieldType::Uuid,
+					not_null: false,
+					unique: true,
+					primary_key: false,
+					auto_increment: false,
+					default: None,
+				},
+				ColumnDefinition {
+					name: "website".to_string(),
+					type_definition: FieldType::VarChar(255u32),
+					not_null: false,
+					unique: false,
+					primary_key: false,
+					auto_increment: false,
+					default: None,
+				},
+			],
+			constraints: vec![Constraint::Unique {
+				name: "profile_profile_user_id_uniq".to_string(),
+				columns: vec!["user_id".to_string()],
+			}],
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		}],
+		dependencies: vec![],
+		atomic: true,
+		replaces: vec![],
+		..Default::default()
+	}
+}

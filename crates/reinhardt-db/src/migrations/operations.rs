@@ -54,6 +54,7 @@ pub use special::{RunCode, RunSQL, StateOperation};
 // These are maintained from the original operations.rs
 use super::IndexDefinition;
 use super::{ConstraintDefinition, FieldState, FieldType, ModelState, ProjectState};
+pub use crate::naming::truncate_identifier_with_hash;
 use pg_escape::{quote_identifier, quote_literal};
 use reinhardt_query::prelude::{
 	Alias, AlterTableStatement, CockroachDBQueryBuilder, ColumnDef, ColumnType as QueryColumnType,
@@ -507,6 +508,7 @@ pub enum PartitionValues {
 }
 
 /// Individual partition definition
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PartitionDef {
 	/// The name.
@@ -543,12 +545,23 @@ impl PartitionDef {
 /// improving join performance for hierarchical data.
 ///
 /// **CockroachDB only**: This is ignored for other databases.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InterleaveSpec {
 	/// Parent table name
 	pub parent_table: String,
 	/// Columns in the parent table to interleave with
 	pub parent_columns: Vec<String>,
+}
+
+impl InterleaveSpec {
+	/// Creates a new interleave specification.
+	pub fn new(parent_table: impl Into<String>, parent_columns: Vec<String>) -> Self {
+		Self {
+			parent_table: parent_table.into(),
+			parent_columns,
+		}
+	}
 }
 
 /// Table partitioning options
@@ -1101,15 +1114,55 @@ impl BulkLoadOptions {
 		Self::default()
 	}
 
+	/// Create bulk-load options from every persisted field.
+	#[doc(hidden)]
+	// Persistence adapters must provide every stored field without silently dropping data.
+	#[allow(clippy::too_many_arguments)]
+	pub fn from_parts(
+		delimiter: Option<char>,
+		null_string: Option<String>,
+		header: bool,
+		columns: Option<Vec<String>>,
+		local: bool,
+		quote: Option<char>,
+		escape: Option<char>,
+		line_terminator: Option<String>,
+		encoding: Option<String>,
+	) -> Self {
+		Self {
+			delimiter,
+			null_string,
+			header,
+			columns,
+			local,
+			quote,
+			escape,
+			line_terminator,
+			encoding,
+		}
+	}
+
 	/// Set the field delimiter
 	pub fn with_delimiter(mut self, delimiter: char) -> Self {
 		self.delimiter = Some(delimiter);
 		self
 	}
 
+	/// Set the optional field delimiter, including an explicit `None`.
+	pub fn with_delimiter_option(mut self, delimiter: Option<char>) -> Self {
+		self.delimiter = delimiter;
+		self
+	}
+
 	/// Set the NULL string representation
 	pub fn with_null_string(mut self, null_string: impl Into<String>) -> Self {
 		self.null_string = Some(null_string.into());
+		self
+	}
+
+	/// Set the optional NULL string, including an explicit `None`.
+	pub fn with_null_string_option(mut self, null_string: Option<String>) -> Self {
+		self.null_string = null_string;
 		self
 	}
 
@@ -1125,6 +1178,12 @@ impl BulkLoadOptions {
 		self
 	}
 
+	/// Set the optional column list, including an explicit `None`.
+	pub fn with_columns_option(mut self, columns: Option<Vec<String>>) -> Self {
+		self.columns = columns;
+		self
+	}
+
 	/// Enable LOCAL keyword for MySQL
 	pub fn with_local(mut self, local: bool) -> Self {
 		self.local = local;
@@ -1137,9 +1196,21 @@ impl BulkLoadOptions {
 		self
 	}
 
+	/// Set the optional quote character, including an explicit `None`.
+	pub fn with_quote_option(mut self, quote: Option<char>) -> Self {
+		self.quote = quote;
+		self
+	}
+
 	/// Set the escape character
 	pub fn with_escape(mut self, escape: char) -> Self {
 		self.escape = Some(escape);
+		self
+	}
+
+	/// Set the optional escape character, including an explicit `None`.
+	pub fn with_escape_option(mut self, escape: Option<char>) -> Self {
+		self.escape = escape;
 		self
 	}
 
@@ -1149,9 +1220,21 @@ impl BulkLoadOptions {
 		self
 	}
 
+	/// Set the optional line terminator, including an explicit `None`.
+	pub fn with_line_terminator_option(mut self, terminator: Option<String>) -> Self {
+		self.line_terminator = terminator;
+		self
+	}
+
 	/// Set the file encoding (MySQL-specific)
 	pub fn with_encoding(mut self, encoding: impl Into<String>) -> Self {
 		self.encoding = Some(encoding.into());
+		self
+	}
+
+	/// Set the optional file encoding, including an explicit `None`.
+	pub fn with_encoding_option(mut self, encoding: Option<String>) -> Self {
+		self.encoding = encoding;
 		self
 	}
 }
@@ -5029,6 +5112,7 @@ pub(crate) fn field_state_from_column(column: &ColumnDefinition) -> FieldState {
 }
 
 /// Column definition for legacy operations
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ColumnDefinition {
 	/// The name.
@@ -5074,9 +5158,79 @@ impl ColumnDefinition {
 		}
 	}
 
+	/// Create a column definition from every persisted field.
+	#[doc(hidden)]
+	// Persistence adapters must provide every stored field without silently dropping data.
+	#[allow(clippy::too_many_arguments)]
+	pub fn from_parts(
+		name: impl Into<String>,
+		type_definition: FieldType,
+		not_null: bool,
+		unique: bool,
+		primary_key: bool,
+		auto_increment: bool,
+		default: Option<String>,
+		generated: Option<GeneratedColumnDefinition>,
+		domain: Option<crate::field_domain::FieldDomain>,
+	) -> Self {
+		Self {
+			name: name.into(),
+			type_definition,
+			not_null,
+			unique,
+			primary_key,
+			auto_increment,
+			default,
+			generated,
+			domain,
+		}
+	}
+
+	/// Set the NOT NULL flag.
+	pub fn with_not_null(mut self, value: bool) -> Self {
+		self.not_null = value;
+		self
+	}
+
+	/// Set the unique flag.
+	pub fn with_unique(mut self, value: bool) -> Self {
+		self.unique = value;
+		self
+	}
+
+	/// Set the primary-key flag.
+	pub fn with_primary_key(mut self, value: bool) -> Self {
+		self.primary_key = value;
+		self
+	}
+
+	/// Set the auto-increment flag.
+	pub fn with_auto_increment(mut self, value: bool) -> Self {
+		self.auto_increment = value;
+		self
+	}
+
+	/// Set the optional default value, including an explicit `None`.
+	pub fn with_default(mut self, value: Option<String>) -> Self {
+		self.default = value;
+		self
+	}
+
+	/// Set generated-column metadata, including an explicit `None`.
+	pub fn with_generated(mut self, value: Option<GeneratedColumnDefinition>) -> Self {
+		self.generated = value;
+		self
+	}
+
 	/// Sets structured column-domain metadata and returns self for chaining.
 	pub fn with_domain(mut self, domain: crate::field_domain::FieldDomain) -> Self {
 		self.domain = Some(domain.canonicalized());
+		self
+	}
+
+	/// Set structured column-domain metadata, including an explicit `None`.
+	pub fn with_domain_option(mut self, domain: Option<crate::field_domain::FieldDomain>) -> Self {
+		self.domain = domain.map(crate::field_domain::FieldDomain::canonicalized);
 		self
 	}
 
@@ -5168,38 +5322,13 @@ impl ColumnDefinition {
 	}
 }
 
-/// Truncate a database identifier to PostgreSQL's 63-byte limit with a stable hash suffix.
-pub fn truncate_identifier_with_hash(logical_name: &str) -> String {
-	const MAX_IDENTIFIER_LENGTH: usize = 63;
-	const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
-	const FNV_PRIME: u64 = 0x00000100000001b3;
-	if logical_name.len() <= MAX_IDENTIFIER_LENGTH {
-		return logical_name.to_string();
-	}
-
-	let hash = logical_name
-		.as_bytes()
-		.iter()
-		.fold(FNV_OFFSET_BASIS, |hash, byte| {
-			(hash ^ u64::from(*byte)).wrapping_mul(FNV_PRIME)
-		});
-	let hash = format!("{hash:016x}");
-	let prefix_len = MAX_IDENTIFIER_LENGTH - hash.len() - 1;
-	let boundary = logical_name
-		.char_indices()
-		.map(|(index, _)| index)
-		.take_while(|index| *index <= prefix_len)
-		.last()
-		.unwrap_or(0);
-	format!("{}_{}", &logical_name[..boundary], hash)
-}
-
 /// Generate the physical name used for a legacy table/column index operation.
 pub fn default_index_name(table: &str, suffix: &str) -> String {
 	truncate_identifier_with_hash(&format!("idx_{table}_{suffix}"))
 }
 
 /// Generated-column metadata for migration operations.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct GeneratedColumnDefinition {
 	/// Runtime typed generated expression.
@@ -5219,6 +5348,22 @@ impl PartialEq for GeneratedColumnDefinition {
 }
 
 impl GeneratedColumnDefinition {
+	/// Create generated-column metadata from every persisted field.
+	#[doc(hidden)]
+	pub fn from_parts(
+		expr: Option<Box<SchemaExpr>>,
+		expr_tokens: Option<String>,
+		raw_sql: Option<String>,
+		storage: GeneratedStorage,
+	) -> Self {
+		Self {
+			expr,
+			expr_tokens,
+			raw_sql,
+			storage,
+		}
+	}
+
 	pub(crate) fn eq_for_dialect(&self, other: &Self, dialect: &SqlDialect) -> bool {
 		self.eq_with_dialect(other, Some(dialect))
 	}

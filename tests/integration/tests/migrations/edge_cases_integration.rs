@@ -36,19 +36,19 @@ fn leak_str(s: impl Into<String>) -> &'static str {
 
 /// Create a simple migration for testing
 fn create_test_migration(app: &str, name: &str, operations: Vec<Operation>) -> Migration {
-	Migration {
-		app_label: app.to_string(),
-		name: name.to_string(),
+	Migration::from_parts(
+		name.to_string(),
+		app.to_string(),
 		operations,
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	}
+		vec![],
+		vec![],
+		true,
+		None,
+		false,
+		false,
+		vec![],
+		vec![],
+	)
 }
 
 /// Create a migration with dependencies
@@ -58,37 +58,37 @@ fn create_migration_with_deps(
 	operations: Vec<Operation>,
 	dependencies: Vec<(&str, &str)>,
 ) -> Migration {
-	Migration {
-		app_label: app.to_string(),
-		name: name.to_string(),
+	Migration::from_parts(
+		name.to_string(),
+		app.to_string(),
 		operations,
-		dependencies: dependencies
+		dependencies
 			.into_iter()
 			.map(|(a, n)| (a.to_string(), n.to_string()))
 			.collect(),
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	}
+		vec![],
+		true,
+		None,
+		false,
+		false,
+		vec![],
+		vec![],
+	)
 }
 
 /// Create a basic column definition
 fn create_basic_column(name: &str, type_def: FieldType) -> ColumnDefinition {
-	ColumnDefinition {
-		name: name.to_string(),
-		type_definition: type_def,
-		not_null: false,
-		unique: false,
-		primary_key: false,
-		auto_increment: false,
-		default: None,
-		generated: None,
-		domain: None,
-	}
+	ColumnDefinition::from_parts(
+		name.to_string(),
+		type_def,
+		false,
+		false,
+		false,
+		false,
+		None,
+		None,
+		None,
+	)
 }
 
 /// Create a column with constraints
@@ -98,17 +98,17 @@ fn create_column_with_constraints(
 	not_null: bool,
 	primary_key: bool,
 ) -> ColumnDefinition {
-	ColumnDefinition {
-		name: name.to_string(),
-		type_definition: type_def,
+	ColumnDefinition::from_parts(
+		name.to_string(),
+		type_def,
 		not_null,
-		unique: false,
+		false,
 		primary_key,
-		auto_increment: primary_key,
-		default: None,
-		generated: None,
-		domain: None,
-	}
+		primary_key,
+		None,
+		None,
+		None,
+	)
 }
 
 // ============================================================================
@@ -257,10 +257,10 @@ async fn test_deep_dependency_chain(
 			)]
 		};
 
-		let migration = Migration {
-			app_label: "testapp".to_string(),
-			name: migration_name.to_string(),
-			operations: vec![Operation::CreateTable {
+		let migration = Migration::from_parts(
+			migration_name.to_string(),
+			"testapp".to_string(),
+			vec![Operation::CreateTable {
 				name: table_name.to_string(),
 				columns: vec![create_column_with_constraints(
 					"id",
@@ -273,15 +273,15 @@ async fn test_deep_dependency_chain(
 				interleave_in_parent: None,
 				partition: None,
 			}],
-			dependencies: deps,
-			replaces: vec![],
-			atomic: true,
-			initial: None,
-			state_only: false,
-			database_only: false,
-			swappable_dependencies: vec![],
-			optional_dependencies: vec![],
-		};
+			deps,
+			vec![],
+			true,
+			None,
+			false,
+			false,
+			vec![],
+			vec![],
+		);
 
 		migrations.push(migration);
 	}

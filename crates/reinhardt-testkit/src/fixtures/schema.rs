@@ -152,17 +152,14 @@ pub fn field_info_to_column_definition(
 			.unwrap_or(false)
 		|| field_info.primary_key; // Auto increment for primary keys by default
 
-	Ok(ColumnDefinition {
-		name,
-		type_definition: field_type,
-		not_null: !field_info.nullable,
-		unique: field_info.unique,
-		primary_key: field_info.primary_key,
-		auto_increment,
-		default,
-		generated: generated_column_definition(field_info),
-		domain: None,
-	})
+	Ok(ColumnDefinition::new(name, field_type)
+		.with_not_null(!field_info.nullable)
+		.with_unique(field_info.unique)
+		.with_primary_key(field_info.primary_key)
+		.with_auto_increment(auto_increment)
+		.with_default(default)
+		.with_generated(generated_column_definition(field_info))
+		.with_domain_option(None))
 }
 
 fn generated_column_definition(field_info: &FieldInfo) -> Option<GeneratedColumnDefinition> {
@@ -676,17 +673,14 @@ fn many_to_many_operations(model_infos: &[ModelSchemaInfo]) -> Result<Vec<Operat
 			operations.push(Operation::CreateTable {
 				name: through_table.clone(),
 				columns: vec![
-					ColumnDefinition {
-						name: "id".to_string(),
-						type_definition: reinhardt_db::migrations::FieldType::Integer,
-						not_null: true,
-						unique: false,
-						primary_key: true,
-						auto_increment: true,
-						default: None,
-						generated: None,
-						domain: None,
-					},
+					ColumnDefinition::new("id", reinhardt_db::migrations::FieldType::Integer)
+						.with_not_null(true)
+						.with_unique(false)
+						.with_primary_key(true)
+						.with_auto_increment(true)
+						.with_default(None)
+						.with_generated(None)
+						.with_domain_option(None),
 					source_definition,
 					target_definition,
 				],
@@ -812,19 +806,9 @@ pub fn create_migration_from_model<M: Model>(
 ) -> Result<Migration, SchemaError> {
 	let operation = create_table_operation_from_model::<M>()?;
 
-	Ok(Migration {
-		name: migration_name.to_string(),
-		app_label: M::app_label().to_string(),
-		operations: vec![operation],
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: Some(true),
-		state_only: false,
-		database_only: false,
-		optional_dependencies: vec![],
-		swappable_dependencies: vec![],
-	})
+	Ok(Migration::new(migration_name, M::app_label())
+		.add_operation(operation)
+		.with_initial(Some(true)))
 }
 
 /// Create table operations from multiple models with dependency resolution
@@ -971,19 +955,13 @@ pub async fn create_tables_for_models(
 		return Ok(());
 	}
 
-	let migration = Migration {
-		name: "0001_auto_batch_create".to_string(),
-		app_label: "test".to_string(),
-		operations,
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: Some(true),
-		state_only: false,
-		database_only: false,
-		optional_dependencies: vec![],
-		swappable_dependencies: vec![],
-	};
+	let migration = operations
+		.into_iter()
+		.fold(
+			Migration::new("0001_auto_batch_create", "test"),
+			|migration, operation| migration.add_operation(operation),
+		)
+		.with_initial(Some(true));
 
 	let mut executor = DatabaseMigrationExecutor::new(connection.clone());
 	executor

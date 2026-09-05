@@ -43,34 +43,34 @@ fn leak_str(s: impl Into<String>) -> &'static str {
 
 /// Create a simple migration for testing
 fn create_test_migration(app: &str, name: &str, operations: Vec<Operation>) -> Migration {
-	Migration {
-		app_label: app.to_string(),
-		name: name.to_string(),
+	Migration::from_parts(
+		name.to_string(),
+		app.to_string(),
 		operations,
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	}
+		vec![],
+		vec![],
+		true,
+		None,
+		false,
+		false,
+		vec![],
+		vec![],
+	)
 }
 
 /// Create a basic column definition
 fn create_basic_column(name: &str, type_def: FieldType) -> ColumnDefinition {
-	ColumnDefinition {
-		name: name.to_string(),
-		type_definition: type_def,
-		not_null: false,
-		unique: false,
-		primary_key: false,
-		auto_increment: false,
-		default: None,
-		generated: None,
-		domain: None,
-	}
+	ColumnDefinition::from_parts(
+		name.to_string(),
+		type_def,
+		false,
+		false,
+		false,
+		false,
+		None,
+		None,
+		None,
+	)
 }
 
 /// Create a column with constraints
@@ -80,17 +80,17 @@ fn create_column_with_constraints(
 	not_null: bool,
 	primary_key: bool,
 ) -> ColumnDefinition {
-	ColumnDefinition {
-		name: name.to_string(),
-		type_definition: type_def,
+	ColumnDefinition::from_parts(
+		name.to_string(),
+		type_def,
 		not_null,
-		unique: false,
+		false,
 		primary_key,
-		auto_increment: primary_key,
-		default: None,
-		generated: None,
-		domain: None,
-	}
+		primary_key,
+		None,
+		None,
+		None,
+	)
 }
 
 // ============================================================================

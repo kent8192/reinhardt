@@ -38,22 +38,21 @@ fn build_graph(migrations: &[Migration]) -> MigrationGraph {
 
 /// Helper to create a Migration struct with given parameters
 fn make_migration(app: &str, name: &str, deps: Vec<(&str, &str)>) -> Migration {
-	Migration {
-		app_label: app.to_string(),
-		name: name.to_string(),
-		operations: Vec::new(),
-		dependencies: deps
-			.into_iter()
+	Migration::from_parts(
+		name.to_string(),
+		app.to_string(),
+		Vec::new(),
+		deps.into_iter()
 			.map(|(a, n)| (a.to_string(), n.to_string()))
 			.collect(),
-		atomic: true,
-		replaces: Vec::new(),
-		initial: None,
-		state_only: false,
-		database_only: false,
-		optional_dependencies: Vec::new(),
-		swappable_dependencies: Vec::new(),
-	}
+		Vec::new(),
+		true,
+		None,
+		false,
+		false,
+		Vec::new(),
+		Vec::new(),
+	)
 }
 
 // ============================================================================

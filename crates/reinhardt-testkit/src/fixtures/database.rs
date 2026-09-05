@@ -372,19 +372,15 @@ fn models_to_migration(models: &[ModelSchemaInfo]) -> Result<Vec<Migration>, Tes
 	let operations = crate::fixtures::schema::create_table_operations_from_models(cloned_models)
 		.map_err(|source| TestDatabaseError::SchemaCompilation { source })?;
 
-	Ok(vec![Migration {
-		name: "0001_test_database_schema".to_string(),
-		app_label: "test_database".to_string(),
-		operations,
-		dependencies: Vec::new(),
-		replaces: Vec::new(),
-		atomic: true,
-		initial: Some(true),
-		state_only: false,
-		database_only: false,
-		optional_dependencies: Vec::new(),
-		swappable_dependencies: Vec::new(),
-	}])
+	Ok(vec![
+		operations
+			.into_iter()
+			.fold(
+				Migration::new("0001_test_database_schema", "test_database"),
+				|migration, operation| migration.add_operation(operation),
+			)
+			.with_initial(Some(true)),
+	])
 }
 
 async fn create_sqlite_file_database() -> Result<
@@ -744,19 +740,7 @@ mod tests {
 
 	impl reinhardt_db::migrations::MigrationProvider for EmptyProvider {
 		fn migrations() -> Vec<Migration> {
-			vec![Migration {
-				name: "0001_empty".to_string(),
-				app_label: "empty_provider".to_string(),
-				operations: Vec::new(),
-				dependencies: Vec::new(),
-				replaces: Vec::new(),
-				atomic: true,
-				initial: Some(true),
-				state_only: false,
-				database_only: false,
-				optional_dependencies: Vec::new(),
-				swappable_dependencies: Vec::new(),
-			}]
+			vec![Migration::new("0001_empty", "empty_provider").with_initial(Some(true))]
 		}
 	}
 
@@ -952,19 +936,7 @@ mod tests {
 	#[rstest]
 	fn provider_source_resolves_provider_migrations() {
 		fn provider_migrations() -> Vec<Migration> {
-			vec![Migration {
-				name: "0001_initial".to_string(),
-				app_label: "provider_app".to_string(),
-				operations: Vec::new(),
-				dependencies: Vec::new(),
-				replaces: Vec::new(),
-				atomic: true,
-				initial: Some(true),
-				state_only: false,
-				database_only: false,
-				optional_dependencies: Vec::new(),
-				swappable_dependencies: Vec::new(),
-			}]
+			vec![Migration::new("0001_initial", "provider_app").with_initial(Some(true))]
 		}
 
 		let builder = TestDatabase::builder().migrations_from_provider(provider_migrations);

@@ -4,8 +4,10 @@
 //! mirroring its internals with `AutoMigrationGenerator` and `MigrationService`.
 
 use reinhardt_commands::{BaseCommand, CommandContext, MakeMigrationsCommand};
-use reinhardt_db::migrations::FieldType;
 use reinhardt_db::migrations::model_registry::{FieldMetadata, ModelMetadata, global_registry};
+use reinhardt_db::migrations::{
+	ColumnDefinition, FieldType, FilesystemRepository, Migration, MigrationRepository, Operation,
+};
 use rstest::rstest;
 use serial_test::serial;
 use std::path::{Path, PathBuf};
@@ -168,9 +170,9 @@ async fn execute_generates_initial_migration_file_from_registered_model() {
 		file_names[0].trim_end_matches(".rs"),
 	);
 	assert!(content.contains("pub(super) fn migration() -> Migration"));
-	assert!(content.contains("app_label: \"testapp\".to_string()"));
+	assert!(content.contains("Migration::new(\"0001_initial\", \"testapp\")"));
 	assert!(content.contains("Operation::CreateTable"));
-	assert!(content.contains("initial: Some(true)"));
+	assert!(content.contains(".with_initial(Some(true))"));
 }
 
 #[rstest]
@@ -195,6 +197,65 @@ async fn execute_dry_run_does_not_write_migration_file() {
 		migration_file_names(&migrations_dir, "testapp").is_empty(),
 		"dry-run must not write migration files"
 	);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(command_current_dir)]
+async fn execute_check_succeeds_for_empty_model_registry() {
+	let _registry = ModelRegistryGuard::clear();
+	let project_dir = create_project_root();
+	let _cwd = ProjectDirGuard::enter(project_dir.path());
+	let migrations_dir = project_dir.path().join("migrations");
+
+	let mut ctx = makemigrations_context(None, &migrations_dir);
+	ctx.set_option("check".to_string(), "true".to_string());
+
+	let result = MakeMigrationsCommand.execute(&ctx).await;
+
+	assert!(result.is_ok(), "check failed: {:?}", result.err());
+	assert!(
+		!migrations_dir.exists(),
+		"check must not create the migrations directory"
+	);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(command_current_dir)]
+async fn execute_check_detects_deleted_last_registered_model() {
+	let _registry = ModelRegistryGuard::clear();
+	let project_dir = create_project_root();
+	let _cwd = ProjectDirGuard::enter(project_dir.path());
+	let migrations_dir = project_dir.path().join("migrations");
+	let mut repository = FilesystemRepository::new(&migrations_dir);
+	let migration =
+		Migration::new("0001_initial", "testapp").add_operation(Operation::CreateTable {
+			name: "testapp_testmodel".to_string(),
+			columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+			constraints: vec![],
+			without_rowid: None,
+			partition: None,
+			interleave_in_parent: None,
+		});
+	repository
+		.save(&migration)
+		.await
+		.expect("existing migration should be written");
+
+	let mut ctx = makemigrations_context(None, &migrations_dir);
+	ctx.set_option("check".to_string(), "true".to_string());
+
+	let error = MakeMigrationsCommand
+		.execute(&ctx)
+		.await
+		.expect_err("deleting the last registered model should require a migration");
+
+	assert_eq!(
+		error.to_string(),
+		"Execution error: 1 migration(s) would be created"
+	);
+	assert_eq!(migration_file_names(&migrations_dir, "testapp").len(), 1);
 }
 
 #[rstest]
@@ -243,8 +304,8 @@ async fn execute_empty_writes_empty_migration_with_previous_dependency() {
 
 	assert!(result.is_ok(), "empty migration failed: {:?}", result.err());
 	let content = read_migration_file(&migrations_dir, "testapp", "0002_manual");
-	assert!(content.contains("operations: vec![]"));
-	assert!(content.contains("(\"testapp\".to_string(), \"0001_initial\".to_string())"));
+	assert!(content.contains("Migration::new(\"0002_manual\", \"testapp\")"));
+	assert!(content.contains(".add_dependency(\"testapp\", \"0001_initial\")"));
 }
 
 #[rstest]
@@ -316,9 +377,9 @@ async fn execute_merge_writes_merge_migration() {
 
 	assert!(result.is_ok(), "merge failed: {:?}", result.err());
 	let content = read_migration_file(&migrations_dir, "testapp", "0003_merge");
-	assert!(content.contains("operations: vec![]"));
-	assert!(content.contains("(\"testapp\".to_string(), \"0002_left\".to_string())"));
-	assert!(content.contains("(\"testapp\".to_string(), \"0002_right\".to_string())"));
+	assert!(content.contains("Migration::new(\"0003_merge\", \"testapp\")"));
+	assert!(content.contains(".add_dependency(\"testapp\", \"0002_left\")"));
+	assert!(content.contains(".add_dependency(\"testapp\", \"0002_right\")"));
 }
 
 #[rstest]

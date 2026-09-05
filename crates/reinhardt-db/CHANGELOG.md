@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Version generated migration sources with `// reinhardt-migration-source: 1`
+  and emit constructors/builders for framework-owned migration values.
+- Validate marked source syntax, reject cfg-gated entrypoints with differing
+  semantics, and preserve UTF-8 BOM prefixes during source upgrades.
+- Mark `Migration`, `PartitionDef`, `InterleaveSpec`, `ColumnDefinition`,
+  `GeneratedColumnDefinition`, and `BulkLoadOptions` as non-exhaustive. Replace
+  direct struct literals with their constructors/builders.
+
+### Migration guide
+
+Run `reinhardt-admin migrations upgrade-source migrations` before updating the
+framework dependency. Use `--check` in CI to reject unconverted sources; the
+command is offline and preserves custom spans. Legacy struct fields with
+attributes are rejected instead of being rewritten without their conditional
+semantics. The generated-source builder APIs remain supported through the next
+breaking boundary.
+
 ## [0.4.0-alpha.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.4.0-alpha.10...reinhardt-db@v0.4.0-alpha.11) - 2026-08-27
 
 ### Documentation

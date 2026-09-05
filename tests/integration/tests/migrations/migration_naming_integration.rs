@@ -184,15 +184,7 @@ fn test_migration_struct_with_generated_name() {
 	let migration_name = MigrationNamer::generate_name(&operations, false);
 
 	// Create migration with generated name
-	let migration = Migration {
-		name: leak_str(format!("0001_{}", migration_name)).to_string(),
-		app_label: leak_str("blog").to_string(),
-		operations: operations.clone(),
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: Some(true),
-	};
+	let migration = Migration::from_parts(leak_str(format!("0001_{}", migration_name)).to_string(), leak_str("blog").to_string(), operations.clone(), vec![], vec![], true, Some(true), false, false, Vec::new(), Vec::new());
 
 	assert_eq!(
 		migration.name, "0001_posts_create_index_posts",
@@ -369,15 +361,7 @@ fn test_combined_workflow_new_migration() {
 	let full_filename = format!("{}_{}.rs", migration_number, migration_name);
 
 	// Step 5: Create Migration struct
-	let migration = Migration {
-		name: leak_str(format!("{}_{}", migration_number, migration_name)).to_string(),
-		app_label: leak_str(app_label).to_string(),
-		operations: operations.clone(),
-		dependencies: vec![("myapp", "0003_remove_user_age")],
-		replaces: vec![],
-		atomic: true,
-		initial: Some(false),
-	};
+	let migration = Migration::from_parts(leak_str(format!("{}_{}", migration_number, migration_name)).to_string(), leak_str(app_label).to_string(), operations.clone(), vec![("myapp", "0003_remove_user_age")], vec![], true, Some(false), false, false, Vec::new(), Vec::new());
 
 	// Assertions
 	assert_eq!(

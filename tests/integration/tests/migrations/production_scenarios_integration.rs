@@ -43,47 +43,17 @@ fn create_test_migration(
 	name: &'static str,
 	operations: Vec<Operation>,
 ) -> Migration {
-	Migration {
-		app_label: app.to_string(),
-		name: name.to_string(),
-		operations,
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: true,
-		initial: None,
-		state_only: false,
-		database_only: false,
-	}
+	Migration::from_parts(name.to_string(), app.to_string(), operations, vec![], vec![], true, None, false, false, Vec::new(), Vec::new())
 }
 
 /// Create a basic column definition
 fn create_basic_column(name: &str, type_def: FieldType) -> ColumnDefinition {
-	ColumnDefinition {
-		name: name.to_string(),
-		type_definition: type_def,
-		not_null: false,
-		unique: false,
-		primary_key: false,
-		auto_increment: false,
-		default: None,
-		generated: None,
-		domain: None,
-	}
+	ColumnDefinition::from_parts(name.to_string(), type_def, false, false, false, false, None, None, None)
 }
 
 /// Create a column with NULL constraint
 fn create_nullable_column(name: &str, type_def: FieldType) -> ColumnDefinition {
-	ColumnDefinition {
-		name: name.to_string(),
-		type_definition: type_def,
-		not_null: false,
-		unique: false,
-		primary_key: false,
-		auto_increment: false,
-		default: None,
-		generated: None,
-		domain: None,
-	}
+	ColumnDefinition::from_parts(name.to_string(), type_def, false, false, false, false, None, None, None)
 }
 
 // ============================================================================
@@ -128,18 +98,7 @@ async fn test_zero_downtime_deployment_scenario(
 		vec![Operation::CreateTable {
 			name: leak_str("users").to_string(),
 			columns: vec![
-				ColumnDefinition {
-					name: "id".to_string(),
-					type_definition: FieldType::Custom("SERIAL PRIMARY KEY".to_string()),
-					not_null: true,
-					unique: false,
-					primary_key: true,
-					auto_increment: true,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
+				ColumnDefinition::from_parts("id".to_string(), FieldType::Custom("SERIAL PRIMARY KEY".to_string()), true, false, true, true, None, None, None),
 				create_basic_column("name", FieldType::VarChar(Some(200))),
 				create_basic_column("email", FieldType::VarChar(Some(255))),
 			],
@@ -472,18 +431,7 @@ async fn test_backward_compatibility_preservation(
 		vec![Operation::CreateTable {
 			name: leak_str("products").to_string(),
 			columns: vec![
-				ColumnDefinition {
-					name: "id".to_string(),
-					type_definition: FieldType::Custom("SERIAL PRIMARY KEY".to_string()),
-					not_null: true,
-					unique: false,
-					primary_key: true,
-					auto_increment: true,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
+				ColumnDefinition::from_parts("id".to_string(), FieldType::Custom("SERIAL PRIMARY KEY".to_string()), true, false, true, true, None, None, None),
 				create_basic_column("name", FieldType::VarChar(Some(200))),
 				create_basic_column("price", FieldType::Decimal(Some((10, 2)))),
 			],
@@ -536,18 +484,7 @@ async fn test_backward_compatibility_preservation(
 			},
 			Operation::AddColumn {
 				table: leak_str("products").to_string(),
-				column: ColumnDefinition {
-					name: "stock".to_string(),
-					type_definition: FieldType::Integer,
-					not_null: false,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
-					default: Some("0".to_string()),
-
-					generated: None,
-					domain: None,
-				},
+				column: ColumnDefinition::from_parts("stock".to_string(), FieldType::Integer, false, false, false, false, Some("0".to_string()), None, None),
 				mysql_options: None,
 			},
 		],
@@ -697,36 +634,14 @@ async fn test_migration_rollforward_on_failure(
 			Operation::CreateTable {
 				name: leak_str("old_users").to_string(),
 				columns: vec![
-					ColumnDefinition {
-						name: "id".to_string(),
-						type_definition: FieldType::Custom("SERIAL PRIMARY KEY".to_string()),
-						not_null: true,
-						unique: false,
-						primary_key: true,
-						auto_increment: true,
-						default: None,
-
-						generated: None,
-						domain: None,
-					},
+					ColumnDefinition::from_parts("id".to_string(), FieldType::Custom("SERIAL PRIMARY KEY".to_string()), true, false, true, true, None, None, None),
 					create_basic_column("username", FieldType::VarChar(Some(100))),
 				],
 			},
 			Operation::CreateTable {
 				name: leak_str("new_users").to_string(),
 				columns: vec![
-					ColumnDefinition {
-						name: "id".to_string(),
-						type_definition: FieldType::Custom("SERIAL PRIMARY KEY".to_string()),
-						not_null: true,
-						unique: false,
-						primary_key: true,
-						auto_increment: true,
-						default: None,
-
-						generated: None,
-						domain: None,
-					},
+					ColumnDefinition::from_parts("id".to_string(), FieldType::Custom("SERIAL PRIMARY KEY".to_string()), true, false, true, true, None, None, None),
 					create_basic_column("username", FieldType::VarChar(Some(100))),
 					create_basic_column("email", FieldType::VarChar(Some(255))),
 				],
@@ -844,18 +759,7 @@ async fn test_migration_rollforward_on_failure(
 		vec![Operation::CreateTable {
 			name: leak_str("old_users").to_string(),
 			columns: vec![
-				ColumnDefinition {
-					name: "id".to_string(),
-					type_definition: FieldType::Custom("SERIAL PRIMARY KEY".to_string()),
-					not_null: true,
-					unique: false,
-					primary_key: true,
-					auto_increment: true,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
+				ColumnDefinition::from_parts("id".to_string(), FieldType::Custom("SERIAL PRIMARY KEY".to_string()), true, false, true, true, None, None, None),
 				create_basic_column("username", FieldType::VarChar(Some(100))),
 			],
 		}],
@@ -922,32 +826,10 @@ async fn test_hot_schema_changes(
 		vec![Operation::CreateTable {
 			name: leak_str("events").to_string(),
 			columns: vec![
-				ColumnDefinition {
-					name: "id".to_string(),
-					type_definition: FieldType::Custom("SERIAL PRIMARY KEY".to_string()),
-					not_null: true,
-					unique: false,
-					primary_key: true,
-					auto_increment: true,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
+				ColumnDefinition::from_parts("id".to_string(), FieldType::Custom("SERIAL PRIMARY KEY".to_string()), true, false, true, true, None, None, None),
 				create_basic_column("user_id", FieldType::Integer),
 				create_basic_column("event_type", FieldType::VarChar(Some(50))),
-				ColumnDefinition {
-					name: "created_at".to_string(),
-					type_definition: FieldType::Custom("TIMESTAMP".to_string()),
-					not_null: false,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
-					default: Some("CURRENT_TIMESTAMP".to_string()),
-
-					generated: None,
-					domain: None,
-				},
+				ColumnDefinition::from_parts("created_at".to_string(), FieldType::Custom("TIMESTAMP".to_string()), false, false, false, false, Some("CURRENT_TIMESTAMP".to_string()), None, None),
 			],
 		}],
 	);
@@ -1111,18 +993,7 @@ async fn test_disaster_recovery_migration(
 		vec![Operation::CreateTable {
 			name: leak_str("orders").to_string(),
 			columns: vec![
-				ColumnDefinition {
-					name: "id".to_string(),
-					type_definition: FieldType::Custom("SERIAL PRIMARY KEY".to_string()),
-					not_null: true,
-					unique: false,
-					primary_key: true,
-					auto_increment: true,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
+				ColumnDefinition::from_parts("id".to_string(), FieldType::Custom("SERIAL PRIMARY KEY".to_string()), true, false, true, true, None, None, None),
 				create_basic_column("customer_name", FieldType::VarChar(Some(200))),
 				create_basic_column("total", FieldType::Decimal(Some((10, 2)))),
 			],
@@ -1169,18 +1040,7 @@ async fn test_disaster_recovery_migration(
 		"0002_add_status",
 		vec![Operation::AddColumn {
 			table: leak_str("orders").to_string(),
-			column: ColumnDefinition {
-				name: "status".to_string(),
-				type_definition: FieldType::VarChar(Some(50)),
-				not_null: false,
-				unique: false,
-				primary_key: false,
-				auto_increment: false,
-				default: Some("'pending'".to_string()),
-
-				generated: None,
-				domain: None,
-			},
+			column: ColumnDefinition::from_parts("status".to_string(), FieldType::VarChar(Some(50)), false, false, false, false, Some("'pending'".to_string()), None, None),
 		}],
 	);
 
@@ -1190,34 +1050,12 @@ async fn test_disaster_recovery_migration(
 		vec![
 			Operation::AddColumn {
 				table: leak_str("orders").to_string(),
-				column: ColumnDefinition {
-					name: "created_at".to_string(),
-					type_definition: FieldType::Custom("TIMESTAMP".to_string()),
-					not_null: false,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
-					default: Some("CURRENT_TIMESTAMP".to_string()),
-
-					generated: None,
-					domain: None,
-				},
+				column: ColumnDefinition::from_parts("created_at".to_string(), FieldType::Custom("TIMESTAMP".to_string()), false, false, false, false, Some("CURRENT_TIMESTAMP".to_string()), None, None),
 				mysql_options: None,
 			},
 			Operation::AddColumn {
 				table: leak_str("orders").to_string(),
-				column: ColumnDefinition {
-					name: "updated_at".to_string(),
-					type_definition: FieldType::Custom("TIMESTAMP".to_string()),
-					not_null: false,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
-					default: Some("CURRENT_TIMESTAMP".to_string()),
-
-					generated: None,
-					domain: None,
-				},
+				column: ColumnDefinition::from_parts("updated_at".to_string(), FieldType::Custom("TIMESTAMP".to_string()), false, false, false, false, Some("CURRENT_TIMESTAMP".to_string()), None, None),
 				mysql_options: None,
 			},
 		],

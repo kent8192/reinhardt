@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Make `makemigrations --check` a no-write drift check that exits unsuccessfully
+  when a migration, merge migration, or empty migration would be created. An
+  all-app check with no registered or persisted models reports no changes
+  successfully; persisted models still produce deletion migrations.
+
 ## [0.4.0-alpha.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.4.0-alpha.11...reinhardt-commands@v0.4.0-alpha.12) - 2026-08-30
 
 ### Maintenance

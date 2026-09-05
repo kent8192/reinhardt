@@ -334,7 +334,10 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 			.find(|descriptor| descriptor.name == self.fk_field)
 		{
 			Some(descriptor) => descriptor.generated_relation_id && descriptor.required,
-			None => C::trusted_relation_field_kind(&self.fk_field).is_some(),
+			None => {
+				C::trusted_relation_field_kind(&self.fk_field).is_some()
+					&& C::trusted_relation_field_is_required(&self.fk_field)
+			}
 		}
 	}
 

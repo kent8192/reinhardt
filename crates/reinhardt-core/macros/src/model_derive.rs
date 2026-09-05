@@ -3138,6 +3138,20 @@ fn generate_model_form_support(
 			Ok(quote!(#name => ::core::option::Option::Some(#kind)))
 		})
 		.collect::<Result<Vec<_>>>()?;
+	let trusted_relation_requiredness = field_infos
+		.iter()
+		.filter(|field| field.is_fk_id_field)
+		.map(|field| {
+			let name = LitStr::new(&field.name.to_string(), field.name.span());
+			let (is_optional, _) = extract_option_type(&field.ty);
+			let nullable = field
+				.config
+				.null
+				.unwrap_or(is_optional || model_form_relation_id_is_nullable(field, field_infos));
+			let required =
+				!nullable && field.config.blank != Some(true) && field.config.default.is_none();
+			quote!(#name => #required)
+		});
 	let trusted_field_assignments = field_infos.iter().map(|field| {
 		let name = LitStr::new(&field.name.to_string(), field.name.span());
 		let ident = Ident::new(&field.name.to_string(), field.name.span());
@@ -3235,7 +3249,7 @@ fn generate_model_form_support(
 	} else {
 		quote!(match field { #(#default_true_boolean_arms,)* _ => false })
 	};
-	let relation_target_match_arms = editable_fields
+	let relation_target_match_arms = field_infos
 		.iter()
 		.filter(|field| field.is_fk_id_field)
 		.map(|field| {
@@ -4435,6 +4449,31 @@ fn generate_model_form_support(
 					Self::Cleaned,
 					#core_crate::validators::ValidationErrors,
 				> {
+					let mut errors = #core_crate::validators::ValidationErrors::new();
+					for &field in deferred_fields {
+						if !<#schema_name as #core_crate::model_form::ModelFormSchema>::fields()
+							.iter()
+							.any(|descriptor| {
+								descriptor.name == field
+									&& descriptor.required
+									&& matches!(
+										descriptor.kind,
+										#core_crate::model_form::ModelFormFieldKind::File
+											| #core_crate::model_form::ModelFormFieldKind::Image
+									)
+							})
+						{
+							errors.add(
+								field.to_owned(),
+								#core_crate::validators::ValidationError::Custom(
+									"only required file or image fields may be deferred".to_owned(),
+								),
+							);
+						}
+					}
+					if !errors.is_empty() {
+						return ::core::result::Result::Err(errors);
+					}
 					self.__reinhardt_clean_and_validate(true, true, deferred_fields, None)
 				}
 		}
@@ -4713,6 +4752,13 @@ fn generate_model_form_support(
 				match field {
 					#(#trusted_field_kinds,)*
 					_ => ::core::option::Option::None,
+				}
+			}
+
+			fn trusted_relation_field_is_required(field: &str) -> bool {
+				match field {
+					#(#trusted_relation_requiredness,)*
+					_ => false,
 				}
 			}
 
@@ -13416,6 +13462,7 @@ mod tests {
 				"apply_cleaned",
 				"set_trusted_field_json",
 				"trusted_relation_field_kind",
+				"trusted_relation_field_is_required",
 				"save_with_mode",
 			]
 		);

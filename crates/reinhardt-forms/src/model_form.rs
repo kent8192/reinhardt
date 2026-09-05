@@ -98,6 +98,15 @@ pub trait FormModel: Model + ModelFormPrimaryKeyFields + Clone + Send + Sync {
 		None
 	}
 
+	/// Returns whether a server-trusted relationship field requires a parent key.
+	///
+	/// **Parity: P0.** Native inline formsets use this metadata for relationships
+	/// excluded from the public payload schema. Unknown and optional fields return false.
+	#[doc(hidden)]
+	fn trusted_relation_field_is_required(_field: &str) -> bool {
+		false
+	}
+
 	/// Persists this candidate using an explicit create or update operation.
 	async fn save_with_mode(
 		&mut self,
@@ -209,6 +218,8 @@ where
 
 /// Cleans a generated model-form snapshot while deferring required file fields
 /// to the multipart server-function boundary.
+///
+/// Rejects deferred names that do not describe required file or image fields.
 #[doc(hidden)]
 pub fn clean_generated_payload_with_deferred_required_fields<S, P, D>(
 	data: &mut D,
@@ -219,6 +230,27 @@ where
 	P: ModelFormPolicy,
 	D: ModelFormPayload<P>,
 {
+	let mut errors = ValidationErrors::new();
+	for &field in deferred_fields {
+		if !S::fields().iter().any(|descriptor| {
+			descriptor.name == field
+				&& descriptor.required
+				&& matches!(
+					descriptor.kind,
+					ModelFormFieldKind::File | ModelFormFieldKind::Image
+				)
+		}) {
+			errors.add(
+				field.to_owned(),
+				ValidationError::Custom(
+					"only required file or image fields may be deferred".to_owned(),
+				),
+			);
+		}
+	}
+	if !errors.is_empty() {
+		return Err(errors);
+	}
 	clean_generated_payload_with_trusted_values::<S, P, D>(data, None, true, deferred_fields)
 }
 
@@ -226,6 +258,7 @@ where
 ///
 /// **Parity: P0.** Inline formsets use this helper before a generated parent key
 /// is available; ordinary create validation remains strict on every target.
+/// Required relationships excluded from the public schema use native model metadata.
 /// Unknown fields, scalar fields, and optional relationship identifiers cannot be deferred.
 #[doc(hidden)]
 pub fn clean_generated_payload_with_deferred_required_field<S, P, D>(
@@ -234,12 +267,21 @@ pub fn clean_generated_payload_with_deferred_required_field<S, P, D>(
 ) -> Result<(), ValidationErrors>
 where
 	S: ModelFormSchema,
+	S::Model: FormModel,
 	P: ModelFormPolicy,
 	D: ModelFormPayload<P>,
 {
-	if !S::fields().iter().any(|descriptor| {
-		descriptor.name == deferred_field && descriptor.generated_relation_id && descriptor.required
-	}) {
+	let descriptor = S::fields()
+		.iter()
+		.find(|descriptor| descriptor.name == deferred_field);
+	let required_relation = match descriptor {
+		Some(descriptor) => descriptor.generated_relation_id && descriptor.required,
+		None => {
+			S::Model::trusted_relation_field_kind(deferred_field).is_some()
+				&& S::Model::trusted_relation_field_is_required(deferred_field)
+		}
+	};
+	if !required_relation {
 		let mut errors = ValidationErrors::new();
 		errors.add(
 			deferred_field.to_owned(),
@@ -764,7 +806,9 @@ where
 			.copied();
 		let trusted_relation = descriptor
 			.is_some_and(|descriptor| descriptor.generated_relation_id && descriptor.required)
-			|| (descriptor.is_none() && T::trusted_relation_field_kind(field_name).is_some());
+			|| (descriptor.is_none()
+				&& T::trusted_relation_field_kind(field_name).is_some()
+				&& T::trusted_relation_field_is_required(field_name));
 		if !trusted_relation {
 			return Err(ModelFormError::FieldValidation {
 				errors: HashMap::from([(
@@ -880,7 +924,9 @@ where
 			.filter(|descriptor| descriptor.generated_relation_id && descriptor.required)
 			.map(|descriptor| descriptor.name.to_owned())
 			.or_else(|| {
-				T::trusted_relation_field_kind(deferred_field).map(|_| deferred_field.to_owned())
+				(T::trusted_relation_field_kind(deferred_field).is_some()
+					&& T::trusted_relation_field_is_required(deferred_field))
+				.then(|| deferred_field.to_owned())
 			});
 		self.validated_candidate = None;
 		true
@@ -1051,12 +1097,15 @@ mod tests {
 	#[model(
 		app_label = "forms",
 		table_name = "model_form_hidden_relation_owners",
+		form = true,
 		info = false
 	)]
 	#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 	struct HiddenRelationOwner {
 		#[field(primary_key = true)]
 		id: i64,
+		#[field(max_length = 200)]
+		name: String,
 	}
 
 	#[model(
@@ -1074,6 +1123,63 @@ mod tests {
 		#[field(editable = false)]
 		#[rel(foreign_key)]
 		owner: reinhardt_db::associations::ForeignKeyField<HiddenRelationOwner>,
+	}
+
+	#[model(
+		app_label = "forms",
+		table_name = "model_form_excluded_relation_records",
+		form = true,
+		info = false
+	)]
+	#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+	struct ExcludedRequiredRelationRecord {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		#[field(max_length = 200)]
+		title: String,
+		#[field(include_in_new = false)]
+		#[rel(foreign_key)]
+		owner: reinhardt_db::associations::ForeignKeyField<HiddenRelationOwner>,
+	}
+
+	#[model(
+		app_label = "forms",
+		table_name = "model_form_optional_relation_records",
+		form = true,
+		info = false
+	)]
+	#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+	struct OptionalRelationRecord {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		#[field(max_length = 200)]
+		title: String,
+		#[rel(foreign_key, null = true)]
+		public_owner: reinhardt_db::associations::ForeignKeyField<HiddenRelationOwner>,
+		#[field(editable = false)]
+		#[rel(foreign_key, null = true)]
+		hidden_owner: reinhardt_db::associations::ForeignKeyField<HiddenRelationOwner>,
+	}
+
+	#[model(
+		app_label = "forms",
+		table_name = "model_form_snapshot_upload_records",
+		form = true,
+		info = false
+	)]
+	#[derive(Debug, Clone, Deserialize, Serialize)]
+	struct SnapshotUploadRecord {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		#[field(max_length = 200)]
+		#[form(trim)]
+		title: String,
+		#[field(upload_to = "documents", max_length = 255)]
+		document: reinhardt_db::orm::FileField,
+		#[field(upload_to = "images", max_length = 255)]
+		avatar: reinhardt_db::orm::ImageField,
+		#[field(upload_to = "documents", max_length = 255)]
+		optional_document: Option<reinhardt_db::orm::FileField>,
 	}
 
 	#[model(
@@ -1875,6 +1981,158 @@ mod tests {
 				vec!["only generated relationship identifiers may be deferred".to_owned()],
 			)])
 		);
+	}
+
+	#[rstest]
+	#[case::scalar(&["document", "avatar", "title"], &["title"])]
+	#[case::optional_file(&["document", "avatar", "optional_document"], &["optional_document"])]
+	#[case::unknown(&["document", "avatar", "unknown"], &["unknown"])]
+	#[case::multiple_invalid(&["title", "unknown"], &["title", "unknown"])]
+	fn generated_snapshot_deferral_rejects_non_required_uploads(
+		#[case] deferred_fields: &[&str],
+		#[case] invalid_fields: &[&str],
+	) {
+		// Arrange
+		let data = SnapshotUploadRecordModelFormData::<AllEditableModelFields>::empty();
+
+		// Act
+		let errors = data
+			.clean_and_validate_with_deferred_required_fields(deferred_fields)
+			.err()
+			.expect("only required upload fields may be deferred");
+
+		// Assert
+		assert_eq!(
+			ordered_validation_errors(&errors),
+			invalid_fields
+				.iter()
+				.map(|field| (
+					(*field).to_owned(),
+					vec![ValidationError::Custom(
+						"only required file or image fields may be deferred".to_owned(),
+					)],
+				))
+				.collect::<Vec<_>>()
+		);
+	}
+
+	#[rstest]
+	fn generated_snapshot_deferral_accepts_required_uploads_only() {
+		// Arrange
+		let mut data = SnapshotUploadRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_title("  Upload  ".to_owned()).unwrap();
+
+		// Act
+		let strict_errors = data.clone().clean_and_validate().err().unwrap();
+		let cleaned = data
+			.clean_and_validate_with_deferred_required_fields(&["document", "avatar"])
+			.expect("required uploads may be deferred to the multipart boundary");
+
+		// Assert
+		assert_eq!(
+			ordered_validation_errors(&strict_errors),
+			["document", "avatar"]
+				.into_iter()
+				.map(|field| (
+					field.to_owned(),
+					vec![ValidationError::Custom(
+						"This field is required.".to_owned()
+					)],
+				))
+				.collect::<Vec<_>>()
+		);
+		assert_eq!(cleaned.title().map(String::as_str), Some("Upload"));
+		assert_eq!(cleaned.document(), None);
+		assert_eq!(cleaned.avatar(), None);
+	}
+
+	#[rstest]
+	#[case::public_optional("public_owner_id")]
+	#[case::hidden_optional("hidden_owner_id")]
+	#[case::unknown("unknown")]
+	fn deferred_cleaning_rejects_optional_and_unknown_relations(#[case] field: &str) {
+		// Arrange
+		let mut data = OptionalRelationRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_title("Optional relation".to_owned()).unwrap();
+
+		// Act
+		let errors = data
+			.clean_and_validate_with_deferred_required_field(field)
+			.err()
+			.expect("optional and unknown relationships cannot be deferred");
+
+		// Assert
+		assert_eq!(
+			ordered_validation_errors(&errors),
+			vec![(
+				field.to_owned(),
+				vec![ValidationError::Custom(
+					"only generated relationship identifiers may be deferred".to_owned(),
+				)],
+			)]
+		);
+	}
+
+	#[rstest]
+	fn deferred_cleaning_accepts_required_relation_excluded_from_new() {
+		// Arrange
+		let mut data =
+			ExcludedRequiredRelationRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_title("Excluded relation".to_owned()).unwrap();
+		let mut form = ModelForm::<ExcludedRequiredRelationRecord>::from_payload(data);
+
+		// Act
+		let valid = form.is_valid_with_deferred_required_field("owner_id");
+		form.set_deferred_trusted_field_value("owner_id", json!(42))
+			.unwrap();
+		let built = form.build_instance().unwrap();
+
+		// Assert
+		assert_eq!(valid, true);
+		assert_eq!(built.owner_id, 42);
+		assert_eq!(built.title, "Excluded relation");
+	}
+
+	#[rstest]
+	fn inline_formset_saves_hidden_required_relation_after_parent_auto_id() {
+		// Arrange
+		let mut data = HiddenRequiredRelationRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_title("Hidden relation".to_owned()).unwrap();
+		let mut formset = crate::formsets::InlineFormSet::<
+			HiddenRelationOwner,
+			HiddenRequiredRelationRecord,
+		>::for_create(
+			HiddenRelationOwner {
+				id: 0,
+				name: "Parent".to_owned(),
+			},
+			"owner_id".to_owned(),
+		);
+		formset.add_child_form(ModelForm::from_payload(data));
+		let mut owner_row = Row::new();
+		owner_row.insert("id".to_owned(), QueryValue::Int(42));
+		owner_row.insert("name".to_owned(), QueryValue::String("Parent".to_owned()));
+		let mut child_row = Row::new();
+		child_row.insert("id".to_owned(), QueryValue::Int(7));
+		child_row.insert("owner_id".to_owned(), QueryValue::Int(42));
+		child_row.insert(
+			"title".to_owned(),
+			QueryValue::String("Hidden relation".to_owned()),
+		);
+		let mut executor = RetryExecutor::new([Ok(owner_row), Ok(child_row)]);
+
+		// Act
+		tokio_test::block_on(formset.save(&mut executor))
+			.expect("a hidden required relation must accept the generated parent key");
+
+		// Assert
+		assert_eq!(formset.parent().id, 42);
+		assert_eq!(formset.parent().name, "Parent");
+		let child = formset.child_forms()[0].instance().unwrap();
+		assert_eq!(child.id, Some(7));
+		assert_eq!(child.owner_id, 42);
+		assert_eq!(child.title, "Hidden relation");
+		assert_eq!(executor.fetch_one_calls, 2);
 	}
 
 	fn uuid_record_row(id: uuid::Uuid, title: &str) -> Row {

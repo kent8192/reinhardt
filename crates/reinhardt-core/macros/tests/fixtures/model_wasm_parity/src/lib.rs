@@ -101,6 +101,27 @@ pub struct FormProject {
 }
 
 #[model(
+	app_label = "snapshot_uploads",
+	table_name = "snapshot_uploads",
+	form = true,
+	info = false
+)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SnapshotUploadRecord {
+	#[field(primary_key = true)]
+	pub id: Option<i64>,
+	#[field(max_length = 200)]
+	#[form(trim)]
+	pub title: String,
+	#[field(upload_to = "documents", max_length = 255)]
+	pub document: FileField,
+	#[field(upload_to = "images", max_length = 255)]
+	pub avatar: ImageField,
+	#[field(upload_to = "documents", max_length = 255)]
+	pub optional_document: Option<FileField>,
+}
+
+#[model(
 	app_label = "assigned_key_documents",
 	table_name = "assigned_key_documents",
 	form = true,
@@ -403,6 +424,62 @@ mod tests {
 			token: uuid::Uuid::nil(),
 			document: FileField::default(),
 			avatar: ImageField::default(),
+		}
+	}
+
+	#[wasm_bindgen_test]
+	fn generated_snapshot_deferral_only_accepts_required_uploads() {
+		// Arrange
+		let mut data = SnapshotUploadRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_title("  Upload  ".to_owned()).unwrap();
+
+		// Act
+		let strict_errors = data.clone().clean_and_validate().err().unwrap();
+		let cleaned = data
+			.clean_and_validate_with_deferred_required_fields(&["document", "avatar"])
+			.expect("required uploads may be deferred to the multipart boundary");
+
+		// Assert
+		assert_eq!(
+			error_tuples(&strict_errors),
+			expected_errors(&[
+				("document", "This field is required."),
+				("avatar", "This field is required."),
+			])
+		);
+		assert_eq!(cleaned.title().map(String::as_str), Some("Upload"));
+		assert_eq!(cleaned.document(), None);
+		assert_eq!(cleaned.avatar(), None);
+
+		for (deferred_fields, invalid_fields) in [
+			(&["document", "avatar", "title"][..], &["title"][..]),
+			(
+				&["document", "avatar", "optional_document"][..],
+				&["optional_document"][..],
+			),
+			(&["document", "avatar", "unknown"][..], &["unknown"][..]),
+			(&["title", "unknown"][..], &["title", "unknown"][..]),
+		] {
+			// Arrange
+			let data = SnapshotUploadRecordModelFormData::<AllEditableModelFields>::empty();
+
+			// Act
+			let errors = data
+				.clean_and_validate_with_deferred_required_fields(deferred_fields)
+				.err()
+				.expect("non-required upload names must be rejected on WASM");
+
+			// Assert
+			assert_eq!(
+				error_tuples(&errors),
+				invalid_fields
+					.iter()
+					.map(|field| (
+						(*field).to_owned(),
+						"only required file or image fields may be deferred".to_owned(),
+					))
+					.collect::<Vec<_>>()
+			);
 		}
 	}
 

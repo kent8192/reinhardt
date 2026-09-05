@@ -40,6 +40,7 @@ pub trait ModelFormValidatingPayload: Sized {
 	///
 	/// **Parity: P2.** Generated native and WASM payloads expose the same
 	/// snapshot-validation hook; other implementations retain strict validation.
+	/// Generated implementations reject names outside required file or image descriptors.
 	#[doc(hidden)]
 	fn clean_and_validate_with_deferred_required_fields(
 		self,
@@ -48,10 +49,12 @@ pub trait ModelFormValidatingPayload: Sized {
 		self.clean_and_validate()
 	}
 
-	/// Normalizes and validates while deferring one server-trusted required field.
+	/// Normalizes and validates while deferring one required relationship identifier.
 	///
 	/// **Parity: P0.** Native inline formsets override this hidden compatibility
 	/// hook; other implementations retain strict create validation.
+	/// Generated native payloads include required server-owned relationships
+	/// excluded from the public schema, using the model's trusted relationship metadata.
 	#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 	#[doc(hidden)]
 	fn clean_and_validate_with_deferred_required_field(

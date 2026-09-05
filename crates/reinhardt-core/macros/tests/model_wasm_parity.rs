@@ -119,6 +119,10 @@ wasm-bindgen-test = "={}"
 			.contains("generated_required_scalars_use_canonical_create_errors_in_wasm_runtime"),
 		"WASM model macro parity fixture must execute required scalar parity\n{runtime_output}",
 	);
+	assert!(
+		runtime_output.contains("generated_snapshot_deferral_only_accepts_required_uploads"),
+		"WASM model macro parity fixture must execute upload deferral validation\n{runtime_output}",
+	);
 }
 
 fn wasm_fixture_test_command(

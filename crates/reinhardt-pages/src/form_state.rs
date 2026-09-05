@@ -3203,12 +3203,14 @@ mod tests {
 		});
 
 		let result = scope.enter(|| {
-			tokio_test::block_on(runtime.submit_server_fn(|| async {
+			let mut submit = std::pin::pin!(runtime.submit_server_fn(|| async {
 				Err::<String, _>(ServerFnError::validation([("value", "must be valid")]))
-			}))
+			}));
+			let mut context = Context::from_waker(Waker::noop());
+			submit.as_mut().poll(&mut context)
 		});
 
-		assert!(result.is_err());
+		assert!(matches!(result, Poll::Ready(Err(_))));
 		assert_eq!(callback_count.get(), 1);
 		assert_eq!(event_count.get(), 1);
 		assert_eq!(

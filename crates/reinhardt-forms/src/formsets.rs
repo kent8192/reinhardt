@@ -1196,6 +1196,59 @@ mod tests {
 	}
 
 	#[rstest]
+	#[case::parent_and_children(true)]
+	#[case::children_only(false)]
+	#[serial(inline_generated_validator)]
+	fn test_inline_formset_reuses_prevalidated_children_for_an_unchanged_parent_key(
+		#[case] save_parent: bool,
+	) {
+		// Arrange
+		let _generated_validator_calls_reset =
+			AtomicUsizeResetGuard::new(&REQUIRED_CHILD_GENERATED_VALIDATOR_CALLS);
+		let validator_calls = Arc::new(AtomicUsize::new(0));
+		let validator_calls_for_candidate = Arc::clone(&validator_calls);
+		let mut formset = InlineFormSet::<TestModel, RequiredChildModel>::for_update(
+			test_model(1, "parent"),
+			"parent_id".to_owned(),
+		);
+		let mut data = RequiredChildModelModelFormData::<AllEditableModelFields>::empty();
+		data.set_content(" prevalidated child ".to_owned()).unwrap();
+		formset.add_child_form(
+			ModelForm::<RequiredChildModel>::from_payload(data).with_model_validator(move |_| {
+				if validator_calls_for_candidate.fetch_add(1, Ordering::SeqCst) == 0 {
+					Ok(())
+				} else {
+					Err(vec!["child validation ran more than once".to_owned()])
+				}
+			}),
+		);
+		let mut rows = Vec::new();
+		if save_parent {
+			rows.push(Ok(test_model_row(1, "parent")));
+		}
+		rows.push(Ok(child_model_row(2, 1, "prevalidated child")));
+		let mut executor = FormsetExecutor::new(rows);
+
+		// Act
+		if save_parent {
+			tokio_test::block_on(formset.save(&mut executor)).unwrap();
+		} else {
+			tokio_test::block_on(formset.save_children(&mut executor)).unwrap();
+		}
+
+		// Assert
+		let saved_child = formset.child_forms()[0].instance().unwrap();
+		assert_eq!(saved_child.parent_id, 1);
+		assert_eq!(saved_child.content, "prevalidated child");
+		assert_eq!(validator_calls.load(Ordering::SeqCst), 1);
+		assert_eq!(
+			REQUIRED_CHILD_GENERATED_VALIDATOR_CALLS.load(Ordering::SeqCst),
+			1
+		);
+		assert_eq!(executor.fetch_one_calls, if save_parent { 2 } else { 1 });
+	}
+
+	#[rstest]
 	#[serial(inline_generated_validator)]
 	fn test_inline_formset_defers_model_validator_until_generated_parent_key_is_assigned() {
 		let _generated_validator_calls_reset =

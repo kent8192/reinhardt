@@ -732,7 +732,17 @@ where
 			.find(|descriptor| descriptor.name == field_name)
 			.is_some_and(|descriptor| descriptor.editable)
 		{
+			if self.validated_candidate.is_some()
+				&& self.data.get_json(field_name).as_ref() == Some(&value)
+			{
+				return Ok(());
+			}
 			return self.set_field_value(field_name, value);
+		}
+		if self.validated_candidate.is_some()
+			&& self.trusted_field_values.get(field_name) == Some(&value)
+		{
+			return Ok(());
 		}
 		self.trusted_field_values
 			.insert(field_name.to_owned(), value);
@@ -2148,9 +2158,15 @@ mod tests {
 
 	#[rstest]
 	fn trusted_non_editable_field_rebuilds_a_cleaned_candidate() {
+		let validator_calls = Arc::new(AtomicUsize::new(0));
+		let validator_calls_for_candidate = Arc::clone(&validator_calls);
 		let mut data = HiddenRequiredRecordModelFormData::<AllEditableModelFields>::empty();
 		data.set_title("Trusted relation".to_owned());
-		let mut form = ModelForm::<HiddenRequiredRecord>::from_payload(data);
+		let mut form =
+			ModelForm::<HiddenRequiredRecord>::from_payload(data).with_model_validator(move |_| {
+				validator_calls_for_candidate.fetch_add(1, Ordering::SeqCst);
+				Ok(())
+			});
 
 		form.set_trusted_field_value("audit_actor", json!("system"))
 			.expect("a trusted non-editable field should satisfy model construction");
@@ -2160,6 +2176,11 @@ mod tests {
 
 		assert_eq!(built.audit_actor, "system");
 
+		form.set_trusted_field_value("audit_actor", json!("system"))
+			.expect("an unchanged trusted value should retain the candidate");
+		assert_eq!(form.build_instance().unwrap().audit_actor, "system");
+		assert_eq!(validator_calls.load(Ordering::SeqCst), 1);
+
 		form.set_trusted_field_value("audit_actor", json!("replacement"))
 			.expect("trusted mutation should invalidate cached construction");
 		assert_eq!(
@@ -2168,6 +2189,7 @@ mod tests {
 				.audit_actor,
 			"replacement"
 		);
+		assert_eq!(validator_calls.load(Ordering::SeqCst), 2);
 	}
 
 	#[test]

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Testing
+
+- *(di)* remove obsolete tinyvec version pins from isolated consumer fixtures
+
 ## [0.4.0-alpha.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-di@v0.4.0-alpha.8...reinhardt-di@v0.4.0-alpha.9) - 2026-08-23
 
 ### Documentation

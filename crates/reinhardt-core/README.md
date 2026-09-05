@@ -122,6 +122,8 @@ Available features:
 - `pagination`: Pagination strategies
 - `page`: Page types (requires `types`, `reactive`, and `security`)
 - `reactive`: Reactive types
+- `serde`: Compatibility feature; `serde` is always available because the
+  target-neutral model-form contract names its serialization traits directly.
 
 ## Usage
 

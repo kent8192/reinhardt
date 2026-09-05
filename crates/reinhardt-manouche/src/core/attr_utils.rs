@@ -1,4 +1,6 @@
-//! Shared utilities for HTML attribute name conversion.
+//! Shared utilities for identifier and HTML attribute name conversion.
+
+use syn::{Ident, ext::IdentExt};
 
 /// SVG attributes that require camelCase output.
 const SVG_CAMEL_CASE_ATTRS: &[(&str, &str)] = &[
@@ -54,6 +56,11 @@ pub const BOOLEAN_ATTRS: &[&str] = &[
 	"truespeed",
 ];
 
+/// Returns a Rust identifier's wire name without a raw-identifier prefix.
+pub fn ident_to_wire_name(ident: &Ident) -> String {
+	ident.unraw().to_string()
+}
+
 /// Converts a Rust identifier to an HTML attribute name.
 ///
 /// Strips `r#` prefix, maps SVG camelCase attributes, and converts `_` to `-`.
@@ -87,6 +94,13 @@ mod tests {
 
 		// Assert
 		assert_eq!(result, expected);
+	}
+
+	#[test]
+	fn test_ident_to_wire_name_strips_raw_identifier_prefix() {
+		let ident: Ident = syn::parse_str("r#type").expect("raw identifier should parse");
+
+		assert_eq!(ident_to_wire_name(&ident), "type");
 	}
 
 	#[rstest]

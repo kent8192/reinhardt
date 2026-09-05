@@ -29,12 +29,21 @@ publish = false
 
 [workspace]
 
+[features]
+native = ["reinhardt/core", "reinhardt/database", "reinhardt/forms"]
+
 [dependencies]
 reinhardt = {{ path = "{}", package = "reinhardt-web", default-features = false }}
 reinhardt-core = {{ path = "{}" }}
-chrono = {{ version = "0.4", features = ["serde"] }}
+decimal = {{ package = "rust_decimal", version = "1.0", features = ["serde"] }}
+identifier = {{ package = "uuid", version = "1.0", features = ["serde"] }}
+json = {{ package = "serde_json", version = "1.0" }}
 serde = {{ version = "1.0", features = ["derive"] }}
-serde_json = "1.0"
+time = {{ package = "chrono", version = "0.4", features = ["serde"] }}
+
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
+ctor = "0.8.0"
+linkme = "0.3"
 
 [dev-dependencies]
 wasm-bindgen-test = "={}"
@@ -61,6 +70,26 @@ wasm-bindgen-test = "={}"
 
 	let manifest_path = crate_dir.path().join("Cargo.toml");
 	let target_path = target_dir.path().to_path_buf();
+	let native_output = native_fixture_check_command(&manifest_path, &target_path)
+		.arg("--offline")
+		.output()
+		.expect("compile native model macro parity fixture");
+	let native_output = if native_output.status.success()
+		|| !offline_dependency_resolution_failed(&native_output)
+	{
+		native_output
+	} else {
+		native_fixture_check_command(&manifest_path, &target_path)
+			.output()
+			.expect("compile native model macro parity fixture without offline mode")
+	};
+	assert!(
+		native_output.status.success(),
+		"native model macro parity fixture should compile the same declaration\nstdout:\n{}\nstderr:\n{}",
+		String::from_utf8_lossy(&native_output.stdout),
+		String::from_utf8_lossy(&native_output.stderr),
+	);
+
 	let output = wasm_fixture_test_command(&manifest_path, &target_path, wasm_bindgen_test_runner)
 		.arg("--offline")
 		.arg("--")
@@ -89,9 +118,32 @@ wasm-bindgen-test = "={}"
 		String::from_utf8_lossy(&output.stderr)
 	);
 	assert!(
-		runtime_output.contains("generated_datetime_payload_round_trips_in_wasm_runtime"),
-		"WASM model macro parity fixture must execute the generated datetime payload test\n{runtime_output}",
+		runtime_output.contains("generated_named_contract_executes_in_wasm_runtime"),
+		"WASM model macro parity fixture must execute the generated named contract test\n{runtime_output}",
 	);
+
+	let dependency_tree = wasm_dependency_tree_command(&manifest_path)
+		.output()
+		.expect("inspect WASM fixture dependency tree");
+	assert!(
+		dependency_tree.status.success(),
+		"WASM dependency-tree inspection should succeed\nstdout:\n{}\nstderr:\n{}",
+		String::from_utf8_lossy(&dependency_tree.stdout),
+		String::from_utf8_lossy(&dependency_tree.stderr),
+	);
+	let dependency_tree = String::from_utf8_lossy(&dependency_tree.stdout);
+	for forbidden in [
+		"reinhardt-db",
+		"sqlx",
+		"tokio-postgres",
+		"mysql_async",
+		"rusqlite",
+	] {
+		assert!(
+			!dependency_tree.contains(forbidden),
+			"WASM named-contract fixture must not depend on `{forbidden}`\n{dependency_tree}",
+		);
+	}
 }
 
 fn wasm_fixture_test_command(
@@ -112,6 +164,30 @@ fn wasm_fixture_test_command(
 		.arg("wasm32-unknown-unknown")
 		.arg("--target-dir")
 		.arg(target_path);
+	command
+}
+
+fn native_fixture_check_command(manifest_path: &Path, target_path: &Path) -> Command {
+	let mut command = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
+	command
+		.arg("check")
+		.arg("--manifest-path")
+		.arg(manifest_path)
+		.arg("--features")
+		.arg("native")
+		.arg("--target-dir")
+		.arg(target_path);
+	command
+}
+
+fn wasm_dependency_tree_command(manifest_path: &Path) -> Command {
+	let mut command = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
+	command
+		.arg("tree")
+		.arg("--manifest-path")
+		.arg(manifest_path)
+		.arg("--target")
+		.arg("wasm32-unknown-unknown");
 	command
 }
 

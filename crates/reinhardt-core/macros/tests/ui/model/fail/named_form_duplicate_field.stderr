@@ -1,0 +1,5 @@
+error: named model form field `name` is specified more than once
+ --> tests/ui/model/fail/named_form_duplicate_field.rs:7:46
+  |
+7 |     form(name = ClusterCreateForm, fields(name, name))
+  |                                                 ^^^^

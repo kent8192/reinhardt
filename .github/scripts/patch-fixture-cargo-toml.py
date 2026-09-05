@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Rewrite a generated fixture's Cargo.toml to point at this PR's HEAD
 (workspace path) or at extracted .crate tarballs (publish-form mode).
+Registry dependencies retain their consumer-declared versions.
 
 Usage:
   patch-fixture-cargo-toml.py --manifest Cargo.toml --reinhardt-path /path/to/repo

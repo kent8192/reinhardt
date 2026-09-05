@@ -84,9 +84,9 @@ pub use model::{
 	assert_model_form_argument_compatibility, assert_model_form_error_compatibility,
 };
 pub use reinhardt_core::model_form::{
-	AllEditableModelFields, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload,
-	ModelFormPayloadError, ModelFormPolicy, ModelFormPrimaryKey, ModelFormSchema,
-	NativeModelFormPayload,
+	AllEditableModelFields, ModelFormContract, ModelFormContractField, ModelFormContractSchema,
+	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError,
+	ModelFormPolicy, ModelFormPrimaryKey, ModelFormSchema, NativeModelFormPayload,
 };
 pub use validators::{ClientValidator, ValidatorRegistry};
 

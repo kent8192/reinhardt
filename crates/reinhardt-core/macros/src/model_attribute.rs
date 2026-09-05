@@ -1,10 +1,11 @@
 //! Attribute macro implementation for `#[model(...)]`
 
 use crate::crate_paths::get_reinhardt_crate;
+use crate::model_derive::{generate_named_model_form_contract, parse_model_attributes};
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::parse::Parser;
-use syn::{Attribute, Field, ItemStruct, Meta, Result, Type};
+use syn::{Attribute, Field, ItemStruct, Result, Type};
 
 /// Extract target type from ForeignKeyField<T> or OneToOneField<T>
 fn extract_fk_target_type(ty: &Type) -> Option<&Type> {
@@ -19,37 +20,23 @@ fn extract_fk_target_type(ty: &Type) -> Option<&Type> {
 	None
 }
 
-fn model_forms_enabled(args: &TokenStream) -> bool {
-	let parser = syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated;
-	parser.parse2(args.clone()).ok().is_some_and(|attributes| {
-		attributes.iter().any(|attribute| {
-			matches!(
-				attribute,
-				Meta::NameValue(name_value)
-					if name_value.path.is_ident("form")
-						&& matches!(
-							&name_value.value,
-							syn::Expr::Lit(syn::ExprLit {
-								lit: syn::Lit::Bool(value),
-								..
-							}) if value.value
-						)
-			)
-		})
-	})
-}
-
 pub(crate) fn model_attribute_impl(
 	args: TokenStream,
 	mut input: ItemStruct,
 ) -> Result<TokenStream> {
 	// Get dynamic crate paths for code generation
 	let reinhardt = get_reinhardt_crate();
-	let model_forms_enabled = model_forms_enabled(&args);
+	let model_attributes = parse_model_attributes.parse2(args.clone())?;
+	let model_forms_enabled = model_attributes.form || model_attributes.named_form.is_some();
+	let named_contract_output = model_attributes
+		.named_form
+		.as_ref()
+		.map(|config| generate_named_model_form_contract(&input, config))
+		.transpose()?;
 
 	// Check if #[derive(Model)] already exists (avoid double processing)
 	// Parse derive tokens properly instead of fragile string matching
-	let has_derive_model = input.attrs.iter().any(|attr| {
+	let derive_model_idx = input.attrs.iter().position(|attr| {
 		if attr.path().is_ident("derive")
 			&& let syn::Meta::List(meta_list) = &attr.meta
 		{
@@ -67,11 +54,40 @@ pub(crate) fn model_attribute_impl(
 		false
 	});
 
-	if has_derive_model {
-		// Already has #[derive(Model)], just return input unchanged
-		// The derive macro will read #[model(...)] helper attribute
-		return Ok(quote! { #input });
-	}
+	// Detect serde derives visible at this point and forward as bare flags for
+	// generated companion types. When `#[model]` appears before
+	// `#[derive(Serialize)]` in source, the attribute macro can see the derive.
+	// When `#[derive]` comes first, attrs will be empty because Rust processes
+	// outer attributes top-to-bottom. Fixture registration is independent of
+	// these flags because Model carries the required serde bounds.
+	let has_serialize = has_derive_trait(&input.attrs, "Serialize");
+	let has_deserialize = has_derive_trait(&input.attrs, "Deserialize");
+
+	let serde_flags: TokenStream = {
+		let mut flags = Vec::new();
+		if has_serialize {
+			flags.push(quote!(serde_serialize));
+		}
+		if has_deserialize {
+			flags.push(quote!(serde_deserialize));
+		}
+		if flags.is_empty() {
+			quote! {}
+		} else if args.is_empty() {
+			quote! { #(#flags),* }
+		} else {
+			quote! { , #(#flags),* }
+		}
+	};
+
+	// Create a #[model_config(...)] helper attribute with the original arguments.
+	// `get_latest_by` is resolved against the generated model fields by the derive macro.
+	// Using model_config instead of model to avoid name collision with the attribute macro
+	let config_attr: Attribute = if args.is_empty() && serde_flags.is_empty() {
+		syn::parse_quote! { #[model_config] }
+	} else {
+		syn::parse_quote! { #[model_config(#args #serde_flags)] }
+	};
 
 	/// Check if a specific trait is already in `#[derive(...)]` attributes
 	fn has_derive_trait(attrs: &[Attribute], trait_name: &str) -> bool {
@@ -274,40 +290,21 @@ pub(crate) fn model_attribute_impl(
 		}
 	}
 
-	// Detect serde derives visible at this point and forward as bare flags for
-	// generated companion types. When `#[model]` appears before
-	// `#[derive(Serialize)]` in source, the attribute macro can see the derive.
-	// When `#[derive]` comes first, attrs will be empty because Rust processes
-	// outer attributes top-to-bottom. Fixture registration is independent of
-	// these flags because Model carries the required serde bounds.
-	let has_serialize = has_derive_trait(&input.attrs, "Serialize");
-	let has_deserialize = has_derive_trait(&input.attrs, "Deserialize");
-
-	let serde_flags: TokenStream = {
-		let mut flags = Vec::new();
-		if has_serialize {
-			flags.push(quote!(serde_serialize));
-		}
-		if has_deserialize {
-			flags.push(quote!(serde_deserialize));
-		}
-		if flags.is_empty() {
-			quote! {}
-		} else if args.is_empty() {
-			quote! { #(#flags),* }
+	if let Some(derive_model_idx) = derive_model_idx {
+		// Keep the existing #[derive(Model)] instead of injecting another one.
+		// The active attribute is removed before the derive runs, so forward it
+		// through the registered helper attribute after relation normalization.
+		input.attrs.insert(derive_model_idx + 1, config_attr);
+		return Ok(if let Some(contract) = named_contract_output {
+			quote! {
+				#contract
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				#input
+			}
 		} else {
-			quote! { , #(#flags),* }
-		}
-	};
-
-	// Create a #[model_config(...)] helper attribute with the original arguments.
-	// `get_latest_by` is resolved against the generated model fields by the derive macro.
-	// Using model_config instead of model to avoid name collision with the attribute macro
-	let config_attr: Attribute = if args.is_empty() && serde_flags.is_empty() {
-		syn::parse_quote! { #[model_config] }
-	} else {
-		syn::parse_quote! { #[model_config(#args #serde_flags)] }
-	};
+			quote! { #input }
+		});
+	}
 
 	// Build derive attribute with Model derive macro
 	// Model must be first for proper attribute processing
@@ -390,5 +387,13 @@ pub(crate) fn model_attribute_impl(
 	// 3. derive(Serialize, Deserialize) doesn't require explicit use statements
 	// Users should import serde traits themselves if needed for non-derive usage
 
-	Ok(quote! { #input })
+	Ok(if let Some(contract) = named_contract_output {
+		quote! {
+			#contract
+			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+			#input
+		}
+	} else {
+		quote! { #input }
+	})
 }

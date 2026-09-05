@@ -1,0 +1,5 @@
+error: named model form generated type `DocumentCreateFormData` collides with model-generated API
+ --> tests/ui/model/fail/named_form_type_collision.rs:7:14
+  |
+7 |     form(name = DocumentCreateForm, fields(name))
+  |                 ^^^^^^^^^^^^^^^^^^

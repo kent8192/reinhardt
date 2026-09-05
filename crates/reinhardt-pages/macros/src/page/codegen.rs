@@ -796,7 +796,6 @@ fn generate_control_binding(
 		TypedControlBindingExpr::Direct(value) => value,
 		TypedControlBindingExpr::NumberWithError { value, .. } => value,
 	};
-	let value = wrap_expr_with_captures(value, pages_crate, ctx);
 	let binding_span = binding.span;
 	let private = quote! { #pages_crate::control_binding::__private };
 	let descriptor = match (&binding.kind, &binding.expression) {
@@ -825,17 +824,22 @@ fn generate_control_binding(
 				pages_crate,
 				ctx,
 			);
-			quote_spanned!(binding_span=> #private::into_control_binding::<#private::NumberBinding, _>((#value, #error), ()))
+			quote_spanned!(binding_span=> #private::into_control_binding::<#private::NumberBinding, _>((#pages_crate::reactive::copy_signal_handle(#value), #error), ()))
 		}
 		(TypedControlBindingKind::Radio, _) => {
 			let radio_value = radio_value_override.unwrap_or_else(|| {
 				let radio_value = binding.radio_value.as_ref().expect("validated radio value");
-				let radio_value = wrap_expr_with_captures(radio_value, pages_crate, ctx);
-				quote! { (#radio_value).to_string() }
+				wrap_value_expr_with_captures(
+					quote! { (#radio_value).to_string() },
+					radio_value,
+					pages_crate,
+					ctx,
+				)
 			});
 			quote_spanned!(binding_span=> #private::into_control_binding::<#private::RadioBinding, _>(#value, #radio_value))
 		}
 	};
+	let descriptor = wrap_value_expr_with_captures(descriptor, value, pages_crate, ctx);
 	quote!(.control_binding(#descriptor))
 }
 

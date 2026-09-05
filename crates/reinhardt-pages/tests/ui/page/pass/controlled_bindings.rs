@@ -18,7 +18,7 @@ fn main() {
 		let text = Signal::new(String::new());
 		let checked = Signal::new(false);
 		let radio = Signal::new("draft".to_owned());
-		let number = Signal::new(0_i64);
+		let mut number = Signal::new(0_i64);
 		let number_error = Signal::new(None::<NumberParseError>);
 		let selected = Signal::new(String::new());
 		let selected_many = Signal::new(Vec::<String>::new());
@@ -51,6 +51,11 @@ fn main() {
 				type: "number",
 				bind: number(number, number_error)
 			}
+			input {
+				aria_label: "Borrowed number with parse error",
+				type: "number",
+				bind: number(&number, &number_error)
+			}
 			select {
 				a11y: off,
 				bind: selected,
@@ -69,5 +74,13 @@ fn main() {
 				}
 			}
 		});
+		let mutable_number = page!(|number: &mut Signal<i64>| {
+			input {
+				aria_label: "Borrowed number",
+				type: "number",
+				bind: number
+			}
+		});
+		let _ = mutable_number(&mut number);
 	});
 }

@@ -1,7 +1,7 @@
 //! Stable support types for controlled `page!` form elements.
 //!
-//! The `bind:` directive accepts [`Signal`](crate::reactive::Signal) values
-//! directly for text, checkbox, radio, and select controls. Numeric controls
+//! The `bind:` directive accepts owned or borrowed [`Signal`](crate::reactive::Signal)
+//! values directly for text, checkbox, radio, and select controls. Numeric controls
 //! can additionally report rejected input through [`NumberParseError`].
 //! Binding lowering passes these `Copy` signal handles by value, so generated
 //! call sites remain clean under Clippy's `clone_on_copy` lint.
@@ -45,6 +45,28 @@ pub mod __private {
 		Source: IntoControlBinding<Kind>,
 	{
 		source.into_control_binding(config)
+	}
+
+	impl<Kind, T: 'static> IntoControlBinding<Kind> for &Signal<T>
+	where
+		Signal<T>: IntoControlBinding<Kind>,
+	{
+		type Config = <Signal<T> as IntoControlBinding<Kind>>::Config;
+
+		fn into_control_binding(self, config: Self::Config) -> ControlBinding {
+			(*self).into_control_binding(config)
+		}
+	}
+
+	impl<Kind, T: 'static> IntoControlBinding<Kind> for &mut Signal<T>
+	where
+		Signal<T>: IntoControlBinding<Kind>,
+	{
+		type Config = <Signal<T> as IntoControlBinding<Kind>>::Config;
+
+		fn into_control_binding(self, config: Self::Config) -> ControlBinding {
+			(*self).into_control_binding(config)
+		}
 	}
 
 	impl IntoControlBinding<TextBinding> for Signal<String> {

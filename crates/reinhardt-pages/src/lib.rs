@@ -449,6 +449,8 @@
 //! `Signal<bool>`, numeric inputs use a primitive implementing [`NumberValue`],
 //! and multiple selects use `Signal<Vec<String>>`. Numeric bindings may expose
 //! a [`NumberParseError`] signal that retains recoverable invalid editor text.
+//! Owned signal handles, shared references, and mutable references are supported,
+//! including both signals passed to `number(value, error)`.
 //! Only unmodified Arrow/Home/End keyboard moves are predicted; modifier-key
 //! commands and already-canceled key events are treated as unknown. When a
 //! pointer-positioned number edit is sanitized before its inaccessible selection

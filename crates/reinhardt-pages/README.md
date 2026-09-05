@@ -252,6 +252,8 @@ Use `bind:` when a signal should own a native control after hydration. The
 control shape determines the signal type: `String` for text, radio, and
 single-select controls; `bool` for checkboxes; a supported numeric primitive
 for number inputs; and `Vec<String>` for multiple selects.
+Signal bindings accept owned handles, shared references, and mutable references,
+including both signals passed to `number(value, error)`.
 
 ```rust
 use reinhardt_pages::prelude::*;

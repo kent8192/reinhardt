@@ -3815,7 +3815,8 @@ fn generate_model_form_support(
 			if type_path
 				.path
 				.segments
-				.last().is_none_or(|segment| segment.ident != "Decimal")
+				.last()
+				.is_none_or(|segment| segment.ident != "Decimal")
 			{
 				return None;
 			}
@@ -3950,16 +3951,19 @@ fn generate_model_form_support(
 				}
 
 				fn clean_and_validate_with_deferred_required_field(
-					self,
+					mut self,
 					deferred_field: &str,
 				) -> ::core::result::Result<
 					Self::Cleaned,
 					#core_crate::validators::ValidationErrors,
 				> {
-					<Self as #core_crate::model_form::ModelFormValidatingPayload>::clean_and_validate_with_deferred_required_fields(
-						self,
-						&[deferred_field],
-					)
+					#forms_crate::model_form::clean_generated_payload_with_deferred_required_field::<#schema_name, P, _>(
+						&mut self,
+						deferred_field,
+					)?;
+					let cleaned = #cleaned_payload_name::from_validated_raw(self);
+					#validator_call
+					::core::result::Result::Ok(cleaned)
 				}
 
 				fn clean_and_validate_with_deferred_required_fields(

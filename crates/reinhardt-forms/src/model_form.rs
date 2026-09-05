@@ -222,10 +222,11 @@ where
 	clean_generated_payload_with_trusted_values::<S, P, D>(data, None, true, deferred_fields)
 }
 
-/// Cleans a native generated payload while deferring one server-trusted required field.
+/// Cleans a native generated payload while deferring one required relationship identifier.
 ///
 /// **Parity: P0.** Inline formsets use this helper before a generated parent key
 /// is available; ordinary create validation remains strict on every target.
+/// Unknown fields, scalar fields, and optional relationship identifiers cannot be deferred.
 #[doc(hidden)]
 pub fn clean_generated_payload_with_deferred_required_field<S, P, D>(
 	data: &mut D,
@@ -311,12 +312,11 @@ where
 				ValidationError::Custom("This field is required.".to_owned()),
 			);
 		}
-		if !form_is_valid
-			&& let Some(messages) = form.errors().get(descriptor.name) {
-				for message in messages {
-					errors.add(descriptor.name, ValidationError::Custom(message.clone()));
-				}
+		if !form_is_valid && let Some(messages) = form.errors().get(descriptor.name) {
+			for message in messages {
+				errors.add(descriptor.name, ValidationError::Custom(message.clone()));
 			}
+		}
 	}
 	if !errors.is_empty() {
 		return Err(errors);

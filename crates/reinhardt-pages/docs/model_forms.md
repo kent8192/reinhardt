@@ -197,6 +197,11 @@ payload keeps its declared policy, which the server validates independently.
 The normalized raw payload is sent only when validation succeeds; the editable
 control state remains unchanged.
 
+URL snapshot validation uses `reinhardt_core::validators::UrlValidator` on
+native and WASM targets, matching generated server validation. Query strings
+and fragments may follow the host directly, as in
+`https://example.com?query=value` and `https://example.com#section`.
+
 Snapshot errors combine conversion failures with generated validation errors
 in schema order, with form-level errors last. A control that cannot be converted
 keeps its conversion error instead of a secondary missing-value error.

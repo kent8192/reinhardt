@@ -13,7 +13,7 @@ use reinhardt_core::model_form::{
 	ModelFormCleanedPayload, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload,
 	ModelFormPayloadError, ModelFormPolicy, ModelFormSchema, ModelFormValidatingPayload,
 };
-use reinhardt_core::validators::{ValidationError, ValidationErrors};
+use reinhardt_core::validators::{UrlValidator, ValidationError, ValidationErrors, Validator};
 
 /// Hidden compile-time selection marker for one model-form argument.
 #[doc(hidden)]
@@ -958,7 +958,9 @@ fn convert_control_value(
 			}
 			let is_valid = match descriptor.kind {
 				ModelFormFieldKind::Email { .. } => is_email(&text),
-				ModelFormFieldKind::Url { .. } => is_url(&text),
+				ModelFormFieldKind::Url { .. } => {
+					UrlValidator::new().validate(text.as_str()).is_ok()
+				}
 				_ => unreachable!("email and URL fields are handled by this conversion branch"),
 			};
 			if !is_valid {
@@ -1198,14 +1200,6 @@ fn is_email(value: &str) -> bool {
 	EMAIL_REGEX.is_match(value)
 }
 
-fn is_url(value: &str) -> bool {
-	static URL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-		Regex::new(r"^https?://(?:(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}|localhost|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?::\d+)?(?:/[^\s]*)?$")
-			.expect("native URL validation pattern is valid")
-	});
-	URL_REGEX.is_match(value)
-}
-
 fn is_date(value: &str) -> bool {
 	let bytes = value.as_bytes();
 	if !(bytes.len() == 10
@@ -1335,7 +1329,7 @@ mod tests {
 		ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError, ModelFormSchema,
 		ModelFormValidatingPayload,
 	};
-	use reinhardt_core::validators::ValidationErrors;
+	use reinhardt_core::validators::{UrlValidator, ValidationErrors, Validator};
 	use rstest::rstest;
 
 	struct NullableBooleanSchema;
@@ -1772,6 +1766,41 @@ mod tests {
 				Some(&serde_json::Value::String(String::new()))
 			);
 		}
+	}
+
+	#[rstest]
+	#[case::query("https://example.com?query=value", false, true)]
+	#[case::fragment("https://example.com#section", false, true)]
+	#[case::query_and_fragment("http://localhost:8080?query=value#section", false, true)]
+	#[case::trimmed_query(" https://example.com?query=value ", true, true)]
+	#[case::invalid_scheme("ftp://example.com?query=value", false, false)]
+	#[case::invalid_port("https://example.com:123456", false, false)]
+	fn url_snapshot_conversion_matches_canonical_validation(
+		#[case] value: &str,
+		#[case] trim: bool,
+		#[case] valid: bool,
+	) {
+		// Arrange
+		let descriptor = ModelFormFieldDescriptor {
+			trim,
+			..OptionalContactSchema::fields()[1]
+		};
+		let normalized = if trim { value.trim() } else { value };
+		let expected = if valid {
+			Ok(Some(serde_json::json!(normalized)))
+		} else {
+			Err(ModelFormPayloadError::InvalidValue {
+				field: "website".to_owned(),
+				message: "Enter a valid URL".to_owned(),
+			})
+		};
+
+		// Act
+		let converted = convert_snapshot_value(&descriptor, serde_json::json!(value));
+
+		// Assert
+		assert_eq!(UrlValidator::new().validate(normalized).is_ok(), valid);
+		assert_eq!(converted, expected);
 	}
 
 	#[test]

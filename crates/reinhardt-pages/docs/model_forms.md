@@ -197,6 +197,10 @@ payload keeps its declared policy, which the server validates independently.
 The normalized raw payload is sent only when validation succeeds; the editable
 control state remains unchanged.
 
+Snapshot errors combine conversion failures with generated validation errors
+in schema order, with form-level errors last. A control that cannot be converted
+keeps its conversion error instead of a secondary missing-value error.
+
 Snapshot validation failures become the same structured `ServerFnError` used
 for server responses. A recognized selected field is routed to
 `get_field_state(field).error`; `_all`, excluded, and unknown field names are

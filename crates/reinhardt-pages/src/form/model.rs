@@ -512,6 +512,9 @@ where
 	/// **Parity: P2.** Native and WASM targets apply the same generated field
 	/// conversion and [`ModelFormValidatingPayload`] pipeline.
 	///
+	/// Conversion failures are combined with generated validation errors. A
+	/// failed conversion takes precedence over errors caused by its absent value.
+	///
 	/// # Errors
 	///
 	/// Returns schema-ordered validation errors without changing raw control state.
@@ -541,17 +544,40 @@ where
 				}
 			}
 		}
-		if !conversion_errors.is_empty() {
-			return Err(conversion_errors);
-		}
 		let deferred_required_fields = self
 			.selected_descriptors()
 			.iter()
 			.filter(|descriptor| descriptor.required && is_file_kind(descriptor.kind))
 			.map(|descriptor| descriptor.name)
 			.collect::<Vec<_>>();
-		raw.clean_and_validate_with_deferred_required_fields(&deferred_required_fields)
-			.map(ModelFormCleanedPayload::into_raw)
+		let validated = raw
+			.clean_and_validate_with_deferred_required_fields(&deferred_required_fields)
+			.map(ModelFormCleanedPayload::into_raw);
+		if conversion_errors.is_empty() {
+			return validated;
+		}
+		let mut by_field = conversion_errors.field_errors().clone();
+		if let Err(errors) = validated {
+			for (field, errors) in errors.ordered_field_errors() {
+				by_field
+					.entry(field.to_owned().into())
+					.or_insert_with(|| errors.to_vec());
+			}
+		}
+		let mut errors = ValidationErrors::new();
+		for descriptor in S::fields() {
+			if let Some(field_errors) = by_field.remove(descriptor.name) {
+				for error in field_errors {
+					errors.add(descriptor.name, error);
+				}
+			}
+		}
+		for (field, field_errors) in by_field {
+			for error in field_errors {
+				errors.add(field.clone(), error);
+			}
+		}
+		Err(errors)
 	}
 
 	/// Converts one payload assembly failure into the structured validation contract.
@@ -1606,9 +1632,67 @@ mod tests {
 	impl ModelFormValidatingPayload for F32PairPayload {
 		type Cleaned = F32PairCleaned;
 
+		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+		fn clean_and_validate(mut self) -> Result<Self::Cleaned, ValidationErrors> {
+			reinhardt_forms::model_form::clean_generated_payload::<
+				F32PairSchema,
+				AllEditableModelFields,
+				_,
+			>(&mut self)?;
+			Ok(F32PairCleaned(self))
+		}
+
+		#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 		fn clean_and_validate(self) -> Result<Self::Cleaned, ValidationErrors> {
 			Ok(F32PairCleaned(self))
 		}
+	}
+
+	#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+	#[rstest]
+	#[case("first", "second")]
+	#[case("second", "first")]
+	fn snapshot_conversion_merges_missing_required_errors_in_schema_order(
+		#[case] invalid_field: &str,
+		#[case] missing_field: &str,
+	) {
+		// Arrange
+		let mut state = ModelFormState::<F32PairSchema, AllEditableModelFields>::new();
+		state
+			.set_value(invalid_field, serde_json::json!("1e100"))
+			.expect("raw input should remain editable");
+
+		// Act
+		let errors = match state.build_validated_payload::<F32PairPayload>() {
+			Ok(_) => panic!("conversion and generated validation must both fail"),
+			Err(errors) => errors,
+		};
+
+		// Assert
+		assert_eq!(
+			errors
+				.ordered_field_errors()
+				.map(|(field, _)| field)
+				.collect::<Vec<_>>(),
+			["first", "second"]
+		);
+		assert_eq!(
+			errors.field_errors()[invalid_field],
+			vec![reinhardt_core::validators::ValidationError::Custom(
+				format!("must be less than or equal to {}", f32::MAX as f64)
+			)]
+		);
+		assert_eq!(
+			errors.field_errors()[missing_field],
+			vec![reinhardt_core::validators::ValidationError::Custom(
+				"This field is required.".to_owned()
+			)]
+		);
+		assert_eq!(
+			state.value(invalid_field),
+			Some(&serde_json::json!("1e100"))
+		);
+		assert_eq!(state.value(missing_field), None);
 	}
 
 	#[rstest]

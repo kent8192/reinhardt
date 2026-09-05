@@ -1527,7 +1527,9 @@ mod tests {
 				),
 				(
 					"owner_id".to_owned(),
-					vec![ValidationError::Custom("owner_id".to_owned())],
+					vec![ValidationError::Custom(
+						"This field is required.".to_owned()
+					)],
 				)
 			]
 		);
@@ -2112,15 +2114,20 @@ mod tests {
 	#[test]
 	fn generated_model_form_reports_unresolved_required_model_field() {
 		let mut data = QuestionModelFormData::<QuestionPolicy>::empty();
-		data.set_title("Missing owner".to_owned());
+		data.set_title("Missing owner".to_owned()).unwrap();
 
 		let mut form = ModelForm::<Question, QuestionPolicy>::from_payload(data);
 		let error = form.build_instance().unwrap_err();
 
-		assert!(matches!(
+		assert_eq!(
 			error,
-			ModelFormError::MissingModelField { field: "owner_id" }
-		));
+			ModelFormError::FieldValidation {
+				errors: HashMap::from([(
+					"owner_id".to_owned(),
+					vec!["This field is required.".to_owned()],
+				)]),
+			}
+		);
 	}
 
 	#[test]

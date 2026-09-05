@@ -1424,7 +1424,10 @@ mod tests {
 
 		// Assert
 		assert!(!valid);
-		assert_eq!(form.errors().get("name"), Some(&vec!["name".to_string()]));
+		assert_eq!(
+			form.errors().get("name"),
+			Some(&vec!["This field is required.".to_owned()])
+		);
 	}
 
 	#[rstest]

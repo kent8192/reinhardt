@@ -565,6 +565,7 @@ where
 
 	/// Validates the payload and builds a model candidate without database access.
 	pub fn build_instance(&mut self) -> Result<T, ModelFormError> {
+		self.form.clear_errors();
 		if let Some(candidate) = &self.validated_candidate {
 			return Ok(candidate.clone());
 		}
@@ -2540,6 +2541,51 @@ mod tests {
 
 		assert!(matches!(error, ModelFormError::ModelValidation { .. }));
 		assert_eq!(executor.fetch_one_calls, 0);
+	}
+
+	#[rstest]
+	#[case::is_valid(false)]
+	#[case::build_instance(true)]
+	fn revalidation_replaces_errors_without_recleaning_payload(#[case] build_directly: bool) {
+		// Arrange
+		let model_calls = Arc::new(AtomicUsize::new(0));
+		let model_calls_for_validator = Arc::clone(&model_calls);
+		let cleaner_calls = Arc::new(AtomicUsize::new(0));
+		let cleaner_calls_for_field = Arc::clone(&cleaner_calls);
+		let mut form =
+			ModelForm::<Question, QuestionPolicy>::from_payload(question_payload("Retryable", 7))
+				.with_model_validator(move |_| {
+					let call = model_calls_for_validator.fetch_add(1, Ordering::SeqCst);
+					if call < 2 {
+						Err(vec![format!("temporary rejection {}", call + 1)])
+					} else {
+						Ok(())
+					}
+				});
+		form.form_mut()
+			.add_field_clean_function("title", move |value| {
+				cleaner_calls_for_field.fetch_add(1, Ordering::SeqCst);
+				Ok(json!(format!("{}!", value.as_str().unwrap())))
+			});
+
+		// Act and Assert
+		for message in ["temporary rejection 1", "temporary rejection 2"] {
+			assert_eq!(form.is_valid(), false);
+			assert_eq!(
+				form.form().errors(),
+				&HashMap::from([(ALL_FIELDS_KEY.to_owned(), vec![message.to_owned()])])
+			);
+		}
+		let valid = if build_directly {
+			form.build_instance().is_ok()
+		} else {
+			form.is_valid()
+		};
+		assert_eq!(valid, true);
+		assert_eq!(form.form().errors(), &HashMap::new());
+		assert_eq!(form.build_instance().unwrap().title, "Retryable!");
+		assert_eq!(model_calls.load(Ordering::SeqCst), 3);
+		assert_eq!(cleaner_calls.load(Ordering::SeqCst), 1);
 	}
 
 	#[test]

@@ -413,6 +413,8 @@ constructed `CharField`, `EmailField`, or `URLField` values.
 `build_instance()` is the equivalent of Django's `commit=False`: it validates
 and caches a model candidate without database access. Repeated calls and a
 failed `save()` reuse that candidate, which makes persistence retryable.
+Retrying model validation replaces earlier errors without rerunning field
+cleaners for an unchanged payload.
 Inline formsets also retain prevalidated child candidates when the trusted
 parent key is unchanged, so saving the parent does not rerun child validation.
 Mutations made directly to the returned clone after `build_instance()` are the

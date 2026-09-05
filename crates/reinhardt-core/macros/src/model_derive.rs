@@ -12267,6 +12267,7 @@ mod tests {
 				unsigned: Some(true),
 				..FieldConfig::default()
 			},
+			form: FieldFormConfig::default(),
 			serde_attrs: Vec::new(),
 			injected_relation_serde_skip: false,
 			rel: None,

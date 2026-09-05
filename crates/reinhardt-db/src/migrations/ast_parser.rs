@@ -10,8 +10,17 @@ use syn::{Expr, File, Item, ItemFn, Stmt};
 
 /// Extract migration metadata from parsed AST
 pub fn extract_migration_metadata(ast: &File, app_label: &str, name: &str) -> Result<Migration> {
+	// Current generated sources use a builder chain. Reuse the strict parser so
+	// filesystem loading does not silently drop operations or metadata from it.
+	for function in migration_functions(ast) {
+		let expression = migration_expression(function)?;
+		if matches!(expression, Expr::Call(_) | Expr::MethodCall(_)) {
+			return extract_migration_metadata_strict(ast, app_label, name);
+		}
+	}
+
 	let dependencies = extract_dependencies(ast)?;
-	let atomic = extract_atomic(ast).unwrap_or(true);
+	let atomic = extract_atomic(ast)?.unwrap_or(true);
 	let replaces = extract_replaces(ast).unwrap_or_default();
 	let operations = extract_operations(ast).unwrap_or_default();
 	let initial = extract_initial(ast);
@@ -35,6 +44,8 @@ pub fn extract_migration_metadata(ast: &File, app_label: &str, name: &str) -> Re
 ///
 /// `app_label` and `name` are authoritative. Filesystem callers derive them from
 /// the migration path rather than trusting duplicate identity fields in source.
+/// Every cfg-gated `migration()` entrypoint is validated and must have identical
+/// semantics, so the returned metadata is independent of cfg expansion.
 ///
 /// Swappable and optional dependencies are parsed from their constructor forms.
 /// Operation payloads that this parser cannot reconstruct exactly are rejected
@@ -44,30 +55,59 @@ pub fn extract_migration_metadata_strict(
 	app_label: &str,
 	name: &str,
 ) -> Result<Migration> {
-	let migration_expr = ast
-		.items
-		.iter()
-		.find_map(|item| {
-			let Item::Fn(function) = item else {
-				return None;
-			};
-			(function.sig.ident == "migration")
-				.then(|| function.block.stmts.last())
-				.flatten()
-				.and_then(|statement| {
-					let Stmt::Expr(expression, _) = statement else {
-						return None;
-					};
-					Some(expression)
-				})
-		})
-		.ok_or_else(|| {
-			MigrationError::InvalidMigration("Missing migration() entrypoint".to_string())
-		})?;
+	let mut expressions = migration_functions(ast).map(migration_expression);
+	let migration_expr = expressions.next().transpose()?.ok_or_else(|| {
+		MigrationError::InvalidMigration("Missing migration() entrypoint".to_string())
+	})?;
+	let migration = extract_migration_expression_strict(ast, migration_expr, app_label, name)?;
+	for expression in expressions {
+		let variant = extract_migration_expression_strict(ast, expression?, app_label, name)?;
+		if !same_migration_semantics(&migration, &variant) {
+			return Err(MigrationError::InvalidMigration(
+				"migration() entrypoints have different semantics before cfg expansion".to_string(),
+			));
+		}
+	}
+	Ok(migration)
+}
 
+pub(super) fn same_migration_semantics(left: &Migration, right: &Migration) -> bool {
+	left.operations == right.operations
+		&& left.dependencies == right.dependencies
+		&& left.replaces == right.replaces
+		&& left.atomic == right.atomic
+		&& left.initial == right.initial
+		&& left.state_only == right.state_only
+		&& left.database_only == right.database_only
+		&& left.swappable_dependencies == right.swappable_dependencies
+		&& left.optional_dependencies == right.optional_dependencies
+}
+
+fn migration_functions(ast: &File) -> impl Iterator<Item = &ItemFn> {
+	ast.items.iter().filter_map(|item| match item {
+		Item::Fn(function) if function.sig.ident == "migration" => Some(function),
+		_ => None,
+	})
+}
+
+fn migration_expression(function: &ItemFn) -> Result<&Expr> {
+	let Some(Stmt::Expr(expression, None)) = function.block.stmts.last() else {
+		return Err(MigrationError::InvalidMigration(
+			"migration() entrypoint must end with a Migration expression".to_string(),
+		));
+	};
+	Ok(expression)
+}
+
+fn extract_migration_expression_strict(
+	ast: &File,
+	migration_expr: &Expr,
+	app_label: &str,
+	name: &str,
+) -> Result<Migration> {
 	if matches!(migration_expr, Expr::Call(_) | Expr::MethodCall(_)) {
 		let mut migration = parse_migration_builder_strict(migration_expr, app_label, name)?;
-		if let Some(standalone_atomic) = extract_atomic(ast) {
+		if let Some(standalone_atomic) = extract_atomic(ast)? {
 			if builder_declares_atomic(migration_expr) && migration.atomic != standalone_atomic {
 				return Err(MigrationError::InvalidMigration(
 					"Migration builder atomic flag conflicts with atomic() entrypoint".to_string(),
@@ -117,7 +157,7 @@ pub fn extract_migration_metadata_strict(
 		.fields
 		.iter()
 		.any(|field| matches!(&field.member, syn::Member::Named(ident) if ident == "atomic"));
-	let atomic = match extract_atomic(ast) {
+	let atomic = match extract_atomic(ast)? {
 		Some(standalone_atomic) if has_atomic_field && standalone_atomic != atomic_in_struct => {
 			return Err(MigrationError::InvalidMigration(
 				"Migration atomic field conflicts with atomic() entrypoint".to_string(),
@@ -192,6 +232,21 @@ fn parse_migration_builder_strict(expr: &Expr, app_label: &str, name: &str) -> R
 						.dependencies
 						.push((dependency_app, dependency_name));
 				}
+				"add_replacement" if call.args.len() == 2 => {
+					let replacement_app = extract_string_expr(&call.args[0]).ok_or_else(|| {
+						MigrationError::InvalidMigration(
+							"Migration builder replacement app label must be a string literal"
+								.to_string(),
+						)
+					})?;
+					let replacement_name = extract_string_expr(&call.args[1]).ok_or_else(|| {
+						MigrationError::InvalidMigration(
+							"Migration builder replacement name must be a string literal"
+								.to_string(),
+						)
+					})?;
+					migration.replaces.push((replacement_app, replacement_name));
+				}
 				"add_swappable_dependency" if call.args.len() == 1 => {
 					migration
 						.swappable_dependencies
@@ -217,6 +272,15 @@ fn parse_migration_builder_strict(expr: &Expr, app_label: &str, name: &str) -> R
 									.to_string(),
 							)
 						})?);
+				}
+				"with_initial" if call.args.len() == 1 => {
+					migration.initial =
+						parse_optional_bool_expression(&call.args[0]).ok_or_else(|| {
+							MigrationError::InvalidMigration(
+								"Migration builder initial flag must be Some(bool) or None"
+									.to_string(),
+							)
+						})?;
 				}
 				"state_only" if call.args.len() == 1 => {
 					migration.state_only =
@@ -259,6 +323,21 @@ fn parse_bool_expression(expr: &Expr) -> Option<bool> {
 		return None;
 	};
 	Some(value.value)
+}
+
+fn parse_optional_bool_expression(expr: &Expr) -> Option<Option<bool>> {
+	if is_none_expression(expr) {
+		return Some(None);
+	}
+	let Expr::Call(call) = expr else {
+		return None;
+	};
+	if !matches!(&*call.func, Expr::Path(path) if path.path.is_ident("Some"))
+		|| call.args.len() != 1
+	{
+		return None;
+	}
+	parse_bool_expression(&call.args[0]).map(Some)
 }
 
 fn dependency_metadata_expressions(
@@ -444,15 +523,18 @@ fn extract_dependencies(ast: &File) -> Result<Vec<(String, String)>> {
 }
 
 /// Extract atomic flag from `atomic()` function
-fn extract_atomic(ast: &File) -> Option<bool> {
-	for item in &ast.items {
-		if let Item::Fn(func) = item
-			&& func.sig.ident == "atomic"
-		{
-			return parse_bool_return(func);
-		}
+fn extract_atomic(ast: &File) -> Result<Option<bool>> {
+	let mut functions = ast.items.iter().filter_map(|item| match item {
+		Item::Fn(function) if function.sig.ident == "atomic" => Some(function),
+		_ => None,
+	});
+	let atomic = functions.next().and_then(parse_bool_return);
+	if functions.next().is_some() {
+		return Err(MigrationError::InvalidMigration(
+			"multiple atomic() entrypoints are ambiguous before cfg expansion".to_string(),
+		));
 	}
-	None
+	Ok(atomic)
 }
 
 /// Extract replaces from `migration()` function
@@ -1295,29 +1377,54 @@ fn parse_optional_interleave_spec_field_strict(
 }
 
 fn parse_interleave_spec_strict(expr: &Expr, context: &str) -> Result<super::InterleaveSpec> {
-	let Expr::Struct(specification) = expr else {
-		return Err(MigrationError::InvalidMigration(format!(
+	match expr {
+		Expr::Struct(specification) => {
+			if !path_ends_with(&specification.path, "InterleaveSpec") {
+				return Err(MigrationError::InvalidMigration(format!(
+					"{context} is unsupported or malformed"
+				)));
+			}
+			validate_exact_named_fields(
+				&specification.fields,
+				&["parent_table", "parent_columns"],
+				context,
+			)?;
+			Ok(super::InterleaveSpec {
+				parent_table: parse_string_field_strict(
+					&specification.fields,
+					"parent_table",
+					context,
+				)?,
+				parent_columns: parse_string_vector_field_strict(
+					&specification.fields,
+					"parent_columns",
+					context,
+				)?,
+			})
+		}
+		Expr::Call(call) => {
+			let Expr::Path(function) = &*call.func else {
+				return Err(MigrationError::InvalidMigration(format!(
+					"{context} is unsupported or malformed"
+				)));
+			};
+			if !call_path_is(&Expr::Path(function.clone()), "InterleaveSpec", "new")
+				|| call.args.len() != 2
+			{
+				return Err(MigrationError::InvalidMigration(format!(
+					"{context} is unsupported or malformed"
+				)));
+			}
+			Ok(super::InterleaveSpec::new(
+				extract_string_expr(&call.args[0])
+					.ok_or_else(|| strict_payload_error(context, "parent_table"))?,
+				parse_string_vector_strict(&call.args[1], &format!("{context}.parent_columns"))?,
+			))
+		}
+		_ => Err(MigrationError::InvalidMigration(format!(
 			"{context} is unsupported or malformed"
-		)));
-	};
-	if !path_ends_with(&specification.path, "InterleaveSpec") {
-		return Err(MigrationError::InvalidMigration(format!(
-			"{context} is unsupported or malformed"
-		)));
+		))),
 	}
-	validate_exact_named_fields(
-		&specification.fields,
-		&["parent_table", "parent_columns"],
-		context,
-	)?;
-	Ok(super::InterleaveSpec {
-		parent_table: parse_string_field_strict(&specification.fields, "parent_table", context)?,
-		parent_columns: parse_string_vector_field_strict(
-			&specification.fields,
-			"parent_columns",
-			context,
-		)?,
-	})
 }
 
 fn parse_optional_partition_options_field_strict(
@@ -2951,6 +3058,9 @@ fn parse_columns_vec(expr: &Expr) -> Vec<super::ColumnDefinition> {
 
 /// Parse a single ColumnDefinition from struct expression
 fn parse_column_definition(expr: &Expr) -> Option<super::ColumnDefinition> {
+	if let Ok(column) = parse_column_definition_builder_strict(expr, "ColumnDefinition") {
+		return Some(column);
+	}
 	if let Expr::Struct(expr_struct) = expr {
 		// Verify it's a ColumnDefinition struct
 		let struct_name = expr_struct.path.segments.last()?.ident.to_string();
@@ -2987,10 +3097,11 @@ fn parse_column_definition(expr: &Expr) -> Option<super::ColumnDefinition> {
 }
 
 fn parse_column_definition_strict(expr: &Expr, context: &str) -> Result<super::ColumnDefinition> {
+	if !matches!(expr, Expr::Struct(_)) {
+		return parse_column_definition_builder_strict(expr, context);
+	}
 	let Expr::Struct(column) = expr else {
-		return Err(MigrationError::InvalidMigration(format!(
-			"{context} is unsupported or malformed"
-		)));
+		unreachable!("struct expression checked above");
 	};
 	if column
 		.path
@@ -3044,6 +3155,78 @@ fn parse_column_definition_strict(expr: &Expr, context: &str) -> Result<super::C
 		generated,
 		domain,
 	})
+}
+
+fn parse_column_definition_builder_strict(
+	expr: &Expr,
+	context: &str,
+) -> Result<super::ColumnDefinition> {
+	match expr {
+		Expr::Call(call)
+			if call_path_is(&call.func, "ColumnDefinition", "new") && call.args.len() == 2 =>
+		{
+			let name = extract_string_expr(&call.args[0])
+				.ok_or_else(|| strict_payload_error(context, "name"))?;
+			let type_definition = parse_field_type_strict(&call.args[1])
+				.ok_or_else(|| strict_payload_error(context, "type_definition"))?;
+			Ok(super::ColumnDefinition::new(name, type_definition))
+		}
+		Expr::MethodCall(call) => {
+			let mut column = parse_column_definition_builder_strict(&call.receiver, context)?;
+			let argument = call
+				.args
+				.first()
+				.ok_or_else(|| strict_payload_error(context, &call.method.to_string()))?;
+			if call.args.len() != 1 {
+				return Err(strict_payload_error(context, &call.method.to_string()));
+			}
+			match call.method.to_string().as_str() {
+				"with_not_null" => {
+					column.not_null = parse_bool_expression(argument)
+						.ok_or_else(|| strict_payload_error(context, "not_null"))?
+				}
+				"with_unique" => {
+					column.unique = parse_bool_expression(argument)
+						.ok_or_else(|| strict_payload_error(context, "unique"))?
+				}
+				"with_primary_key" => {
+					column.primary_key = parse_bool_expression(argument)
+						.ok_or_else(|| strict_payload_error(context, "primary_key"))?
+				}
+				"with_auto_increment" => {
+					column.auto_increment = parse_bool_expression(argument)
+						.ok_or_else(|| strict_payload_error(context, "auto_increment"))?
+				}
+				"with_default" => {
+					column.default = parse_optional_string_strict(argument)
+						.ok_or_else(|| strict_payload_error(context, "default"))?;
+				}
+				"with_generated" => {
+					column.generated = parse_optional_generated_expression_strict(
+						argument,
+						&format!("{context}.generated"),
+					)?;
+				}
+				"with_domain_option" => {
+					column.domain = parse_optional_domain_expression_strict(
+						argument,
+						&format!("{context}.domain"),
+					)?;
+				}
+				"with_domain" => {
+					column.domain = Some(parse_field_domain_strict(
+						argument,
+						&format!("{context}.domain"),
+					)?);
+				}
+				method => return Err(strict_payload_error(context, method)),
+			}
+			Ok(column)
+		}
+		_ => Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		))),
+	}
 }
 
 fn parse_bool_field_strict(
@@ -3127,20 +3310,32 @@ fn parse_optional_generated_field_strict(
 ) -> Result<Option<super::GeneratedColumnDefinition>> {
 	let expression = strict_field_expression(fields, field_name)
 		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	parse_optional_generated_expression_strict(expression, &format!("{context}.{field_name}"))
+}
+
+fn parse_optional_generated_expression_strict(
+	expression: &Expr,
+	context: &str,
+) -> Result<Option<super::GeneratedColumnDefinition>> {
 	if is_none_expression(expression) {
 		return Ok(None);
 	}
 	let Expr::Call(call) = expression else {
-		return Err(strict_payload_error(context, field_name));
+		return Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		)));
 	};
 	let Expr::Path(some) = &*call.func else {
-		return Err(strict_payload_error(context, field_name));
+		return Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		)));
 	};
 	if !some.path.is_ident("Some") || call.args.len() != 1 {
-		return Err(strict_payload_error(context, field_name));
+		return Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		)));
 	}
-	parse_generated_column_definition_strict(&call.args[0], &format!("{context}.{field_name}"))
-		.map(Some)
+	parse_generated_column_definition_strict(&call.args[0], context).map(Some)
 }
 
 fn parse_optional_domain_field_strict(
@@ -3150,19 +3345,26 @@ fn parse_optional_domain_field_strict(
 ) -> Result<Option<crate::field_domain::FieldDomain>> {
 	let expression = strict_field_expression(fields, field_name)
 		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	parse_optional_domain_expression_strict(expression, &format!("{context}.{field_name}"))
+}
+
+fn parse_optional_domain_expression_strict(
+	expression: &Expr,
+	context: &str,
+) -> Result<Option<crate::field_domain::FieldDomain>> {
 	if is_none_expression(expression) {
 		return Ok(None);
 	}
 	let Expr::Call(call) = expression else {
-		return Err(strict_payload_error(context, field_name));
+		return Err(strict_payload_error(context, "domain"));
 	};
 	let Expr::Path(some) = &*call.func else {
-		return Err(strict_payload_error(context, field_name));
+		return Err(strict_payload_error(context, "domain"));
 	};
 	if !some.path.is_ident("Some") || call.args.len() != 1 {
-		return Err(strict_payload_error(context, field_name));
+		return Err(strict_payload_error(context, "domain"));
 	}
-	parse_field_domain_strict(&call.args[0], &format!("{context}.{field_name}")).map(Some)
+	parse_field_domain_strict(&call.args[0], &format!("{context}.domain")).map(Some)
 }
 
 fn parse_string_vector_strict(expr: &Expr, context: &str) -> Result<Vec<String>> {
@@ -3377,6 +3579,16 @@ fn parse_optional_char_strict(expr: &Expr) -> Option<Option<char>> {
 	Some(Some(value.value()))
 }
 
+fn parse_char_expression(expr: &Expr) -> Option<Option<char>> {
+	match expr {
+		Expr::Lit(syn::ExprLit {
+			lit: syn::Lit::Char(value),
+			..
+		}) => Some(Some(value.value())),
+		_ => None,
+	}
+}
+
 fn parse_optional_char_field_strict(
 	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
 	field_name: &str,
@@ -3394,11 +3606,104 @@ fn parse_bulk_load_options_field_strict(
 ) -> Result<super::BulkLoadOptions> {
 	let expression = strict_field_expression(fields, field_name)
 		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	parse_bulk_load_options_expr_strict(expression, context)
+}
+
+fn parse_bulk_load_options_expr_strict(
+	expression: &Expr,
+	context: &str,
+) -> Result<super::BulkLoadOptions> {
+	if let Expr::Call(call) = expression
+		&& call.args.is_empty()
+		&& call_path_is(&call.func, "BulkLoadOptions", "new")
+	{
+		return Ok(super::BulkLoadOptions::new());
+	}
+	if let Expr::MethodCall(call) = expression {
+		let mut options = parse_bulk_load_options_expr_strict(&call.receiver, context)?;
+		if call.args.len() != 1 {
+			return Err(strict_payload_error(context, &call.method.to_string()));
+		}
+		let argument = &call.args[0];
+		match call.method.to_string().as_str() {
+			"with_delimiter" => {
+				options.delimiter = parse_char_expression(argument)
+					.ok_or_else(|| strict_payload_error(context, "delimiter"))?;
+			}
+			"with_delimiter_option" => {
+				options.delimiter = parse_optional_char_strict(argument)
+					.ok_or_else(|| strict_payload_error(context, "delimiter"))?;
+			}
+			"with_null_string" => {
+				options.null_string = Some(
+					extract_string_expr(argument)
+						.ok_or_else(|| strict_payload_error(context, "null_string"))?,
+				);
+			}
+			"with_null_string_option" => {
+				options.null_string = parse_optional_string_strict(argument)
+					.ok_or_else(|| strict_payload_error(context, "null_string"))?;
+			}
+			"with_header" => {
+				options.header = parse_bool_expression(argument)
+					.ok_or_else(|| strict_payload_error(context, "header"))?;
+			}
+			"with_columns" => {
+				options.columns = Some(parse_string_vector_strict(argument, context)?);
+			}
+			"with_columns_option" => {
+				options.columns =
+					parse_optional_string_vector_expression_strict(argument, context)?;
+			}
+			"with_local" => {
+				options.local = parse_bool_expression(argument)
+					.ok_or_else(|| strict_payload_error(context, "local"))?;
+			}
+			"with_quote" => {
+				options.quote = parse_char_expression(argument)
+					.ok_or_else(|| strict_payload_error(context, "quote"))?;
+			}
+			"with_quote_option" => {
+				options.quote = parse_optional_char_strict(argument)
+					.ok_or_else(|| strict_payload_error(context, "quote"))?;
+			}
+			"with_escape" => {
+				options.escape = parse_char_expression(argument)
+					.ok_or_else(|| strict_payload_error(context, "escape"))?;
+			}
+			"with_escape_option" => {
+				options.escape = parse_optional_char_strict(argument)
+					.ok_or_else(|| strict_payload_error(context, "escape"))?;
+			}
+			"with_line_terminator" => {
+				options.line_terminator = Some(
+					extract_string_expr(argument)
+						.ok_or_else(|| strict_payload_error(context, "line_terminator"))?,
+				);
+			}
+			"with_line_terminator_option" => {
+				options.line_terminator = parse_optional_string_strict(argument)
+					.ok_or_else(|| strict_payload_error(context, "line_terminator"))?;
+			}
+			"with_encoding" => {
+				options.encoding = Some(
+					extract_string_expr(argument)
+						.ok_or_else(|| strict_payload_error(context, "encoding"))?,
+				);
+			}
+			"with_encoding_option" => {
+				options.encoding = parse_optional_string_strict(argument)
+					.ok_or_else(|| strict_payload_error(context, "encoding"))?;
+			}
+			method => return Err(strict_payload_error(context, method)),
+		}
+		return Ok(options);
+	}
 	let Expr::Struct(options) = expression else {
-		return Err(strict_payload_error(context, field_name));
+		return Err(strict_payload_error(context, "options"));
 	};
 	if !path_ends_with(&options.path, "BulkLoadOptions") {
-		return Err(strict_payload_error(context, field_name));
+		return Err(strict_payload_error(context, "options"));
 	}
 	validate_exact_named_fields(
 		&options.fields,
@@ -3452,6 +3757,24 @@ fn parse_optional_string_vector_field_strict(
 		return Err(strict_payload_error(context, field_name));
 	}
 	parse_string_vector_strict(&call.args[0], &format!("{context}.{field_name}")).map(Some)
+}
+
+fn parse_optional_string_vector_expression_strict(
+	expression: &Expr,
+	context: &str,
+) -> Result<Option<Vec<String>>> {
+	if is_none_expression(expression) {
+		return Ok(None);
+	}
+	let Expr::Call(call) = expression else {
+		return Err(strict_payload_error(context, "columns"));
+	};
+	if !matches!(&*call.func, Expr::Path(path) if path.path.is_ident("Some"))
+		|| call.args.len() != 1
+	{
+		return Err(strict_payload_error(context, "columns"));
+	}
+	parse_string_vector_strict(&call.args[0], &format!("{context}.columns")).map(Some)
 }
 
 fn parse_optional_index_type_field_strict(
@@ -4014,6 +4337,16 @@ fn parse_generated_column_definition(expr: &Expr) -> Option<super::GeneratedColu
 					storage,
 				})
 			}
+			"tokens" if expr_call.args.len() == 2 => {
+				let expr_tokens = extract_string_literal(&expr_call.args[0])?;
+				let storage = parse_generated_storage_expr(&expr_call.args[1])?;
+				Some(super::GeneratedColumnDefinition {
+					expr: None,
+					expr_tokens: Some(expr_tokens),
+					raw_sql: None,
+					storage,
+				})
+			}
 			_ => None,
 		};
 	}
@@ -4234,14 +4567,51 @@ fn parse_schema_value(expr: &Expr) -> Option<QueryValue> {
 			if !matches!(expr_unary.op, syn::UnOp::Neg(_)) {
 				return None;
 			}
+			if let Expr::Lit(expr_lit) = &*expr_unary.expr
+				&& let syn::Lit::Int(lit_int) = &expr_lit.lit
+			{
+				return parse_negative_integer_schema_value(lit_int);
+			}
 			match parse_schema_value(&expr_unary.expr)? {
-				QueryValue::Int(Some(value)) => Some(QueryValue::Int(Some(-value))),
-				QueryValue::BigInt(Some(value)) => Some(QueryValue::BigInt(Some(-value))),
+				QueryValue::TinyInt(Some(value)) => {
+					Some(QueryValue::TinyInt(Some(value.checked_neg()?)))
+				}
+				QueryValue::SmallInt(Some(value)) => {
+					Some(QueryValue::SmallInt(Some(value.checked_neg()?)))
+				}
+				QueryValue::Int(Some(value)) => Some(QueryValue::Int(Some(value.checked_neg()?))),
+				QueryValue::BigInt(Some(value)) => {
+					Some(QueryValue::BigInt(Some(value.checked_neg()?)))
+				}
 				QueryValue::Float(Some(value)) => Some(QueryValue::Float(Some(-value))),
 				QueryValue::Double(Some(value)) => Some(QueryValue::Double(Some(-value))),
 				_ => None,
 			}
 		}
+		_ => None,
+	}
+}
+
+fn parse_negative_integer_schema_value(lit_int: &syn::LitInt) -> Option<QueryValue> {
+	let magnitude = lit_int.base10_parse::<u64>().ok()?;
+	let value = -i128::from(magnitude);
+	match lit_int.suffix() {
+		"i8" => i8::try_from(value)
+			.map(|value| QueryValue::TinyInt(Some(value)))
+			.ok(),
+		"i16" => i16::try_from(value)
+			.map(|value| QueryValue::SmallInt(Some(value)))
+			.ok(),
+		"i32" => i32::try_from(value)
+			.map(|value| QueryValue::Int(Some(value)))
+			.ok(),
+		"i64" => i64::try_from(value)
+			.map(|value| QueryValue::BigInt(Some(value)))
+			.ok(),
+		"" => i32::try_from(value)
+			.map(|value| QueryValue::Int(Some(value)))
+			.or_else(|_| i64::try_from(value).map(|value| QueryValue::BigInt(Some(value))))
+			.ok(),
 		_ => None,
 	}
 }
@@ -4656,6 +5026,97 @@ mod parser_tests {
 
 		// Assert
 		assert_eq!(error.to_string(), expected);
+	}
+
+	#[test]
+	fn strict_metadata_rejects_cfg_entrypoint_without_tail_expression() {
+		let ast = syn::parse_file(
+			r#"
+			#[cfg(feature = "postgres")]
+			pub fn migration() -> Migration {
+				Migration::new("0001_backend", "blog")
+			}
+
+			#[cfg(feature = "sqlite")]
+			pub fn migration() -> Migration {
+				let migration = Migration::new("0001_backend", "blog");
+			}
+			"#,
+		)
+		.unwrap();
+
+		let error = extract_migration_metadata_strict(&ast, "blog", "0001_backend").unwrap_err();
+
+		assert_eq!(
+			error.to_string(),
+			"Invalid migration: migration() entrypoint must end with a Migration expression"
+		);
+	}
+
+	#[test]
+	fn strict_metadata_rejects_cfg_gated_entrypoints_with_different_semantics() {
+		let ast = syn::parse_file(
+			r#"
+			#[cfg(feature = "postgres")]
+			pub fn migration() -> Migration {
+				Migration::new("0001_backend", "blog").add_operation(Operation::RunSQL {
+					sql: "SELECT 1".to_string(),
+					reverse_sql: None,
+				})
+			}
+
+			#[cfg(feature = "sqlite")]
+			pub fn migration() -> Migration {
+				Migration::new("0001_backend", "blog").add_operation(Operation::RunSQL {
+					sql: "SELECT 2".to_string(),
+					reverse_sql: None,
+				})
+			}
+			"#,
+		)
+		.unwrap();
+
+		let error = extract_migration_metadata_strict(&ast, "blog", "0001_backend").unwrap_err();
+
+		assert_eq!(
+			error.to_string(),
+			"Invalid migration: migration() entrypoints have different semantics before cfg expansion"
+		);
+	}
+
+	#[rstest]
+	fn strict_metadata_rejects_ambiguous_cfg_gated_atomic_entrypoints() {
+		let ast = syn::parse_file(
+			r#"
+			#[cfg(feature = "postgres")]
+			pub fn migration() -> Migration {
+				Migration::new("0001_backend", "blog")
+			}
+
+			#[cfg(feature = "sqlite")]
+			pub fn migration() -> Migration {
+				Migration::new("0001_backend", "blog")
+			}
+
+			#[cfg(feature = "postgres")]
+			pub fn atomic() -> bool {
+				true
+			}
+
+			#[cfg(feature = "sqlite")]
+			pub fn atomic() -> bool {
+				false
+			}
+			"#,
+		)
+		.unwrap();
+
+		let error = extract_migration_metadata_strict(&ast, "blog", "0001_backend").unwrap_err();
+
+		assert_eq!(
+			error.to_string(),
+			"Invalid migration: multiple atomic() entrypoints are ambiguous before cfg expansion"
+		);
 	}
 
 	#[rstest]
@@ -6914,7 +7375,7 @@ mod tests {
 
 		let empty_ast: syn::File = syn::parse_str("fn unrelated() {}").unwrap();
 		assert_eq!(extract_dependencies(&empty_ast).unwrap(), []);
-		assert_eq!(extract_atomic(&empty_ast), None);
+		assert_eq!(extract_atomic(&empty_ast).unwrap(), None);
 		assert_eq!(extract_replaces(&empty_ast), None);
 		assert_eq!(extract_initial(&empty_ast), None);
 		assert_eq!(extract_operations(&empty_ast).unwrap(), []);

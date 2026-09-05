@@ -251,23 +251,15 @@ async fn deleted_object_history_remains_persisted_but_is_not_queryable(
 	.expect("delete must succeed");
 
 	// Act
-	let deleted_history = get_history(
-		"testmodel".to_string(),
-		format!("0{object_id}"),
-		1,
-		site.clone(),
-		db.clone(),
-		make_staff_request(),
-		make_auth_user(),
-	)
-	.await
-	.expect_err("deleted object history must not bypass the object queryset");
+	let history_result = query_history_result(&context, &format!("0{object_id}"), 1).await;
 	let actions = exact_history_actions(db, "TestModel", "test_models", &object_id).await;
 	let serialized =
 		serde_json::to_string(&visible_history).expect("visible history must serialize");
 
 	// Assert
-	assert_object_not_found(deleted_history);
+	assert_object_not_found(
+		history_result.expect_err("deleted object history must be outside the active scope"),
+	);
 	assert_eq!(actions, ["DELETE", "UPDATE", "CREATE"]);
 	assert_eq!(visible_history.count, 2);
 	assert_eq!(visible_history.page, 1);

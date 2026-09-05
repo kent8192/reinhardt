@@ -157,6 +157,9 @@ examples/examples-twitter/static/admin/
 .superpowers/
 docs/plans/
 docs/superpowers/
+/CONTEXT.md
+/CONTEXT-MAP.md
+/docs/adr/
 website/public/
 website/static/giallo*.css
 

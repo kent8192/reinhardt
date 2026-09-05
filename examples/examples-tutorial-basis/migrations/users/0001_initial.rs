@@ -1,96 +1,67 @@
+// reinhardt-migration-source: 1
 use reinhardt::db::migrations::FieldType;
 use reinhardt::db::migrations::prelude::*;
 pub(super) fn migration() -> Migration {
-	Migration {
-		app_label: "users".to_string(),
-		name: "0001_initial".to_string(),
-		operations: vec![Operation::CreateTable {
+	Migration::new("0001_initial".to_string(), "users".to_string())
+		.add_operation(Operation::CreateTable {
 			name: "users".to_string(),
 			columns: vec![
-				ColumnDefinition {
-					name: "created_at".to_string(),
-					type_definition: FieldType::TimestampTz,
-					not_null: true,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
-				ColumnDefinition {
-					name: "id".to_string(),
-					type_definition: FieldType::BigInteger,
-					not_null: true,
-					unique: false,
-					primary_key: true,
-					auto_increment: true,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
-				ColumnDefinition {
-					name: "is_active".to_string(),
-					type_definition: FieldType::Boolean,
-					not_null: true,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
-					default: Some("true".to_string()),
-
-					generated: None,
-					domain: None,
-				},
-				ColumnDefinition {
-					name: "is_superuser".to_string(),
-					type_definition: FieldType::Boolean,
-					not_null: true,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
-					default: Some("false".to_string()),
-
-					generated: None,
-					domain: None,
-				},
-				ColumnDefinition {
-					name: "last_login".to_string(),
-					type_definition: FieldType::TimestampTz,
-					not_null: false,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
-				ColumnDefinition {
-					name: "password_hash".to_string(),
-					type_definition: FieldType::VarChar(255u32),
-					not_null: false,
-					unique: false,
-					primary_key: false,
-					auto_increment: false,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
-				ColumnDefinition {
-					name: "username".to_string(),
-					type_definition: FieldType::VarChar(150u32),
-					not_null: true,
-					unique: true,
-					primary_key: false,
-					auto_increment: false,
-					default: None,
-
-					generated: None,
-					domain: None,
-				},
+				ColumnDefinition::new("created_at".to_string(), FieldType::TimestampTz)
+					.with_not_null(true)
+					.with_unique(false)
+					.with_primary_key(false)
+					.with_auto_increment(false)
+					.with_default(None)
+					.with_generated(None)
+					.with_domain_option(None),
+				ColumnDefinition::new("id".to_string(), FieldType::BigInteger)
+					.with_not_null(true)
+					.with_unique(false)
+					.with_primary_key(true)
+					.with_auto_increment(true)
+					.with_default(None)
+					.with_generated(None)
+					.with_domain_option(None),
+				ColumnDefinition::new("is_active".to_string(), FieldType::Boolean)
+					.with_not_null(true)
+					.with_unique(false)
+					.with_primary_key(false)
+					.with_auto_increment(false)
+					.with_default(Some("true".to_string()))
+					.with_generated(None)
+					.with_domain_option(None),
+				ColumnDefinition::new("is_superuser".to_string(), FieldType::Boolean)
+					.with_not_null(true)
+					.with_unique(false)
+					.with_primary_key(false)
+					.with_auto_increment(false)
+					.with_default(Some("false".to_string()))
+					.with_generated(None)
+					.with_domain_option(None),
+				ColumnDefinition::new("last_login".to_string(), FieldType::TimestampTz)
+					.with_not_null(false)
+					.with_unique(false)
+					.with_primary_key(false)
+					.with_auto_increment(false)
+					.with_default(None)
+					.with_generated(None)
+					.with_domain_option(None),
+				ColumnDefinition::new("password_hash".to_string(), FieldType::VarChar(255u32))
+					.with_not_null(false)
+					.with_unique(false)
+					.with_primary_key(false)
+					.with_auto_increment(false)
+					.with_default(None)
+					.with_generated(None)
+					.with_domain_option(None),
+				ColumnDefinition::new("username".to_string(), FieldType::VarChar(150u32))
+					.with_not_null(true)
+					.with_unique(true)
+					.with_primary_key(false)
+					.with_auto_increment(false)
+					.with_default(None)
+					.with_generated(None)
+					.with_domain_option(None),
 			],
 			constraints: vec![Constraint::Unique {
 				name: "users_user_username_uniq".to_string(),
@@ -99,14 +70,9 @@ pub(super) fn migration() -> Migration {
 			without_rowid: None,
 			interleave_in_parent: None,
 			partition: None,
-		}],
-		dependencies: vec![],
-		atomic: true,
-		replaces: vec![],
-		initial: Some(true),
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	}
+		})
+		.atomic(true)
+		.with_initial(Some(true))
+		.state_only(false)
+		.database_only(false)
 }

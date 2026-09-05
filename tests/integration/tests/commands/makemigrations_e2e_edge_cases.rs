@@ -530,16 +530,22 @@ async fn ec_mm_03_01_concurrent_migration_creation() {
 			let mut repository = FilesystemRepository::new(repo_dir);
 
 			// Try to save migration (may race with other tasks)
-			let migration = Migration {
-				app_label: "concurrent_app".to_string(),
-				name: format!("000{}_concurrent_{}", i + 1, i),
-				operations: vec![Operation::RunSQL {
+			let migration = Migration::from_parts(
+				format!("000{}_concurrent_{}", i + 1, i),
+				"concurrent_app".to_string(),
+				vec![Operation::RunSQL {
 					sql: format!("CREATE TABLE concurrent_{} (id INT PRIMARY KEY)", i),
 					reverse_sql: Some(format!("DROP TABLE concurrent_{}", i)),
 				}],
-				dependencies: vec![],
-				..Default::default()
-			};
+				vec![],
+				Vec::new(),
+				true,
+				None,
+				false,
+				false,
+				Vec::new(),
+				Vec::new(),
+			);
 
 			let result = repository.save(&migration).await;
 			(result, migration.name.clone())
@@ -715,16 +721,22 @@ async fn ec_mm_04_01_read_only_migrations_directory() {
 
 	// Act - Try to save a new migration
 	let mut repository = FilesystemRepository::new(migrations_path.clone());
-	let new_migration = Migration {
-		app_label: "readonly_app".to_string(),
-		name: "0002_should_fail".to_string(),
-		operations: vec![Operation::RunSQL {
+	let new_migration = Migration::from_parts(
+		"0002_should_fail".to_string(),
+		"readonly_app".to_string(),
+		vec![Operation::RunSQL {
 			sql: "CREATE TABLE should_fail (id INT PRIMARY KEY)".to_string(),
 			reverse_sql: Some("DROP TABLE should_fail".to_string()),
 		}],
-		dependencies: vec![],
-		..Default::default()
-	};
+		vec![],
+		Vec::new(),
+		true,
+		None,
+		false,
+		false,
+		Vec::new(),
+		Vec::new(),
+	);
 
 	let result = repository.save(&new_migration).await;
 

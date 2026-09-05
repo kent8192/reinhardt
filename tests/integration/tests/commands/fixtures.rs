@@ -51,13 +51,19 @@ impl MigrateCommandFixture {
 		name: &str,
 		operations: Vec<Operation>,
 	) {
-		let migration = Migration {
-			app_label: app_label.to_string(),
-			name: name.to_string(),
+		let migration = Migration::from_parts(
+			name.to_string(),
+			app_label.to_string(),
 			operations,
-			dependencies: vec![],
-			..Default::default()
-		};
+			vec![],
+			Vec::new(),
+			true,
+			None,
+			false,
+			false,
+			Vec::new(),
+			Vec::new(),
+		);
 		self.migrations.add_migration(migration);
 	}
 
@@ -715,10 +721,10 @@ pub(crate) async fn insert_test_posts(
 pub(crate) fn create_unicode_migrations() -> Vec<Migration> {
 	vec![
 		// Japanese table name migration
-		Migration {
-			app_label: "unicode".to_string(),
-			name: "0001_japanese_table".to_string(),
-			operations: vec![Operation::RunSQL {
+		Migration::from_parts(
+			"0001_japanese_table".to_string(),
+			"unicode".to_string(),
+			vec![Operation::RunSQL {
 				// Create table with Japanese name using quoted identifier
 				sql: Query::create_table()
 					.table(Alias::new("\"ユーザー\""))
@@ -742,14 +748,20 @@ pub(crate) fn create_unicode_migrations() -> Vec<Migration> {
 					.to_string(PostgresQueryBuilder::new()),
 				reverse_sql: Some("DROP TABLE IF EXISTS \"ユーザー\"".to_string()),
 			}],
-			dependencies: vec![],
-			..Default::default()
-		},
+			vec![],
+			Vec::new(),
+			true,
+			None,
+			false,
+			false,
+			Vec::new(),
+			Vec::new(),
+		),
 		// Emoji column name migration
-		Migration {
-			app_label: "unicode".to_string(),
-			name: "0002_emoji_columns".to_string(),
-			operations: vec![Operation::RunSQL {
+		Migration::from_parts(
+			"0002_emoji_columns".to_string(),
+			"unicode".to_string(),
+			vec![Operation::RunSQL {
 				sql: Query::create_table()
 					.table(Alias::new("emoji_table"))
 					.col(
@@ -765,14 +777,20 @@ pub(crate) fn create_unicode_migrations() -> Vec<Migration> {
 					.to_string(PostgresQueryBuilder::new()),
 				reverse_sql: Some("DROP TABLE IF EXISTS emoji_table".to_string()),
 			}],
-			dependencies: vec![("unicode".to_string(), "0001_japanese_table".to_string())],
-			..Default::default()
-		},
+			vec![("unicode".to_string(), "0001_japanese_table".to_string())],
+			Vec::new(),
+			true,
+			None,
+			false,
+			false,
+			Vec::new(),
+			Vec::new(),
+		),
 		// Mixed Unicode identifiers
-		Migration {
-			app_label: "unicode".to_string(),
-			name: "0003_mixed_unicode".to_string(),
-			operations: vec![Operation::RunSQL {
+		Migration::from_parts(
+			"0003_mixed_unicode".to_string(),
+			"unicode".to_string(),
+			vec![Operation::RunSQL {
 				sql: Query::create_table()
 					.table(Alias::new("\"製品\""))
 					.col(
@@ -788,9 +806,15 @@ pub(crate) fn create_unicode_migrations() -> Vec<Migration> {
 					.to_string(PostgresQueryBuilder::new()),
 				reverse_sql: Some("DROP TABLE IF EXISTS \"製品\"".to_string()),
 			}],
-			dependencies: vec![("unicode".to_string(), "0002_emoji_columns".to_string())],
-			..Default::default()
-		},
+			vec![("unicode".to_string(), "0002_emoji_columns".to_string())],
+			Vec::new(),
+			true,
+			None,
+			false,
+			false,
+			Vec::new(),
+			Vec::new(),
+		),
 	]
 }
 
@@ -803,10 +827,10 @@ pub(crate) fn create_unicode_migrations() -> Vec<Migration> {
 pub(crate) fn create_overflow_numbered_migrations() -> Vec<Migration> {
 	vec![
 		// Migration 9998
-		Migration {
-			app_label: "overflow".to_string(),
-			name: "9998_create_users".to_string(),
-			operations: vec![Operation::RunSQL {
+		Migration::from_parts(
+			"9998_create_users".to_string(),
+			"overflow".to_string(),
+			vec![Operation::RunSQL {
 				sql: Query::create_table()
 					.table(Alias::new("overflow_users"))
 					.col(
@@ -824,14 +848,20 @@ pub(crate) fn create_overflow_numbered_migrations() -> Vec<Migration> {
 					.to_string(PostgresQueryBuilder::new()),
 				reverse_sql: Some("DROP TABLE IF EXISTS overflow_users".to_string()),
 			}],
-			dependencies: vec![],
-			..Default::default()
-		},
+			vec![],
+			Vec::new(),
+			true,
+			None,
+			false,
+			false,
+			Vec::new(),
+			Vec::new(),
+		),
 		// Migration 9999
-		Migration {
-			app_label: "overflow".to_string(),
-			name: "9999_create_posts".to_string(),
-			operations: vec![Operation::RunSQL {
+		Migration::from_parts(
+			"9999_create_posts".to_string(),
+			"overflow".to_string(),
+			vec![Operation::RunSQL {
 				sql: Query::create_table()
 					.table(Alias::new("overflow_posts"))
 					.col(
@@ -850,14 +880,20 @@ pub(crate) fn create_overflow_numbered_migrations() -> Vec<Migration> {
 					.to_string(PostgresQueryBuilder::new()),
 				reverse_sql: Some("DROP TABLE IF EXISTS overflow_posts".to_string()),
 			}],
-			dependencies: vec![("overflow".to_string(), "9998_create_users".to_string())],
-			..Default::default()
-		},
+			vec![("overflow".to_string(), "9998_create_users".to_string())],
+			Vec::new(),
+			true,
+			None,
+			false,
+			false,
+			Vec::new(),
+			Vec::new(),
+		),
 		// Migration 10000 (5 digits - tests overflow)
-		Migration {
-			app_label: "overflow".to_string(),
-			name: "10000_create_comments".to_string(),
-			operations: vec![Operation::RunSQL {
+		Migration::from_parts(
+			"10000_create_comments".to_string(),
+			"overflow".to_string(),
+			vec![Operation::RunSQL {
 				sql: Query::create_table()
 					.table(Alias::new("overflow_comments"))
 					.col(
@@ -876,9 +912,15 @@ pub(crate) fn create_overflow_numbered_migrations() -> Vec<Migration> {
 					.to_string(PostgresQueryBuilder::new()),
 				reverse_sql: Some("DROP TABLE IF EXISTS overflow_comments".to_string()),
 			}],
-			dependencies: vec![("overflow".to_string(), "9999_create_posts".to_string())],
-			..Default::default()
-		},
+			vec![("overflow".to_string(), "9999_create_posts".to_string())],
+			Vec::new(),
+			true,
+			None,
+			false,
+			false,
+			Vec::new(),
+			Vec::new(),
+		),
 	]
 }
 
@@ -891,10 +933,10 @@ pub(crate) fn create_overflow_numbered_migrations() -> Vec<Migration> {
 pub(crate) fn create_circular_dependency_migrations() -> Vec<Migration> {
 	vec![
 		// Migration A depends on C
-		Migration {
-			app_label: "circular".to_string(),
-			name: "0001_migration_a".to_string(),
-			operations: vec![Operation::RunSQL {
+		Migration::from_parts(
+			"0001_migration_a".to_string(),
+			"circular".to_string(),
+			vec![Operation::RunSQL {
 				sql: Query::create_table()
 					.table(Alias::new("table_a"))
 					.col(
@@ -908,14 +950,20 @@ pub(crate) fn create_circular_dependency_migrations() -> Vec<Migration> {
 					.to_string(PostgresQueryBuilder::new()),
 				reverse_sql: Some("DROP TABLE IF EXISTS table_a".to_string()),
 			}],
-			dependencies: vec![("circular".to_string(), "0003_migration_c".to_string())],
-			..Default::default()
-		},
+			vec![("circular".to_string(), "0003_migration_c".to_string())],
+			Vec::new(),
+			true,
+			None,
+			false,
+			false,
+			Vec::new(),
+			Vec::new(),
+		),
 		// Migration B depends on A
-		Migration {
-			app_label: "circular".to_string(),
-			name: "0002_migration_b".to_string(),
-			operations: vec![Operation::RunSQL {
+		Migration::from_parts(
+			"0002_migration_b".to_string(),
+			"circular".to_string(),
+			vec![Operation::RunSQL {
 				sql: Query::create_table()
 					.table(Alias::new("table_b"))
 					.col(
@@ -929,14 +977,20 @@ pub(crate) fn create_circular_dependency_migrations() -> Vec<Migration> {
 					.to_string(PostgresQueryBuilder::new()),
 				reverse_sql: Some("DROP TABLE IF EXISTS table_b".to_string()),
 			}],
-			dependencies: vec![("circular".to_string(), "0001_migration_a".to_string())],
-			..Default::default()
-		},
+			vec![("circular".to_string(), "0001_migration_a".to_string())],
+			Vec::new(),
+			true,
+			None,
+			false,
+			false,
+			Vec::new(),
+			Vec::new(),
+		),
 		// Migration C depends on B (completing the cycle)
-		Migration {
-			app_label: "circular".to_string(),
-			name: "0003_migration_c".to_string(),
-			operations: vec![Operation::RunSQL {
+		Migration::from_parts(
+			"0003_migration_c".to_string(),
+			"circular".to_string(),
+			vec![Operation::RunSQL {
 				sql: Query::create_table()
 					.table(Alias::new("table_c"))
 					.col(
@@ -950,9 +1004,15 @@ pub(crate) fn create_circular_dependency_migrations() -> Vec<Migration> {
 					.to_string(PostgresQueryBuilder::new()),
 				reverse_sql: Some("DROP TABLE IF EXISTS table_c".to_string()),
 			}],
-			dependencies: vec![("circular".to_string(), "0002_migration_b".to_string())],
-			..Default::default()
-		},
+			vec![("circular".to_string(), "0002_migration_b".to_string())],
+			Vec::new(),
+			true,
+			None,
+			false,
+			false,
+			Vec::new(),
+			Vec::new(),
+		),
 	]
 }
 
@@ -975,10 +1035,10 @@ pub(crate) fn create_large_migration_set(count: usize) -> Vec<Migration> {
 			deps.push(("large".to_string(), format!("{}_initial", prev_num)));
 		}
 
-		migrations.push(Migration {
-			app_label: "large".to_string(),
-			name: format!("{}_initial", padded_num),
-			operations: vec![Operation::RunSQL {
+		migrations.push(Migration::from_parts(
+			format!("{}_initial", padded_num),
+			"large".to_string(),
+			vec![Operation::RunSQL {
 				sql: Query::create_table()
 					.table(Alias::new(&table_name))
 					.col(
@@ -992,9 +1052,15 @@ pub(crate) fn create_large_migration_set(count: usize) -> Vec<Migration> {
 					.to_string(PostgresQueryBuilder::new()),
 				reverse_sql: Some(format!("DROP TABLE IF EXISTS {}", table_name)),
 			}],
-			dependencies: deps,
-			..Default::default()
-		});
+			deps,
+			Vec::new(),
+			true,
+			None,
+			false,
+			false,
+			Vec::new(),
+			Vec::new(),
+		));
 	}
 
 	migrations

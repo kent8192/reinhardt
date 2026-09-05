@@ -181,9 +181,11 @@ entry when the existing failed-navigation path requires restoration.
 For a `Redirect`, the guard owns the destination and any return-location
 encoding. `destination()` already includes the query; Pages does not choose a
 `next` parameter name, encode the value, or store a global return location.
-`replace: true` replaces the denied history entry, which is usually correct
-for login and session invalidation. `replace: false` requests ordinary push
-semantics.
+`replace: true` replaces the denied history entry when that entry was already
+committed, which is usually correct for an initial load or session
+revalidation. An uncommitted push never inserted the denied destination, so
+the redirect is pushed and Back still returns to the page that started the
+navigation. `replace: false` requests ordinary push semantics.
 
 Redirects derived from one guard chain carry a normalized visited-destination
 set. A redirect to the same normalized destination, or to a destination

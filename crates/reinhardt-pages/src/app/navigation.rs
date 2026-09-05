@@ -176,6 +176,27 @@ impl NavigationIntent {
 			}
 		}
 	}
+
+	/// Converts this attempt into a redirect while preserving uncommitted push history.
+	///
+	/// `replace: true` replaces a denied destination that already occupies a
+	/// history entry. An uncommitted push never inserted that entry, so the
+	/// redirect is pushed and the source page remains the Back target.
+	fn into_redirect(self, replace: bool, committed_index: i64) -> Self {
+		let pop_origin = self.pop_origin(committed_index);
+		let replace = match self {
+			Self::Push => false,
+			Self::Redirect {
+				replace: already_replacing,
+				pop_origin: None,
+			} => already_replacing && replace,
+			_ => replace,
+		};
+		Self::Redirect {
+			replace,
+			pop_origin,
+		}
+	}
 }
 
 // Fields mirror the navigation attempt contract and are retained until the
@@ -609,10 +630,7 @@ impl NavigationCoordinator {
 						return Ok(());
 					}
 				};
-				let redirect_intent = NavigationIntent::Redirect {
-					replace,
-					pop_origin: intent.pop_origin(self.committed_index.get()),
-				};
+				let redirect_intent = intent.into_redirect(replace, self.committed_index.get());
 				self.navigate_with_redirect_chain(
 					location,
 					redirect_intent,
@@ -1772,6 +1790,57 @@ mod tests {
 					assert_eq!(router.current_path().get(), "/");
 					assert_eq!(coordinator.committed_index(), expected_index);
 				}
+			});
+		}
+
+		#[test]
+		fn push_redirect_replace_preserves_source_history_entry() {
+			ReactiveScope::run(|| {
+				reset_test_state();
+				let _query_client = provide_test_query_client();
+				let tasks = Rc::new(RefCell::new(VecDeque::new()));
+				let tasks_for_sink = Rc::clone(&tasks);
+				let _sink = crate::platform::install_task_sink(move |task| {
+					tasks_for_sink.borrow_mut().push_back(task);
+				});
+				let router = Rc::new(router_with_loaded_routes());
+				let coordinator =
+					NavigationCoordinator::new(Rc::clone(&router)).expect("registry builds");
+				coordinator
+					.navigate("/".to_owned(), NavigationIntent::Initial)
+					.expect("source page commits");
+				assert_eq!(coordinator.committed_index(), 0);
+
+				REDIRECTS.with(|redirects| {
+					redirects.borrow_mut().extend([
+						(
+							"/redirect-a/".to_owned(),
+							NavigationDecision::Redirect {
+								location: "/redirect-b/".to_owned(),
+								replace: true,
+							},
+						),
+						(
+							"/redirect-b/".to_owned(),
+							NavigationDecision::Redirect {
+								location: "/login/".to_owned(),
+								replace: true,
+							},
+						),
+					]);
+				});
+				coordinator
+					.navigate("/redirect-a/".to_owned(), NavigationIntent::Push)
+					.expect("guarded push starts");
+				poll_rounds(&tasks, 12);
+
+				assert_eq!(router.current_path().get(), "/login/");
+				assert_eq!(router.render_current().render_to_string(), "login");
+				assert_eq!(
+					coordinator.committed_index(),
+					1,
+					"replace redirects from an uncommitted push must not overwrite the source entry"
+				);
 			});
 		}
 

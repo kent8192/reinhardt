@@ -48,7 +48,13 @@ pub enum NavigationDecision {
 	Redirect {
 		/// Destination for the replacement navigation.
 		location: String,
-		/// Whether the redirect replaces the current history entry.
+		/// Whether the redirect replaces the denied history entry.
+		///
+		/// This replaces a destination that already occupies a history entry,
+		/// such as the initial URL or a replace/revalidation of the committed
+		/// branch. An uncommitted push never inserted that entry, so Pages
+		/// pushes the redirect target and leaves the source page as the Back
+		/// destination.
 		replace: bool,
 	},
 	/// Select the normal unmatched-route surface.

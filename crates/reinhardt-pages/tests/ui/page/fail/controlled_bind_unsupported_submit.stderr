@@ -1,0 +1,5 @@
+error: `bind:` does not support input type `submit`
+ --> tests/ui/page/fail/controlled_bind_unsupported_submit.rs:8:10
+  |
+8 |             bind: (),
+  |                   ^^

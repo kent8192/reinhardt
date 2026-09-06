@@ -213,6 +213,36 @@ async fn ssr_renderer_omits_falsy_reactive_boolean_attributes() {
 	assert_eq!(html, "<button></button>");
 }
 
+#[tokio::test]
+async fn ssr_renderer_rejects_incompatible_reactive_control_shapes() {
+	// Arrange
+	let scope = ReactiveScope::new();
+	let (input, select) = scope.enter(|| {
+		let input = PageElement::new("input")
+			.attr("type", "text")
+			.reactive_attr("type", || Some("file".into()))
+			.control_binding(ControlBinding::text(Signal::new("secret".to_owned())))
+			.into_page();
+		let select = PageElement::new("select")
+			.attr("multiple", "multiple")
+			.reactive_attr("multiple", || Some("false".into()))
+			.control_binding(ControlBinding::select_many(Signal::new(vec![
+				"rust".to_owned(),
+			])))
+			.into_page();
+		(input, select)
+	});
+	let mut renderer = SsrRenderer::new();
+
+	// Act
+	let input_html = renderer.render_view(&input).await;
+	let select_html = renderer.render_view(&select).await;
+
+	// Assert
+	assert_eq!(input_html, "<input type=\"text\" value=\"secret\" />");
+	assert_eq!(select_html, "<select multiple=\"multiple\"></select>");
+}
+
 #[test]
 fn test_component_composition() {
 	let container = PageElement::new("div")
@@ -718,6 +748,11 @@ fn ssr_query_retry_builder_order_preserves_the_same_nested_defaults() {
 
 fn controlled_bindings_page(scope: &ReactiveScope) -> Page {
 	let text = signal_in_scope(scope, "A&B".to_owned());
+	let date = signal_in_scope(scope, "2026-08-31".to_owned());
+	let datetime_local = signal_in_scope(scope, "2026-08-31T10:30".to_owned());
+	let month = signal_in_scope(scope, "2026-08".to_owned());
+	let week = signal_in_scope(scope, "2026-W36".to_owned());
+	let time = signal_in_scope(scope, String::new());
 	let checked = signal_in_scope(scope, true);
 	let selected = signal_in_scope(scope, vec!["rust".to_owned(), "wasm".to_owned()]);
 
@@ -729,6 +764,31 @@ fn controlled_bindings_page(scope: &ReactiveScope) -> Page {
 		textarea {
 			a11y: off,
 			bind: text
+		}
+		input {
+			a11y: off,
+			type: "date",
+			bind: date
+		}
+		input {
+			a11y: off,
+			type: "datetime-local",
+			bind: datetime_local
+		}
+		input {
+			a11y: off,
+			type: "month",
+			bind: month
+		}
+		input {
+			a11y: off,
+			type: "week",
+			bind: week
+		}
+		input {
+			a11y: off,
+			type: "time",
+			bind: time
 		}
 		input {
 			a11y: off,
@@ -781,6 +841,11 @@ async fn controlled_bindings_render_html_initial_state() {
 		concat!(
 			"<input value=\"A&amp;B\" />",
 			"<textarea>A&amp;B</textarea>",
+			"<input type=\"date\" value=\"2026-08-31\" />",
+			"<input type=\"datetime-local\" value=\"2026-08-31T10:30\" />",
+			"<input type=\"month\" value=\"2026-08\" />",
+			"<input type=\"week\" value=\"2026-W36\" />",
+			"<input type=\"time\" value=\"\" />",
 			"<input type=\"checkbox\" checked=\"checked\" />",
 			"<select multiple=\"multiple\"><optgroup>",
 			"<option value=\"rust\" selected=\"selected\">Rust</option>",

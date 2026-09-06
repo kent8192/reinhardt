@@ -8,7 +8,7 @@ use crate::component::{
 	ControlBinding, ControlBindingError, ControlKind, ControlValue, ControlWriteOutcome,
 };
 use crate::dom::{Element, EventHandle};
-use crate::reactive::{Effect, EffectTiming, batch, untracked};
+use crate::reactive::{Effect, EffectTiming, batch, untracked, with_runtime};
 use reinhardt_core::{reactive::runtime::NodeId, types::page::ControlBindingSnapshot};
 
 type HydrationSnapshotStore = Rc<RefCell<Vec<ControlBindingSnapshot>>>;
@@ -263,6 +263,7 @@ fn restore_rejected_number_snapshot(element: &Element, snapshot: &RejectedNumber
 pub(crate) struct ControlBindingController {
 	effect: Effect,
 	_listeners: Vec<EventHandle>,
+	_password_reset_listener: Option<PasswordResetListener>,
 	_option_observer: Option<SelectOptionObserver>,
 	_number_binding_registration: Option<NumberBindingRegistration>,
 }
@@ -277,6 +278,7 @@ struct MountedNumberBinding {
 	target: NodeId,
 	element: web_sys::Element,
 	position: usize,
+	effect: Option<NodeId>,
 }
 
 struct NumberBindingRegistration {
@@ -303,6 +305,7 @@ impl NumberBindingRegistration {
 				target: binding.target(),
 				element: element.as_web_sys().clone(),
 				position,
+				effect: None,
 			});
 			Some(Self {
 				target: binding.target(),
@@ -310,6 +313,16 @@ impl NumberBindingRegistration {
 				position,
 			})
 		})
+	}
+
+	fn set_effect(&self, effect: Effect) {
+		ACTIVE_NUMBER_BINDINGS.with(|registered| {
+			if let Some(registration) = registered.borrow_mut().iter_mut().find(|candidate| {
+				candidate.target == self.target && candidate.position == self.position
+			}) {
+				registration.effect = Some(effect.id());
+			}
+		});
 	}
 }
 
@@ -326,7 +339,34 @@ impl Drop for NumberBindingRegistration {
 						.is_same_node(Some(&registration_node))
 			});
 		});
+		if range_constraints(&self.element).is_some() {
+			schedule_range_peers(&self.element, self.target);
+		}
 	}
+}
+
+fn schedule_range_peers(element: &web_sys::Element, target: NodeId) {
+	let peers = ACTIVE_NUMBER_BINDINGS.with(|registered| {
+		registered
+			.borrow()
+			.iter()
+			.filter(|candidate| {
+				candidate.target == target
+					&& !candidate.element.is_same_node(Some(element))
+					&& range_constraints(&candidate.element).is_some()
+			})
+			.filter_map(|candidate| candidate.effect)
+			.collect::<Vec<_>>()
+	});
+	// Queue existing effects after releasing the registry borrow. Full scope
+	// cleanup disposes those effects and removes their queued updates.
+	with_runtime(|runtime| {
+		for effect in peers {
+			if runtime.has_node(target) && runtime.has_node(effect) {
+				runtime.schedule_update(effect);
+			}
+		}
+	});
 }
 
 struct SelectOptionObserver {
@@ -338,6 +378,79 @@ impl Drop for SelectOptionObserver {
 	fn drop(&mut self) {
 		self.observer.disconnect();
 	}
+}
+
+struct PasswordResetListener {
+	document: web_sys::Document,
+	callback: Closure<dyn FnMut(web_sys::Event)>,
+}
+
+impl Drop for PasswordResetListener {
+	fn drop(&mut self) {
+		let _ = self.document.remove_event_listener_with_callback_and_bool(
+			"reset",
+			self.callback.as_ref().unchecked_ref(),
+			true,
+		);
+	}
+}
+
+fn install_password_reset_listener(
+	element: &Element,
+	binding: &ControlBinding,
+	state: &Rc<RefCell<CompositionState>>,
+) -> Option<PasswordResetListener> {
+	if binding.kind() != ControlKind::Text {
+		return None;
+	}
+	let input = element
+		.as_web_sys()
+		.dyn_ref::<web_sys::HtmlInputElement>()?
+		.clone();
+	let document = input.owner_document()?;
+	let binding = binding.clone();
+	let state = Rc::downgrade(state);
+	// Capture also covers form= reassociation and reset handlers that stop propagation.
+	let callback = Closure::wrap(Box::new(move |event: web_sys::Event| {
+		if !input.type_().eq_ignore_ascii_case("password")
+			|| !input.form().is_some_and(|form| {
+				event
+					.target()
+					.is_some_and(|target| target == form.unchecked_into::<web_sys::EventTarget>())
+			}) {
+			return;
+		}
+		let input = input.clone();
+		let binding = binding.clone();
+		let state = state.clone();
+		// Real user events can flush microtasks before reset handlers and default actions.
+		// A task waits for both cancellation and the browser's value reset to complete.
+		let after_reset = gloo_timers::future::TimeoutFuture::new(0);
+		crate::platform::spawn_task(async move {
+			after_reset.await;
+			let Some(state) = state.upgrade() else {
+				return;
+			};
+			if event.default_prevented()
+				|| !with_runtime(|runtime| runtime.has_node(binding.target()))
+			{
+				return;
+			}
+			{
+				let mut state = state.borrow_mut();
+				state.composing = false;
+				state.skip_next_input = None;
+			}
+			let value = ControlValue::Text(input.value());
+			if untracked(|| binding.read()) != value {
+				let _ = write_binding_from_input(&binding, &state, value);
+			}
+		});
+	}) as Box<dyn FnMut(web_sys::Event)>);
+	document
+		.add_event_listener_with_callback_and_bool("reset", callback.as_ref().unchecked_ref(), true)
+		.ok()?;
+	Some(PasswordResetListener { document, callback })
 }
 
 impl std::fmt::Debug for ControlBindingController {
@@ -402,7 +515,7 @@ impl ControlBindingController {
 			.map(|registration| registration.position);
 		let rejected_number_snapshot = take_rejected_number_snapshot(&binding, number_position);
 		let initial_value = untracked(|| binding.read());
-		write_control(&element, binding.kind(), &initial_value)?;
+		write_control_and_reconcile(&element, &binding, &initial_value)?;
 		if let Some(snapshot) = rejected_number_snapshot.as_ref() {
 			restore_rejected_number_snapshot(&element, snapshot);
 		}
@@ -423,6 +536,14 @@ impl ControlBindingController {
 	) -> Result<(Self, bool), ControlBindingError> {
 		validate_control(&element, binding.kind())?;
 		write_radio_value(&element, &binding)?;
+		let password_value_was_omitted = element
+			.get_attribute(crate::control_binding::SSR_OMITTED_PASSWORD_ATTRIBUTE)
+			.as_deref()
+			== Some("true");
+		if password_value_was_omitted {
+			let _ =
+				element.remove_attribute(crate::control_binding::SSR_OMITTED_PASSWORD_ATTRIBUTE);
+		}
 		let number_binding_registration = NumberBindingRegistration::register(&element, &binding);
 		let number_position = number_binding_registration
 			.as_ref()
@@ -430,8 +551,16 @@ impl ControlBindingController {
 		let (listeners, state) = install_listeners(&element, &binding, None, number_position);
 		let live_value = hydration_radio_value(&element)
 			.map_or_else(|| read_control(&element, binding.kind()), Ok)?;
+		let password_value_was_omitted = password_value_was_omitted
+			&& binding.kind() == ControlKind::Text
+			&& element
+				.as_web_sys()
+				.dyn_ref::<web_sys::HtmlInputElement>()
+				.is_some_and(|input| input.type_().eq_ignore_ascii_case("password"))
+			&& matches!(&live_value, ControlValue::Text(value) if value.is_empty());
 		let expected_value = untracked(|| binding.read());
-		let should_restore_expected = binding.source_preferred_on_hydration()
+		let should_restore_expected = password_value_was_omitted
+			|| binding.source_preferred_on_hydration()
 			|| hydration_target_was_adopted(&binding)
 			|| (matches!(
 				binding.kind(),
@@ -442,7 +571,7 @@ impl ControlBindingController {
 				&& expected_value == live_value
 				&& !select_one_matches_expected_option(&element, &expected_value));
 		let refresh_required = if should_restore_expected {
-			write_control(&element, binding.kind(), &expected_value)?;
+			write_control_and_reconcile(&element, &binding, &expected_value)?;
 			crate::component::into_page::initialize_control_default(&element, &binding);
 			false
 		} else if expected_value == live_value {
@@ -454,7 +583,7 @@ impl ControlBindingController {
 			let adopted = matches!(outcome, ControlWriteOutcome::Committed);
 			let rejected = matches!(outcome, ControlWriteOutcome::Rejected(_));
 			if matches!(outcome, ControlWriteOutcome::Ignored) {
-				write_control(&element, binding.kind(), &expected_value)?;
+				write_control_and_reconcile(&element, &binding, &expected_value)?;
 			}
 			if rejected {
 				stage_rejected_number_hydration_snapshot(&element, &binding, number_position);
@@ -471,11 +600,16 @@ impl ControlBindingController {
 			write_control(&element, binding.kind(), &untracked(|| binding.read()))?;
 		}
 		let option_observer = install_select_option_observer(&element, &binding);
+		let password_reset_listener = install_password_reset_listener(&element, &binding, &state);
 		let effect = install_effect(element, binding, true, state);
+		if let Some(registration) = &number_binding_registration {
+			registration.set_effect(effect);
+		}
 		Ok((
 			Self {
 				effect,
 				_listeners: listeners,
+				_password_reset_listener: password_reset_listener,
 				_option_observer: option_observer,
 				_number_binding_registration: number_binding_registration,
 			},
@@ -498,10 +632,15 @@ impl ControlBindingController {
 			number_position,
 		);
 		let option_observer = install_select_option_observer(&element, &binding);
+		let password_reset_listener = install_password_reset_listener(&element, &binding, &state);
 		let effect = install_effect(element, binding, skip_first_write, state);
+		if let Some(registration) = &number_binding_registration {
+			registration.set_effect(effect);
+		}
 		Ok(Self {
 			effect,
 			_listeners: listeners,
+			_password_reset_listener: password_reset_listener,
 			_option_observer: option_observer,
 			_number_binding_registration: number_binding_registration,
 		})
@@ -612,11 +751,16 @@ fn install_effect(
 	skip_first_write: bool,
 	state: Rc<RefCell<CompositionState>>,
 ) -> Effect {
-	let first_run = Rc::new(std::cell::Cell::new(skip_first_write));
+	let mut first_run = true;
 	Effect::new_with_timing(
 		move || {
+			let initial_run = std::mem::take(&mut first_run);
+			// A queued survivor update may outlive the separately owned signal scope.
+			if !initial_run && !with_runtime(|runtime| runtime.has_node(binding.target())) {
+				return;
+			}
 			let value = binding.read();
-			if first_run.replace(false) {
+			if initial_run && skip_first_write {
 				return;
 			}
 			{
@@ -630,7 +774,11 @@ fn install_effect(
 					editor.pending_edit = None;
 				}
 			}
-			let _ = write_control(&element, binding.kind(), &value);
+			if let Err(error) = write_control_and_reconcile(&element, &binding, &value) {
+				web_sys::console::error_1(
+					&format!("controlled input update failed: {error}").into(),
+				);
+			}
 			crate::component::into_page::initialize_control_default(&element, &binding);
 		},
 		EffectTiming::Layout,
@@ -1132,13 +1280,18 @@ pub(crate) fn validate_control(
 						.as_web_sys()
 						.dyn_ref::<web_sys::HtmlInputElement>()
 						.is_some_and(|input| {
-							matches!(
-								input.type_().as_str(),
-								"text" | "email" | "url" | "password"
-							)
+							crate::control_binding::is_text_input_type(&input.type_())
 						}))
 		}
-		ControlKind::Number => input_has_type(element, &tag, "number"),
+		ControlKind::Number => {
+			tag == "input"
+				&& element
+					.as_web_sys()
+					.dyn_ref::<web_sys::HtmlInputElement>()
+					.is_some_and(|input| {
+						crate::control_binding::is_number_input_type(&input.type_())
+					})
+		}
 		ControlKind::Checkbox => input_has_type(element, &tag, "checkbox"),
 		ControlKind::Radio => input_has_type(element, &tag, "radio"),
 		ControlKind::SelectOne => select_has_multiple(element, &tag, false),
@@ -1232,6 +1385,9 @@ pub(crate) fn write_control(
 	match (kind, value) {
 		(ControlKind::Text, ControlValue::Text(value)) => {
 			if let Some(input) = element.as_web_sys().dyn_ref::<web_sys::HtmlInputElement>() {
+				if input.type_().eq_ignore_ascii_case("password") {
+					let _ = element.remove_attribute("value");
+				}
 				if input.value() == *value {
 					Ok(false)
 				} else {
@@ -1330,6 +1486,128 @@ pub(crate) fn write_control(
 	}
 }
 
+fn write_control_and_reconcile(
+	element: &Element,
+	binding: &ControlBinding,
+	value: &ControlValue,
+) -> Result<(), ControlBindingError> {
+	if binding.kind() == ControlKind::Number && range_constraints(element.as_web_sys()).is_some() {
+		// Without a minimum, range stepping uses the controlled default as its base.
+		crate::component::into_page::initialize_control_default(element, binding);
+	}
+	write_control(element, binding.kind(), value)?;
+	if matches!(binding.kind(), ControlKind::Text | ControlKind::Number) {
+		let live_value = read_control(element, binding.kind())?;
+		if live_value != *value {
+			if preserves_unrepresentable_temporal_value(element, value, &live_value) {
+				return Ok(());
+			}
+			if has_conflicting_range_binding(element, binding) {
+				// Conflicting range projections cannot safely normalize one shared signal.
+				// Keep their browser values local; writing back here would make their
+				// layout effects alternate forever.
+				return Ok(());
+			}
+			if let ControlWriteOutcome::Rejected(error) = binding.write(live_value)? {
+				return Err(ControlBindingError::RejectedValue {
+					control: binding.kind(),
+					error,
+				});
+			}
+		}
+	}
+	Ok(())
+}
+
+fn range_constraints(element: &web_sys::Element) -> Option<(f64, f64, Option<f64>, f64)> {
+	let input = element.dyn_ref::<web_sys::HtmlInputElement>()?;
+	if !input.type_().eq_ignore_ascii_case("range") {
+		return None;
+	}
+	let min_attribute = element
+		.get_attribute("min")
+		.and_then(|value| crate::control_binding::parse_html_number(&value));
+	let min = min_attribute.unwrap_or(0.0);
+	let max = element
+		.get_attribute("max")
+		.and_then(|value| crate::control_binding::parse_html_number(&value))
+		.unwrap_or(100.0);
+	let step = match element.get_attribute("step").as_deref() {
+		Some(value) if value.eq_ignore_ascii_case("any") => None,
+		Some(value) => crate::control_binding::parse_html_number(value)
+			.filter(|value| value.is_finite() && *value > 0.0)
+			.or(Some(1.0)),
+		None => Some(1.0),
+	};
+	let step_base = min_attribute
+		.or_else(|| {
+			element
+				.get_attribute("value")
+				.and_then(|value| crate::control_binding::parse_html_number(&value))
+		})
+		.unwrap_or(0.0);
+	Some((min, max.max(min), step, step_base))
+}
+
+fn has_conflicting_range_binding(element: &Element, binding: &ControlBinding) -> bool {
+	if binding.kind() != ControlKind::Number {
+		return false;
+	}
+	let Some((min, max, step, step_base)) = range_constraints(element.as_web_sys()) else {
+		return false;
+	};
+	let node: web_sys::Node = element.as_web_sys().clone().unchecked_into();
+	ACTIVE_NUMBER_BINDINGS.with(|registered| {
+		registered.borrow().iter().any(|candidate| {
+			candidate.target == binding.target()
+				&& !candidate
+					.element
+					.clone()
+					.unchecked_into::<web_sys::Node>()
+					.is_same_node(Some(&node))
+				&& range_constraints(&candidate.element).is_some_and(|candidate_constraints| {
+					crate::control_binding::range_constraints_conflict(
+						(min, max, step, step_base),
+						candidate_constraints,
+					)
+				})
+		})
+	})
+}
+
+fn preserves_unrepresentable_temporal_value(
+	element: &Element,
+	expected: &ControlValue,
+	live: &ControlValue,
+) -> bool {
+	let (ControlValue::Text(expected), ControlValue::Text(live)) = (expected, live) else {
+		return false;
+	};
+	if expected.is_empty() || !live.is_empty() {
+		return false;
+	}
+	let Some(input) = element.as_web_sys().dyn_ref::<web_sys::HtmlInputElement>() else {
+		return false;
+	};
+	["date", "datetime-local", "month", "time", "week"]
+		.iter()
+		.any(|input_type| input.type_().eq_ignore_ascii_case(input_type))
+}
+
+pub(crate) fn reconcile_control_binding(
+	element: &Element,
+	binding: &ControlBinding,
+) -> Result<(), ControlBindingError> {
+	let value = untracked(|| binding.read());
+	write_control_and_reconcile(element, binding, &value)?;
+	crate::component::into_page::initialize_control_default(element, binding);
+	if binding.kind() == ControlKind::Number {
+		// An unchanged local value can still make a peer's constraints compatible.
+		schedule_range_peers(element.as_web_sys(), binding.target());
+	}
+	Ok(())
+}
+
 fn missing(control: ControlKind, property: &'static str) -> ControlBindingError {
 	ControlBindingError::MissingProperty { control, property }
 }
@@ -1337,7 +1615,9 @@ fn missing(control: ControlKind, property: &'static str) -> ControlBindingError 
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::component::{ControlBinding, ControlBindingError, ControlKind};
+	use crate::component::{
+		ControlBinding, ControlBindingError, ControlKind, NumberParseErrorKind,
+	};
 	use crate::dom::Element;
 	use crate::reactive::{ReactiveScope, Signal};
 	use wasm_bindgen::JsCast;
@@ -1972,10 +2252,265 @@ mod tests {
 	}
 
 	#[wasm_bindgen_test]
-	fn text_binding_rejects_non_text_input_types_without_writing_file_value() {
+	fn text_binding_accepts_supported_input_types() {
 		let scope = ReactiveScope::new();
 		scope.enter(|| {
-			for input_type in ["search", "file", "range"] {
+			for (input_type, value) in [
+				("text", "non-empty"),
+				("search", "non-empty"),
+				("tel", "non-empty"),
+				("url", "non-empty"),
+				("email", "non-empty"),
+				("password", "non-empty"),
+				("color", "#123456"),
+				("date", "2026-09-01"),
+				("datetime-local", "2026-09-01T12:34"),
+				("month", "2026-09"),
+				("week", "2026-W36"),
+				("time", "12:34"),
+			] {
+				let element = element("input");
+				let input: web_sys::HtmlInputElement =
+					element.as_web_sys().clone().unchecked_into();
+				input.set_type(input_type);
+				let _controller = ControlBindingController::mount(
+					element,
+					ControlBinding::text(Signal::new(value.to_owned())),
+				)
+				.expect("supported text input type should mount");
+				assert_eq!(input.value(), value);
+			}
+		});
+	}
+
+	#[wasm_bindgen_test]
+	fn hydration_restores_a_password_value_omitted_by_ssr() {
+		let scope = ReactiveScope::new();
+		scope.enter(|| {
+			let element = element("input");
+			let input: web_sys::HtmlInputElement = element.as_web_sys().clone().unchecked_into();
+			input.set_type("password");
+			element
+				.set_attribute(
+					crate::control_binding::SSR_OMITTED_PASSWORD_ATTRIBUTE,
+					"true",
+				)
+				.expect("marker");
+			let value = Signal::new("secret".to_owned());
+
+			let (controller, refresh_required) =
+				ControlBindingController::hydrate(element, ControlBinding::text(value.clone()))
+					.expect("password binding");
+
+			assert!(!refresh_required);
+			assert_eq!(value.get(), "secret");
+			assert_eq!(input.value(), "secret");
+			assert_eq!(
+				input.get_attribute(crate::control_binding::SSR_OMITTED_PASSWORD_ATTRIBUTE),
+				None
+			);
+			drop(controller);
+		});
+	}
+
+	#[wasm_bindgen_test]
+	fn bound_password_initialization_only_sets_the_live_value() {
+		let scope = ReactiveScope::new();
+		scope.enter(|| {
+			let element = element("input");
+			let input: web_sys::HtmlInputElement = element.as_web_sys().clone().unchecked_into();
+			input.set_type("password");
+			let binding = ControlBinding::text(Signal::new("secret".to_owned()));
+
+			crate::component::into_page::initialize_control_default(&element, &binding);
+
+			assert_eq!(input.value(), "secret");
+			assert_eq!(input.default_value(), "");
+			assert_eq!(input.get_attribute("value"), None);
+		});
+	}
+
+	#[wasm_bindgen_test]
+	fn mount_rejects_unrepresentable_browser_normalized_range_value() {
+		let scope = ReactiveScope::new();
+		scope.enter(|| {
+			let element = element("input");
+			let input: web_sys::HtmlInputElement = element.as_web_sys().clone().unchecked_into();
+			input.set_type("range");
+			input.set_min("300");
+			input.set_max("400");
+
+			let error = ControlBindingController::mount(
+				element,
+				ControlBinding::number(Signal::new(100_u8)),
+			)
+			.expect_err("range value should be representable by the binding");
+
+			assert!(matches!(
+				error,
+				ControlBindingError::RejectedValue {
+					control: ControlKind::Number,
+					error
+				} if error.raw() == "300" && error.kind() == NumberParseErrorKind::OutOfRange
+			));
+		});
+	}
+
+	#[wasm_bindgen_test]
+	fn conflicting_range_bindings_do_not_write_back_forever() {
+		let scope = ReactiveScope::new();
+		scope.enter(|| {
+			let value = Signal::new(150_i32);
+			let first = element("input");
+			let first_input: web_sys::HtmlInputElement =
+				first.as_web_sys().clone().unchecked_into();
+			first_input.set_type("range");
+			first_input.set_min("0");
+			first_input.set_max("100");
+			let first_controller =
+				ControlBindingController::mount(first, ControlBinding::number(value.clone()))
+					.expect("first range binding");
+
+			let second = element("input");
+			let second_input: web_sys::HtmlInputElement =
+				second.as_web_sys().clone().unchecked_into();
+			second_input.set_type("range");
+			second_input.set_min("200");
+			second_input.set_max("400");
+			let second_controller =
+				ControlBindingController::mount(second, ControlBinding::number(value.clone()))
+					.expect("second range binding");
+
+			assert_eq!(value.get(), 100);
+			assert_eq!(first_input.value(), "100");
+			assert_eq!(second_input.value(), "200");
+
+			value.set(150);
+
+			assert_eq!(value.get(), 150);
+			assert_eq!(first_input.value(), "100");
+			assert_eq!(second_input.value(), "200");
+			drop(second_controller);
+			drop(first_controller);
+		});
+	}
+
+	#[wasm_bindgen_test]
+	fn incompatible_range_step_grids_do_not_write_back_forever() {
+		let scope = ReactiveScope::new();
+		scope.enter(|| {
+			let value = Signal::new(3_i32);
+			let first = element("input");
+			let first_input: web_sys::HtmlInputElement =
+				first.as_web_sys().clone().unchecked_into();
+			first_input.set_type("range");
+			first_input.set_min("0");
+			first_input.set_max("10");
+			first_input.set_step("2");
+			let first_controller =
+				ControlBindingController::mount(first, ControlBinding::number(value.clone()))
+					.expect("first range binding");
+
+			let second = element("input");
+			let second_input: web_sys::HtmlInputElement =
+				second.as_web_sys().clone().unchecked_into();
+			second_input.set_type("range");
+			second_input.set_min("1");
+			second_input.set_max("10");
+			second_input.set_step("2");
+			let second_controller =
+				ControlBindingController::mount(second, ControlBinding::number(value.clone()))
+					.expect("second range binding");
+
+			assert_eq!(value.get(), 4);
+			assert_eq!(first_input.value(), "4");
+			drop(second_controller);
+			drop(first_controller);
+		});
+	}
+
+	#[wasm_bindgen_test]
+	fn overlapping_range_step_grids_without_a_common_value_do_not_write_back_forever() {
+		let scope = ReactiveScope::new();
+		scope.enter(|| {
+			// Arrange
+			let value = Signal::new(3_i32);
+			let first = element("input");
+			let first_input: web_sys::HtmlInputElement =
+				first.as_web_sys().clone().unchecked_into();
+			first_input.set_type("range");
+			first_input.set_min("0");
+			first_input.set_max("5");
+			first_input.set_step("4");
+			let second = element("input");
+			let second_input: web_sys::HtmlInputElement =
+				second.as_web_sys().clone().unchecked_into();
+			second_input.set_type("range");
+			second_input.set_min("2");
+			second_input.set_max("5");
+			second_input.set_step("6");
+
+			// Act
+			let first_controller =
+				ControlBindingController::mount(first, ControlBinding::number(value.clone()))
+					.expect("first range binding");
+			let second_controller =
+				ControlBindingController::mount(second, ControlBinding::number(value.clone()))
+					.expect("second range binding");
+
+			// Assert
+			assert_eq!(value.get(), 4);
+			assert_eq!(first_input.value(), "4");
+			assert_eq!(second_input.value(), "2");
+			drop(second_controller);
+			drop(first_controller);
+		});
+	}
+
+	#[wasm_bindgen_test]
+	fn continuous_and_stepped_ranges_without_a_shared_value_keep_browser_values_local() {
+		let scope = ReactiveScope::new();
+		scope.enter(|| {
+			// Arrange
+			let value = Signal::new(0.5_f64);
+			let first = element("input");
+			let first_input: web_sys::HtmlInputElement =
+				first.as_web_sys().clone().unchecked_into();
+			first_input.set_type("range");
+			first_input.set_min("0.5");
+			first_input.set_max("0.6");
+			first_input.set_step("any");
+			let second = element("input");
+			let second_input: web_sys::HtmlInputElement =
+				second.as_web_sys().clone().unchecked_into();
+			second_input.set_type("range");
+			second_input.set_min("0");
+			second_input.set_max("0.6");
+			second_input.set_step("1");
+
+			// Act
+			let first_controller =
+				ControlBindingController::mount(first, ControlBinding::number(value))
+					.expect("continuous range binding");
+			let second_controller =
+				ControlBindingController::mount(second, ControlBinding::number(value))
+					.expect("stepped range binding");
+
+			// Assert
+			assert_eq!(
+				(value.get(), first_input.value(), second_input.value()),
+				(0.5, "0.5".to_owned(), "0".to_owned())
+			);
+			drop(second_controller);
+			drop(first_controller);
+		});
+	}
+
+	#[wasm_bindgen_test]
+	fn text_binding_rejects_unsupported_input_types() {
+		let scope = ReactiveScope::new();
+		scope.enter(|| {
+			for input_type in ["file", "range"] {
 				let element = element("input");
 				let input: web_sys::HtmlInputElement =
 					element.as_web_sys().clone().unchecked_into();
@@ -1984,7 +2519,7 @@ mod tests {
 					element,
 					ControlBinding::text(Signal::new("non-empty".to_owned())),
 				)
-				.expect_err("non-text input type should fail");
+				.expect_err("unsupported input type should fail");
 
 				assert_eq!(
 					error,
@@ -1997,6 +2532,22 @@ mod tests {
 					assert_eq!(input.value(), "");
 				}
 			}
+		});
+	}
+
+	#[wasm_bindgen_test]
+	fn number_binding_accepts_range_input_type() {
+		let scope = ReactiveScope::new();
+		scope.enter(|| {
+			let element = element("input");
+			let input: web_sys::HtmlInputElement = element.as_web_sys().clone().unchecked_into();
+			input.set_type("range");
+			let _controller = ControlBindingController::mount(
+				element,
+				ControlBinding::number(Signal::new(10_i32)),
+			)
+			.expect("range input type should mount");
+			assert_eq!(input.value(), "10");
 		});
 	}
 

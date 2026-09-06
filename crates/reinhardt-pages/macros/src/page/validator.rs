@@ -64,6 +64,7 @@ use reinhardt_manouche::core::{
 	TypedPageFor, TypedPageIf, TypedPageMacro, TypedPageMacroForm, TypedPageNode, TypedPageWatch,
 	types::AttrValue,
 };
+use reinhardt_manouche::validator::classify_input_binding;
 
 use super::scope_utils::collect_pat_idents;
 
@@ -897,7 +898,7 @@ fn classify_control_binding(
 	{
 		return Err(syn::Error::new_spanned(
 			&binding_attr.value,
-			"`number(value, error)` is only valid on a number input",
+			"`number(value, error)` is only valid on a numeric input",
 		));
 	}
 
@@ -907,51 +908,6 @@ fn classify_control_binding(
 		radio_value,
 		span: binding_attr.value.span(),
 	})
-}
-
-fn classify_input_binding(
-	attrs: &[PageAttr],
-	binding_attr: &PageAttr,
-) -> Result<(TypedControlBindingKind, Option<Expr>)> {
-	let input_type = match unique_untyped_attr(
-		attrs,
-		"type",
-		binding_attr,
-		"a bound input requires a static `type`",
-	)? {
-		Some(attr) => static_string_value(&attr.value).ok_or_else(|| {
-			syn::Error::new_spanned(
-				&binding_attr.value,
-				"a bound input requires a static `type`",
-			)
-		})?,
-		None => "text".to_owned(),
-	};
-
-	match input_type.to_ascii_lowercase().as_str() {
-		"text" => Ok((TypedControlBindingKind::Text, None)),
-		"number" => Ok((TypedControlBindingKind::Number, None)),
-		"checkbox" => Ok((TypedControlBindingKind::Checkbox, None)),
-		"radio" => {
-			let value = unique_untyped_attr(
-				attrs,
-				"value",
-				binding_attr,
-				"a bound radio input cannot specify duplicate `value` attributes",
-			)?
-			.ok_or_else(|| {
-				syn::Error::new_spanned(
-					&binding_attr.value,
-					"a bound radio input requires a `value` attribute",
-				)
-			})?;
-			Ok((TypedControlBindingKind::Radio, Some(value.value.clone())))
-		}
-		unsupported => Err(syn::Error::new_spanned(
-			&binding_attr.value,
-			format!("`bind:` does not support input type `{unsupported}`"),
-		)),
-	}
 }
 
 fn classify_select_binding(
@@ -994,16 +950,6 @@ fn unique_untyped_attr<'a>(
 		return Err(syn::Error::new_spanned(&binding_attr.value, diagnostic));
 	}
 	Ok(attr)
-}
-
-fn static_string_value(expr: &Expr) -> Option<String> {
-	let Expr::Lit(lit) = expr else {
-		return None;
-	};
-	let syn::Lit::Str(value) = &lit.lit else {
-		return None;
-	};
-	Some(value.value())
 }
 
 fn validate_control_binding_structure(
@@ -1892,7 +1838,7 @@ mod tests {
 						bind: number(value, error),
 					}
 				}),
-				"`number(value, error)` is only valid on a number input",
+				"`number(value, error)` is only valid on a numeric input",
 			),
 			(
 				quote::quote!({ input { type: "number", bind: number(value) } }),
@@ -2011,7 +1957,7 @@ mod tests {
 	)]
 	#[case(
 		quote::quote!({ textarea { bind: number(value, error) } }),
-		"`number(value, error)` is only valid on a number input"
+		"`number(value, error)` is only valid on a numeric input"
 	)]
 	#[case(
 		quote::quote!({ input { type: "number", bind: number(value) } }),
@@ -2283,6 +2229,66 @@ mod tests {
 	)]
 	#[case(
 		quote::quote!({ input { a11y: off, type: "number", bind: value } }),
+		TypedControlBindingKind::Number,
+		false
+	)]
+	#[case(
+		quote::quote!({ input { a11y: off, type: "search", bind: value } }),
+		TypedControlBindingKind::Text,
+		false
+	)]
+	#[case(
+		quote::quote!({ input { a11y: off, type: "tel", bind: value } }),
+		TypedControlBindingKind::Text,
+		false
+	)]
+	#[case(
+		quote::quote!({ input { a11y: off, type: "url", bind: value } }),
+		TypedControlBindingKind::Text,
+		false
+	)]
+	#[case(
+		quote::quote!({ input { a11y: off, type: "email", bind: value } }),
+		TypedControlBindingKind::Text,
+		false
+	)]
+	#[case(
+		quote::quote!({ input { a11y: off, type: "password", bind: value } }),
+		TypedControlBindingKind::Text,
+		false
+	)]
+	#[case(
+		quote::quote!({ input { a11y: off, type: "color", bind: value } }),
+		TypedControlBindingKind::Text,
+		false
+	)]
+	#[case(
+		quote::quote!({ input { a11y: off, type: "date", bind: value } }),
+		TypedControlBindingKind::Text,
+		false
+	)]
+	#[case(
+		quote::quote!({ input { a11y: off, type: "datetime-local", bind: value } }),
+		TypedControlBindingKind::Text,
+		false
+	)]
+	#[case(
+		quote::quote!({ input { a11y: off, type: "month", bind: value } }),
+		TypedControlBindingKind::Text,
+		false
+	)]
+	#[case(
+		quote::quote!({ input { a11y: off, type: "week", bind: value } }),
+		TypedControlBindingKind::Text,
+		false
+	)]
+	#[case(
+		quote::quote!({ input { a11y: off, type: "time", bind: value } }),
+		TypedControlBindingKind::Text,
+		false
+	)]
+	#[case(
+		quote::quote!({ input { a11y: off, type: "range", bind: value } }),
 		TypedControlBindingKind::Number,
 		false
 	)]

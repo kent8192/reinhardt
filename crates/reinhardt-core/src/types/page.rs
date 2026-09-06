@@ -47,6 +47,8 @@ pub use util::{BOOLEAN_ATTRS, is_boolean_attr, is_boolean_attr_truthy};
 use std::borrow::Cow;
 use std::sync::Arc;
 
+use control_binding::SSR_OMITTED_PASSWORD_ATTRIBUTE;
+
 /// Type alias for event handler functions.
 #[cfg(wasm)]
 pub type PageEventHandler = Arc<dyn Fn(web_sys::Event) + 'static>;
@@ -1165,6 +1167,8 @@ impl Page {
 	/// Renders the view to an HTML string.
 	///
 	/// This is the core SSR method that converts the view tree to HTML.
+	/// Bound password values are omitted and marked with `data-rh-password-omitted`
+	/// so browser hydration can restore the bound value without exposing it in HTML.
 	pub fn render_to_string(&self) -> String {
 		let mut output = String::new();
 		self.render_to_string_inner(&mut output, None);
@@ -1188,7 +1192,58 @@ impl Page {
 				output.push_str(el.tag_name());
 				let binding = el.bound_control();
 				let binding_value = binding.map(ControlBinding::read);
-				let projected_input_value =
+				let reactive_input_type = el
+					.reactive_attrs()
+					.iter()
+					.enumerate()
+					.rfind(|(_, attribute)| attribute.name().eq_ignore_ascii_case("type"))
+					.map(|(index, attribute)| (index, attribute.value()));
+				let reactive_input_type_is_supported =
+					reactive_input_type.as_ref().is_none_or(|(_, value)| {
+						binding.is_none_or(|binding| {
+							control_binding::controlled_attribute_update_is_supported(
+								el.tag_name(),
+								binding.kind(),
+								"type",
+								value.as_deref(),
+							)
+						})
+					});
+				let reactive_select_multiple = el
+					.reactive_attrs()
+					.iter()
+					.enumerate()
+					.rfind(|(_, attribute)| attribute.name().eq_ignore_ascii_case("multiple"))
+					.map(|(index, attribute)| (index, attribute.value()));
+				let reactive_select_multiple_is_supported =
+					reactive_select_multiple.as_ref().is_none_or(|(_, value)| {
+						binding.is_none_or(|binding| {
+							control_binding::controlled_attribute_update_is_supported(
+								el.tag_name(),
+								binding.kind(),
+								"multiple",
+								value.as_deref(),
+							)
+						})
+					});
+				let mut input_type_is_password = el
+					.attrs()
+					.iter()
+					.find(|(name, _)| name.eq_ignore_ascii_case("type"))
+					.is_some_and(|(_, value)| value.eq_ignore_ascii_case("password"));
+				if reactive_input_type_is_supported
+					&& let Some((_, value)) = reactive_input_type.as_ref()
+				{
+					input_type_is_password = value
+						.as_deref()
+						.is_some_and(|value| value.eq_ignore_ascii_case("password"));
+				}
+				let omits_bound_password_value = el.tag_name().eq_ignore_ascii_case("input")
+					&& input_type_is_password
+					&& binding.is_some_and(|binding| binding.kind() == ControlKind::Text);
+				let projected_input_value = if omits_bound_password_value {
+					None
+				} else {
 					binding.and_then(|binding| match (binding.kind(), binding_value.as_ref()) {
 						(
 							ControlKind::Text | ControlKind::Number,
@@ -1196,7 +1251,8 @@ impl Page {
 						) => Some(value.as_str()),
 						(ControlKind::Radio, _) => binding.radio_value(),
 						_ => None,
-					});
+					})
+				};
 				let projects_value =
 					el.tag_name().eq_ignore_ascii_case("input") && projected_input_value.is_some();
 				let projects_checked = matches!(binding_value, Some(ControlValue::Checked(true)));
@@ -1210,12 +1266,20 @@ impl Page {
 					let has_reactive_attribute = el
 						.reactive_attrs()
 						.iter()
-						.any(|attribute| attribute.name().eq_ignore_ascii_case(name));
+						.any(|attribute| attribute.name().eq_ignore_ascii_case(name))
+						&& (!(name.eq_ignore_ascii_case("type") && reactive_input_type.is_some())
+							|| reactive_input_type_is_supported)
+						&& (!(name.eq_ignore_ascii_case("multiple")
+							&& reactive_select_multiple.is_some())
+							|| reactive_select_multiple_is_supported);
 					// Skip boolean attributes with falsy values (empty, "false", "0")
 					let name_str: &str = name.as_ref();
-					if (name_str.eq_ignore_ascii_case("value") && projects_value)
+					if (name_str.eq_ignore_ascii_case("value")
+						&& (projects_value || omits_bound_password_value))
 						|| (name_str.eq_ignore_ascii_case("checked") && binding.is_some())
 						|| (name_str.eq_ignore_ascii_case("selected") && selection.is_some())
+						|| (omits_bound_password_value
+							&& name_str.eq_ignore_ascii_case(SSR_OMITTED_PASSWORD_ATTRIBUTE))
 						|| (is_boolean_attr(name_str) && !is_boolean_attr_truthy(value))
 						|| has_reactive_attribute
 					{
@@ -1230,9 +1294,12 @@ impl Page {
 				}
 				for (index, attribute) in el.reactive_attrs().iter().enumerate() {
 					let name = attribute.name();
-					if (name.eq_ignore_ascii_case("value") && projects_value)
+					if (name.eq_ignore_ascii_case("value")
+						&& (projects_value || omits_bound_password_value))
 						|| (name.eq_ignore_ascii_case("checked") && binding.is_some())
 						|| (name.eq_ignore_ascii_case("selected") && selection.is_some())
+						|| (omits_bound_password_value
+							&& name.eq_ignore_ascii_case(SSR_OMITTED_PASSWORD_ATTRIBUTE))
 					{
 						continue;
 					}
@@ -1242,7 +1309,27 @@ impl Page {
 					{
 						continue;
 					}
-					if let Some(value) = attribute.value()
+					let value = match reactive_input_type.as_ref() {
+						Some((type_index, value)) if *type_index == index => value.clone(),
+						_ => match reactive_select_multiple.as_ref() {
+							Some((multiple_index, value)) if *multiple_index == index => {
+								value.clone()
+							}
+							_ => attribute.value(),
+						},
+					};
+					if (reactive_input_type
+						.as_ref()
+						.is_some_and(|(type_index, _)| *type_index == index)
+						&& !reactive_input_type_is_supported)
+						|| (reactive_select_multiple
+							.as_ref()
+							.is_some_and(|(multiple_index, _)| *multiple_index == index)
+							&& !reactive_select_multiple_is_supported)
+					{
+						continue;
+					}
+					if let Some(value) = value
 						&& is_safe_html_attribute(attribute.name(), &value)
 						&& (!is_boolean_attr(attribute.name()) || is_boolean_attr_truthy(&value))
 					{
@@ -1259,6 +1346,11 @@ impl Page {
 					output.push_str(" value=\"");
 					output.push_str(&html_escape(value));
 					output.push('"');
+				}
+				if omits_bound_password_value {
+					output.push(' ');
+					output.push_str(SSR_OMITTED_PASSWORD_ATTRIBUTE);
+					output.push_str("=\"true\"");
 				}
 				if projects_checked {
 					output.push_str(" checked=\"checked\"");
@@ -1629,8 +1721,12 @@ impl<A: IntoPage, B: IntoPage, C: IntoPage, D: IntoPage> IntoPage for (A, B, C, 
 
 #[cfg(test)]
 mod tests {
+	use std::cell::Cell;
+	use std::rc::Rc;
+
 	use super::*;
 	use crate::reactive::{ReactiveScope, Signal};
+	use rstest::rstest;
 
 	#[cfg(feature = "page-hot-reload")]
 	#[test]
@@ -1965,6 +2061,169 @@ mod tests {
 				"<input type=\"text\" value=\"current\" />"
 			);
 			assert_eq!(textarea.render_to_string(), "<textarea>current</textarea>");
+		});
+	}
+
+	#[rstest]
+	fn render_to_string_omits_bound_password_values() {
+		ReactiveScope::run(|| {
+			// Arrange
+			let input = PageElement::new("input")
+				.attr("type", "password")
+				.attr("value", "stale")
+				.attr("data-rh-password-omitted", "false")
+				.attr("DATA-RH-PASSWORD-OMITTED", "conflicting")
+				.control_binding(ControlBinding::text(Signal::new("secret".to_owned())))
+				.into_page();
+
+			// Act
+			let html = input.render_to_string();
+
+			// Assert
+			assert_eq!(
+				html,
+				"<input type=\"password\" data-rh-password-omitted=\"true\" />"
+			);
+		});
+	}
+
+	#[rstest]
+	fn render_to_string_uses_the_first_static_password_type() {
+		ReactiveScope::run(|| {
+			let input = PageElement::new("input")
+				.attr("type", "password")
+				.attr("type", "text")
+				.control_binding(ControlBinding::text(Signal::new("secret".to_owned())))
+				.into_page();
+
+			assert_eq!(
+				input.render_to_string(),
+				"<input type=\"password\" type=\"text\" data-rh-password-omitted=\"true\" />"
+			);
+		});
+	}
+
+	#[rstest]
+	fn render_to_string_omits_bound_password_values_for_reactive_types() {
+		ReactiveScope::run(|| {
+			// Arrange
+			let type_evaluations = Rc::new(Cell::new(0));
+			let reactive_type_evaluations = Rc::clone(&type_evaluations);
+			let overridden_value_evaluations = Rc::new(Cell::new(0));
+			let reactive_value_evaluations = Rc::clone(&overridden_value_evaluations);
+			let superseded_class_evaluations = Rc::new(Cell::new(0));
+			let first_class_evaluations = Rc::clone(&superseded_class_evaluations);
+			let final_class_evaluations = Rc::new(Cell::new(0));
+			let last_class_evaluations = Rc::clone(&final_class_evaluations);
+			let marker_evaluations = Rc::new(Cell::new(0));
+			let reactive_marker_evaluations = Rc::clone(&marker_evaluations);
+			let input = PageElement::new("input")
+				.attr("type", "text")
+				.attr("data-rh-password-omitted", "false")
+				.reactive_attr("type", move || {
+					reactive_type_evaluations.set(reactive_type_evaluations.get() + 1);
+					Some("password".into())
+				})
+				.reactive_attr("value", move || {
+					reactive_value_evaluations.set(reactive_value_evaluations.get() + 1);
+					Some("exposed".into())
+				})
+				.reactive_attr("DATA-RH-PASSWORD-OMITTED", move || {
+					reactive_marker_evaluations.set(reactive_marker_evaluations.get() + 1);
+					Some("false".into())
+				})
+				.reactive_attr("class", move || {
+					first_class_evaluations.set(first_class_evaluations.get() + 1);
+					Some("superseded".into())
+				})
+				.reactive_attr("class", move || {
+					last_class_evaluations.set(last_class_evaluations.get() + 1);
+					Some("final".into())
+				})
+				.attr("value", "stale")
+				.control_binding(ControlBinding::text(Signal::new("secret".to_owned())))
+				.into_page();
+
+			// Act
+			let html = input.render_to_string();
+
+			// Assert
+			assert_eq!(
+				html,
+				"<input type=\"password\" class=\"final\" data-rh-password-omitted=\"true\" />"
+			);
+			assert_eq!(type_evaluations.get(), 1);
+			assert_eq!(overridden_value_evaluations.get(), 0);
+			assert_eq!(superseded_class_evaluations.get(), 0);
+			assert_eq!(final_class_evaluations.get(), 1);
+			assert_eq!(marker_evaluations.get(), 0);
+		});
+	}
+
+	#[rstest]
+	#[case(None, "<input value=\"secret\" />")]
+	#[case(Some("text"), "<input type=\"text\" value=\"secret\" />")]
+	#[case(Some("TIME"), "<input type=\"TIME\" value=\"secret\" />")]
+	#[case(
+		Some("PASSWORD"),
+		"<input type=\"PASSWORD\" data-rh-password-omitted=\"true\" />"
+	)]
+	#[case(
+		Some("file"),
+		"<input type=\"password\" data-rh-password-omitted=\"true\" />"
+	)]
+	fn render_to_string_marks_only_effective_bound_password_types(
+		#[case] input_type: Option<&'static str>,
+		#[case] expected: &str,
+	) {
+		ReactiveScope::run(|| {
+			// Arrange
+			let input = PageElement::new("input")
+				.attr("type", "password")
+				.reactive_attr("type", move || input_type.map(Into::into))
+				.control_binding(ControlBinding::text(Signal::new("secret".to_owned())))
+				.into_page();
+
+			// Act
+			let html = input.render_to_string();
+
+			// Assert
+			assert_eq!(html, expected);
+		});
+	}
+
+	#[test]
+	fn render_to_string_rejects_a_binding_incompatible_reactive_input_type() {
+		ReactiveScope::run(|| {
+			// Arrange
+			let input = PageElement::new("input")
+				.attr("type", "text")
+				.reactive_attr("type", || Some("file".into()))
+				.control_binding(ControlBinding::text(Signal::new("secret".to_owned())))
+				.into_page();
+
+			// Act
+			let html = input.render_to_string();
+
+			// Assert
+			assert_eq!(html, "<input type=\"text\" value=\"secret\" />");
+		});
+	}
+
+	#[test]
+	fn render_to_string_rejects_a_binding_incompatible_reactive_select_cardinality() {
+		ReactiveScope::run(|| {
+			// Arrange
+			let select = PageElement::new("select")
+				.reactive_attr("multiple", || Some("multiple".into()))
+				.control_binding(ControlBinding::select_one(Signal::new("draft".to_owned())))
+				.into_page();
+
+			// Act
+			let html = select.render_to_string();
+
+			// Assert
+			assert_eq!(html, "<select></select>");
 		});
 	}
 

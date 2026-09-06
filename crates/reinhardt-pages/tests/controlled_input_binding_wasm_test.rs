@@ -3,13 +3,16 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use gloo_timers::future::TimeoutFuture;
 use reinhardt_pages::component::{
 	Component, ControlBinding, ControlBindingError, ControlKind, ControlValue, IntoPage,
 	MountError, NumberParseError, NumberParseErrorKind, Page, PageExt,
 };
 use reinhardt_pages::dom::Element;
+use reinhardt_pages::prelude::defer_yield;
 use reinhardt_pages::reactive::{ReactiveScope, Signal, with_runtime};
 use reinhardt_pages::{PageElement, page};
+use rstest::rstest;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_test::*;
@@ -17,6 +20,27 @@ use wasm_bindgen_test::*;
 wasm_bindgen_test_configure!(run_in_browser);
 
 struct SsrStateElement(web_sys::Element);
+
+struct AttachedRootCleanup(web_sys::Element);
+
+struct HydratedControlPage(Page);
+
+impl Component for HydratedControlPage {
+	fn name() -> &'static str {
+		"HydratedControlPage"
+	}
+
+	fn render(&self) -> Page {
+		self.0.clone()
+	}
+}
+
+impl Drop for AttachedRootCleanup {
+	fn drop(&mut self) {
+		reinhardt_pages::cleanup_reactive_nodes();
+		self.0.remove();
+	}
+}
 
 impl SsrStateElement {
 	fn install(document: &web_sys::Document) -> Self {
@@ -76,6 +100,1493 @@ fn public_page_mount_installs_control_binding() {
 		assert_eq!(value.get(), "dom");
 		assert_eq!(&*observed.borrow(), "dom");
 		reinhardt_pages::cleanup_reactive_nodes();
+	});
+}
+
+#[wasm_bindgen_test]
+fn unrelated_reactive_attributes_preserve_an_active_control_edit() {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let root = Element::new(document.create_element("div").expect("root"));
+		let value = Signal::new("bound".to_owned());
+		let invalid = Signal::new(false);
+		let invalid_for_page = invalid.clone();
+		PageElement::new("input")
+			.attr("type", "text")
+			.reactive_attr("aria-invalid", move || {
+				Some(invalid_for_page.get().to_string().into())
+			})
+			.control_binding(ControlBinding::text(value.clone()))
+			.into_page()
+			.mount(&root)
+			.expect("mount");
+		let input: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("input")
+			.unchecked_into();
+
+		input.set_value("draft");
+		invalid.set(true);
+
+		assert_eq!(value.get(), "bound");
+		assert_eq!(input.value(), "draft");
+		reinhardt_pages::cleanup_reactive_nodes();
+	});
+}
+
+#[rstest]
+#[case::mount(false, false)]
+#[case::reactive_if(true, false)]
+#[case::hydrate(false, true)]
+#[case::hydrate_reactive_if(true, true)]
+#[wasm_bindgen_test]
+fn range_reconciliation_updates_the_bound_value_as_the_step_base(
+	#[case] nested_in_reactive_if: bool,
+	#[case] hydrate: bool,
+) {
+	ReactiveScope::run(|| {
+		// Arrange
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let container = document.create_element("div").expect("container");
+		let _cleanup = AttachedRootCleanup(container.clone());
+		let value = Signal::new(3_i32);
+		let range_value = value.clone();
+		let range = move || {
+			PageElement::new("input")
+				.attr("type", "range")
+				.attr("step", "2")
+				.reactive_attr("class", || Some("stepped".into()))
+				.control_binding(ControlBinding::number(range_value.clone()))
+				.into_page()
+		};
+		let input_page = if nested_in_reactive_if {
+			Page::reactive_if(|| true, range, || Page::Empty)
+		} else {
+			range()
+		};
+		let page = PageElement::new("div").child(input_page).into_page();
+
+		// Act
+		let root = if hydrate {
+			container.set_inner_html(&page.render_to_string());
+			let root = Element::new(container.first_element_child().expect("SSR root"));
+			let _state = SsrStateElement::install(&document);
+			reinhardt_pages::hydration::hydrate(&HydratedControlPage(page), &root)
+				.expect("hydrate");
+			root
+		} else {
+			let root = Element::new(container);
+			page.mount(&root).expect("mount");
+			root
+		};
+		let input: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.query_selector("input")
+			.expect("query")
+			.expect("range")
+			.unchecked_into();
+
+		// Assert
+		assert_eq!(value.get(), 3);
+		assert_eq!(input.value(), "3");
+		assert_eq!(input.get_attribute("value").as_deref(), Some("3"));
+
+		value.set(4);
+
+		assert_eq!(value.get(), 4);
+		assert_eq!(input.value(), "4");
+		assert_eq!(input.default_value(), "4");
+		assert!(
+			input.is_same_node(
+				root.as_web_sys()
+					.query_selector("input")
+					.unwrap()
+					.as_deref()
+			)
+		);
+	});
+}
+
+#[rstest]
+#[case::mount(false, false)]
+#[case::reactive_if(true, false)]
+#[case::hydrate(false, true)]
+#[case::hydrate_reactive_if(true, true)]
+#[wasm_bindgen_test]
+fn reactive_range_constraints_reconcile_shared_peers(
+	#[case] nested_in_reactive_if: bool,
+	#[case] hydrate: bool,
+) {
+	ReactiveScope::run(|| {
+		// Arrange
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let container = document.create_element("div").expect("container");
+		let _cleanup = AttachedRootCleanup(container.clone());
+		let value = Signal::new(100_i32);
+		let max = Signal::new(100_i32);
+		let first_range = move || {
+			PageElement::new("input")
+				.attr("id", "first")
+				.attr("type", "range")
+				.attr("min", "0")
+				.reactive_attr("max", move || Some(max.get().to_string().into()))
+				.control_binding(ControlBinding::number(value))
+				.into_page()
+		};
+		let first_range = if nested_in_reactive_if {
+			Page::reactive_if(|| true, first_range, || Page::Empty)
+		} else {
+			first_range()
+		};
+		let page = PageElement::new("div")
+			.child(first_range)
+			.child(
+				PageElement::new("input")
+					.attr("id", "second")
+					.attr("type", "range")
+					.attr("min", "200")
+					.attr("max", "300")
+					.control_binding(ControlBinding::number(value))
+					.into_page(),
+			)
+			.into_page();
+		let root = if hydrate {
+			container.set_inner_html(&page.render_to_string());
+			let root = Element::new(container.first_element_child().expect("SSR root"));
+			let _state = SsrStateElement::install(&document);
+			reinhardt_pages::hydration::hydrate(&HydratedControlPage(page), &root)
+				.expect("hydrate");
+			root
+		} else {
+			let root = Element::new(container);
+			page.mount(&root).expect("mount");
+			root
+		};
+		let first: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.query_selector("#first")
+			.expect("query")
+			.expect("first range")
+			.unchecked_into();
+		let second: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.query_selector("#second")
+			.expect("query")
+			.expect("second range")
+			.unchecked_into();
+		value.set(100);
+		with_runtime(|runtime| runtime.flush_updates());
+		assert_eq!(value.get(), 100);
+		assert_eq!(
+			(first.value(), second.value()),
+			("100".to_owned(), "200".to_owned())
+		);
+
+		// Act: only the already-representable control's constraints change.
+		max.set(300);
+		with_runtime(|runtime| runtime.flush_updates());
+		with_runtime(|runtime| runtime.flush_updates());
+
+		// Assert
+		assert_eq!(value.get(), 200);
+		assert_eq!(
+			(first.value(), second.value()),
+			("200".to_owned(), "200".to_owned())
+		);
+		assert!(
+			second.is_same_node(
+				root.as_web_sys()
+					.query_selector("#second")
+					.unwrap()
+					.as_deref()
+			)
+		);
+	});
+}
+
+#[rstest]
+#[wasm_bindgen_test]
+fn range_binding_canonicalizes_negative_zero() {
+	ReactiveScope::run(|| {
+		// Arrange
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_root = document.create_element("div").expect("root");
+		let _cleanup = AttachedRootCleanup(raw_root.clone());
+		let root = Element::new(raw_root);
+		let value = Signal::new(-0.0_f64);
+		PageElement::new("input")
+			.attr("type", "range")
+			.attr("step", "any")
+			.control_binding(ControlBinding::number(value))
+			.into_page()
+			.mount(&root)
+			.expect("mount");
+		let input: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("range")
+			.unchecked_into();
+		assert_eq!(input.value(), "0");
+		assert_eq!(value.get().to_bits(), 0.0_f64.to_bits());
+
+		// Act
+		value.set(-0.0);
+
+		// Assert
+		assert_eq!(input.value(), "0");
+		assert_eq!(value.get().to_bits(), 0.0_f64.to_bits());
+	});
+}
+
+#[rstest]
+#[wasm_bindgen_test]
+fn shared_ranges_with_different_step_grids_keep_their_local_projection() {
+	ReactiveScope::run(|| {
+		// Arrange
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_root = document.create_element("div").expect("root");
+		let _cleanup = AttachedRootCleanup(raw_root.clone());
+		let root = Element::new(raw_root);
+		let value = Signal::new(8_i32);
+		Page::Fragment(
+			["2", "3"]
+				.into_iter()
+				.map(|step| {
+					PageElement::new("input")
+						.attr("type", "range")
+						.attr("min", "0")
+						.attr("max", "15")
+						.attr("step", step)
+						.control_binding(ControlBinding::number(value))
+						.into_page()
+				})
+				.collect(),
+		)
+		.mount(&root)
+		.expect("mount");
+		let first: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("first range")
+			.unchecked_into();
+		let second: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.last_element_child()
+			.expect("second range")
+			.unchecked_into();
+
+		// Act: the grids intersect, but their local projections of 8 cycle 9 <-> 10.
+		value.set(8);
+		with_runtime(|runtime| runtime.flush_updates());
+
+		// Assert
+		assert_eq!(value.get(), 8);
+		assert_eq!(
+			(first.value(), second.value()),
+			("8".to_owned(), "9".to_owned())
+		);
+	});
+}
+
+#[rstest]
+#[case::remove_one(true, false)]
+#[case::dispose_signal_before_queued_reconciliation(true, true)]
+#[case::unmount_all(false, false)]
+#[case::dispose_signal_before_unmount(false, true)]
+#[wasm_bindgen_test]
+fn shared_range_removal_reconciles_only_live_surviving_controls(
+	#[case] remove_one: bool,
+	#[case] dispose_signal: bool,
+) {
+	ReactiveScope::run(|| {
+		// Arrange
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_root = document.create_element("div").expect("root");
+		let cleanup = AttachedRootCleanup(raw_root.clone());
+		let root = Element::new(raw_root);
+		let signal_scope = ReactiveScope::new();
+		let value = signal_scope.enter(|| Signal::new(100_i32));
+		let show_first = Signal::new(true);
+		Page::Fragment(vec![
+			Page::reactive_if(
+				move || show_first.get(),
+				move || {
+					PageElement::new("input")
+						.attr("type", "range")
+						.attr("min", "0")
+						.attr("max", "100")
+						.control_binding(ControlBinding::number(value))
+						.into_page()
+				},
+				|| Page::Empty,
+			),
+			PageElement::new("input")
+				.attr("type", "range")
+				.attr("min", "200")
+				.attr("max", "300")
+				.control_binding(ControlBinding::number(value))
+				.into_page(),
+		])
+		.mount(&root)
+		.expect("mount");
+		let first: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("first range")
+			.unchecked_into();
+		let survivor: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.last_element_child()
+			.expect("surviving range")
+			.unchecked_into();
+		let effects = with_runtime(|runtime| runtime.debug_subscribers(value.id()));
+		assert_eq!(value.get(), 100);
+		assert_eq!(
+			(first.value(), survivor.value()),
+			("100".to_owned(), "200".to_owned())
+		);
+
+		// Act
+		if remove_one {
+			show_first.set(false);
+		}
+		if dispose_signal {
+			signal_scope.dispose();
+		}
+		if remove_one {
+			with_runtime(|runtime| runtime.flush_updates());
+			assert!(survivor.is_same_node(root.as_web_sys().first_element_child().as_deref()));
+			assert_eq!(survivor.value(), "200");
+		}
+		let expected_value = if remove_one { 200 } else { 100 };
+		if !dispose_signal {
+			assert_eq!(value.get(), expected_value);
+		}
+		drop(cleanup);
+		with_runtime(|runtime| runtime.flush_updates());
+
+		// Assert: full teardown cancels reconciliation and all removed control effects.
+		assert_eq!(
+			with_runtime(|runtime| runtime.subscriber_count(value.id())),
+			0
+		);
+		assert!(
+			effects
+				.iter()
+				.all(|effect| !with_runtime(|runtime| runtime.has_node(*effect)))
+		);
+		if !dispose_signal {
+			assert_eq!(value.get(), expected_value);
+			value.set(250);
+		}
+		assert_eq!(
+			(first.value(), survivor.value()),
+			("100".to_owned(), "200".to_owned())
+		);
+	});
+}
+
+#[rstest]
+#[case(false)]
+#[case(true)]
+#[wasm_bindgen_test]
+fn reactive_multiple_reconciles_email_value_sanitization(#[case] nested_in_reactive_if: bool) {
+	ReactiveScope::run(|| {
+		// Arrange
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let root = Element::new(document.create_element("div").expect("root"));
+		let value = Signal::new("a@example.test,  b@example.test ".to_owned());
+		let multiple = Signal::new(false);
+		let reactive_multiple = multiple.clone();
+		let email_value = value.clone();
+		let email = move || {
+			let reactive_multiple = reactive_multiple.clone();
+			PageElement::new("input")
+				.attr("type", "email")
+				.reactive_attr("multiple", move || {
+					Some(reactive_multiple.get().to_string().into())
+				})
+				.control_binding(ControlBinding::text(email_value.clone()))
+				.into_page()
+		};
+		let page = if nested_in_reactive_if {
+			Page::reactive_if(|| true, email, || Page::Empty)
+		} else {
+			email()
+		};
+		page.mount(&root).expect("mount");
+		let input: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("email")
+			.unchecked_into();
+
+		// Act
+		multiple.set(true);
+
+		// Assert
+		assert_eq!(value.get(), "a@example.test,b@example.test");
+		assert_eq!(input.value(), "a@example.test,b@example.test");
+		reinhardt_pages::cleanup_reactive_nodes();
+	});
+}
+
+#[rstest]
+#[case(false)]
+#[case(true)]
+#[wasm_bindgen_test]
+fn reactive_password_type_removes_the_serialized_bound_value(#[case] nested_in_reactive_if: bool) {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_form = document.create_element("form").expect("form");
+		let form: web_sys::HtmlFormElement = raw_form.clone().unchecked_into();
+		let root = Element::new(raw_form);
+		let password_type = Signal::new(false);
+		let reactive_password_type = password_type;
+		let value = Signal::new("secret".to_owned());
+		let bound_value = value;
+		let input = move || {
+			let reactive_password_type = reactive_password_type;
+			PageElement::new("input")
+				.attr("type", "text")
+				.reactive_attr("type", move || {
+					Some(if reactive_password_type.get() {
+						"password".into()
+					} else {
+						"text".into()
+					})
+				})
+				.control_binding(ControlBinding::text(bound_value))
+				.into_page()
+		};
+		let page = if nested_in_reactive_if {
+			Page::reactive_if(|| true, input, || Page::Empty)
+		} else {
+			input()
+		};
+		page.mount(&root).expect("mount");
+		let input: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("input")
+			.unchecked_into();
+
+		password_type.set(true);
+		with_runtime(|runtime| runtime.flush_updates());
+
+		assert_eq!(input.type_(), "password");
+		assert_eq!(input.value(), "secret");
+		assert_eq!(input.get_attribute("value"), None);
+		assert_eq!(value.get(), "secret");
+
+		password_type.set(false);
+		with_runtime(|runtime| runtime.flush_updates());
+		input.set_value("draft");
+		form.reset();
+
+		assert_eq!(input.type_(), "text");
+		assert_eq!(input.value(), "secret");
+		reinhardt_pages::cleanup_reactive_nodes();
+	});
+}
+
+fn password_reset_form(
+	value: Signal<String>,
+	hydrate: bool,
+) -> (
+	AttachedRootCleanup,
+	web_sys::HtmlFormElement,
+	web_sys::HtmlInputElement,
+) {
+	let document = web_sys::window()
+		.expect("window")
+		.document()
+		.expect("document");
+	let container = document.create_element("div").expect("container");
+	let cleanup = AttachedRootCleanup(container.clone());
+	document
+		.body()
+		.expect("body")
+		.append_child(&container)
+		.expect("attach form container");
+	let page = PageElement::new("form")
+		.child(
+			PageElement::new("input")
+				.attr("type", "password")
+				.control_binding(ControlBinding::text(value)),
+		)
+		.child(PageElement::new("button").attr("type", "reset"))
+		.into_page();
+	if hydrate {
+		container.set_inner_html(&page.render_to_string());
+		let root = Element::new(container.first_element_child().expect("SSR form"));
+		let _state = SsrStateElement::install(&document);
+		reinhardt_pages::hydration::hydrate(&HydratedControlPage(page), &root)
+			.expect("hydrate password form");
+	} else {
+		page.mount(&Element::new(container.clone()))
+			.expect("mount password form");
+	}
+	let form: web_sys::HtmlFormElement = container
+		.first_element_child()
+		.expect("form")
+		.unchecked_into();
+	let input = form
+		.query_selector("input")
+		.expect("query password")
+		.expect("password input")
+		.unchecked_into();
+	(cleanup, form, input)
+}
+
+#[rstest]
+#[case::mount_form_reset(false, false)]
+#[case::mount_reset_button(false, true)]
+#[case::hydrate_form_reset(true, false)]
+#[case::hydrate_reset_button(true, true)]
+#[test_attr(wasm_bindgen_test)]
+async fn bound_password_reset_respects_cancellation_and_clears_the_signal(
+	#[case] hydrate: bool,
+	#[case] use_reset_button: bool,
+) {
+	// Arrange
+	let scope = ReactiveScope::new();
+	let value = scope.enter(|| Signal::new("initial-secret".to_owned()));
+	let (_cleanup, form, input) = scope.enter(|| password_reset_form(value, hydrate));
+	assert_eq!(input.value(), "initial-secret");
+	assert_eq!(input.get_attribute("value"), None);
+	assert_eq!(input.default_value(), "");
+	input.set_value("edited-secret");
+	input
+		.dispatch_event(&web_sys::InputEvent::new("input").expect("input event"))
+		.expect("dispatch password edit");
+	assert_eq!(value.get(), "edited-secret");
+	let cancel_reset = Rc::new(Cell::new(true));
+	let reset_count = Rc::new(Cell::new(0));
+	let cancel_for_handler = Rc::clone(&cancel_reset);
+	let count_for_handler = Rc::clone(&reset_count);
+	let _reset_listener = Element::new(form.clone().unchecked_into())
+		.add_event_listener_with_event("reset", move |event| {
+			count_for_handler.set(count_for_handler.get() + 1);
+			event.stop_propagation();
+			if cancel_for_handler.get() {
+				event.prevent_default();
+			}
+		});
+	let reset = || {
+		if use_reset_button {
+			form.query_selector("button")
+				.expect("query reset button")
+				.expect("reset button")
+				.unchecked_into::<web_sys::HtmlElement>()
+				.click();
+		} else {
+			form.reset();
+		}
+	};
+
+	// Act: a cancelled reset preserves both the live value and the signal.
+	reset();
+	TimeoutFuture::new(0).await;
+	with_runtime(|runtime| runtime.flush_updates());
+
+	// Assert
+	assert_eq!(reset_count.get(), 1);
+	assert_eq!(input.value(), "edited-secret");
+	assert_eq!(value.get(), "edited-secret");
+	assert_eq!(input.get_attribute("value"), None);
+	assert_eq!(input.default_value(), "");
+
+	// Act: allow the browser reset despite the stopped event propagation.
+	cancel_reset.set(false);
+	reset();
+	defer_yield().await;
+	// Native clicks can run microtasks before the reset default action completes.
+	assert_eq!(value.get(), "edited-secret");
+	TimeoutFuture::new(0).await;
+	with_runtime(|runtime| runtime.flush_updates());
+
+	// Assert
+	assert_eq!(reset_count.get(), 2);
+	assert_eq!(input.value(), "");
+	assert_eq!(value.get(), "");
+	assert_eq!(input.get_attribute("value"), None);
+	assert_eq!(input.default_value(), "");
+}
+
+#[rstest]
+#[case::mount_unmount(false, false)]
+#[case::mount_dispose_signal(false, true)]
+#[case::hydrate_unmount(true, false)]
+#[case::hydrate_dispose_signal(true, true)]
+#[test_attr(wasm_bindgen_test)]
+async fn bound_password_reset_queued_before_teardown_skips_removed_controls(
+	#[case] hydrate: bool,
+	#[case] dispose_signal: bool,
+) {
+	// Arrange
+	let signal_scope = ReactiveScope::new();
+	let value = signal_scope.enter(|| Signal::new("secret".to_owned()));
+	let binding_scope = ReactiveScope::new();
+	let (cleanup, form, input) = binding_scope.enter(|| password_reset_form(value, hydrate));
+	let effects = with_runtime(|runtime| runtime.debug_subscribers(value.id()));
+	assert_eq!(input.value(), "secret");
+	assert_eq!(input.get_attribute("value"), None);
+	assert_eq!(input.default_value(), "");
+
+	// Act: remove the binding before its deferred reset reconciliation runs.
+	form.reset();
+	drop(cleanup);
+	if dispose_signal {
+		drop(signal_scope);
+	}
+	TimeoutFuture::new(0).await;
+	with_runtime(|runtime| runtime.flush_updates());
+
+	// Assert: queued work neither writes a removed binding nor revives its effects.
+	assert_eq!(input.value(), "");
+	assert_eq!(input.get_attribute("value"), None);
+	assert_eq!(input.default_value(), "");
+	assert_eq!(
+		with_runtime(|runtime| runtime.subscriber_count(value.id())),
+		0
+	);
+	assert!(
+		effects
+			.iter()
+			.all(|effect| !with_runtime(|runtime| runtime.has_node(*effect)))
+	);
+	if dispose_signal {
+		assert!(value.try_get_untracked().is_err());
+	} else {
+		assert_eq!(value.get(), "secret");
+		value.set("after-teardown".to_owned());
+		assert_eq!(input.value(), "");
+	}
+}
+
+#[rstest]
+#[case(false)]
+#[case(true)]
+#[wasm_bindgen_test]
+fn reactive_text_binding_rejects_file_type_transition(#[case] nested_in_reactive_if: bool) {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_root = document.create_element("div").expect("root");
+		let _cleanup = AttachedRootCleanup(raw_root.clone());
+		let root = Element::new(raw_root);
+		let file_type = Signal::new(false);
+		let reactive_file_type = file_type;
+		let value = Signal::new("bound".to_owned());
+		let bound_value = value;
+		let input = move || {
+			let reactive_file_type = reactive_file_type;
+			PageElement::new("input")
+				.attr("type", "text")
+				.reactive_attr("type", move || {
+					Some(if reactive_file_type.get() {
+						"file".into()
+					} else {
+						"text".into()
+					})
+				})
+				.control_binding(ControlBinding::text(bound_value))
+				.into_page()
+		};
+		let page = if nested_in_reactive_if {
+			Page::reactive_if(|| true, input, || Page::Empty)
+		} else {
+			input()
+		};
+		page.mount(&root).expect("mount");
+		let input: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("input")
+			.unchecked_into();
+
+		file_type.set(true);
+		with_runtime(|runtime| runtime.flush_updates());
+
+		assert_eq!(input.type_(), "text");
+		assert_eq!(input.value(), "bound");
+		assert_eq!(value.get(), "bound");
+	});
+}
+
+#[rstest]
+#[case(false, false)]
+#[case(false, true)]
+#[case(true, false)]
+#[case(true, true)]
+#[wasm_bindgen_test]
+fn reactive_select_cardinality_changes_are_rejected(
+	#[case] starts_multiple: bool,
+	#[case] nested_in_reactive_if: bool,
+) {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_root = document.create_element("div").expect("root");
+		let _cleanup = AttachedRootCleanup(raw_root.clone());
+		let root = Element::new(raw_root);
+		let multiple = Signal::new(starts_multiple);
+		let reactive_multiple = multiple;
+		let binding = if starts_multiple {
+			ControlBinding::select_many(Signal::new(vec!["rust".to_owned()]))
+		} else {
+			ControlBinding::select_one(Signal::new("rust".to_owned()))
+		};
+		let select = move || {
+			let reactive_multiple = reactive_multiple;
+			let element = PageElement::new("select");
+			let element = if starts_multiple {
+				element.attr("multiple", "multiple")
+			} else {
+				element
+			};
+			element
+				.reactive_attr("multiple", move || {
+					Some(reactive_multiple.get().to_string().into())
+				})
+				.control_binding(binding.clone())
+				.child(
+					PageElement::new("option")
+						.attr("value", "rust")
+						.child("Rust"),
+				)
+				.child(
+					PageElement::new("option")
+						.attr("value", "wasm")
+						.child("WebAssembly"),
+				)
+				.into_page()
+		};
+		let page = if nested_in_reactive_if {
+			Page::reactive_if(|| true, select, || Page::Empty)
+		} else {
+			select()
+		};
+		page.mount(&root).expect("mount");
+		let select: web_sys::HtmlSelectElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("select")
+			.unchecked_into();
+
+		multiple.set(!starts_multiple);
+		with_runtime(|runtime| runtime.flush_updates());
+
+		assert_eq!(select.multiple(), starts_multiple);
+	});
+}
+
+#[rstest]
+#[case(false)]
+#[case(true)]
+#[wasm_bindgen_test]
+fn duplicate_static_password_type_uses_the_browser_first_value(
+	#[case] nested_in_reactive_if: bool,
+) {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let root = Element::new(document.create_element("div").expect("root"));
+		let value = Signal::new("secret".to_owned());
+		let bound_value = value;
+		let input = move || {
+			PageElement::new("input")
+				.attr("type", "password")
+				.attr("type", "text")
+				.control_binding(ControlBinding::text(bound_value))
+				.into_page()
+		};
+		let page = if nested_in_reactive_if {
+			Page::reactive_if(|| true, input, || Page::Empty)
+		} else {
+			input()
+		};
+		page.mount(&root).expect("mount");
+		let input: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("input")
+			.unchecked_into();
+
+		assert_eq!(input.type_(), "password");
+		assert_eq!(input.value(), "secret");
+		assert_eq!(input.get_attribute("value"), None);
+		assert_eq!(value.get(), "secret");
+		reinhardt_pages::cleanup_reactive_nodes();
+	});
+}
+
+struct HydratedReactiveAttributeInput {
+	invalid: Signal<bool>,
+	value: Signal<String>,
+}
+
+struct HydratedReactivePasswordInput {
+	password_type: Signal<bool>,
+	value: Signal<String>,
+}
+
+struct HydratedRejectedReactiveTypeInput {
+	file_type: Signal<bool>,
+	value: Signal<String>,
+}
+
+struct HydratedDuplicateStaticPasswordInput {
+	value: Signal<String>,
+}
+
+struct HydratedReactiveNumberInput {
+	max: Signal<u16>,
+	value: Signal<u8>,
+}
+
+struct HydratedReactiveRangeInput {
+	max: Signal<u16>,
+	value: Signal<u8>,
+}
+
+impl Component for HydratedReactivePasswordInput {
+	fn name() -> &'static str {
+		"HydratedReactivePasswordInput"
+	}
+
+	fn render(&self) -> Page {
+		let password_type = self.password_type;
+		PageElement::new("input")
+			.attr("type", "text")
+			.reactive_attr("type", move || {
+				Some(if password_type.get() {
+					"password".into()
+				} else {
+					"text".into()
+				})
+			})
+			.control_binding(ControlBinding::text(self.value))
+			.into_page()
+	}
+}
+
+impl Component for HydratedRejectedReactiveTypeInput {
+	fn name() -> &'static str {
+		"HydratedRejectedReactiveTypeInput"
+	}
+
+	fn render(&self) -> Page {
+		let file_type = self.file_type;
+		let value = self.value;
+		PageElement::new("div")
+			.child(Page::reactive(move || {
+				let reactive_file_type = file_type;
+				PageElement::new("input")
+					.attr("type", "text")
+					.reactive_attr("type", move || {
+						Some(if reactive_file_type.get() {
+							"file".into()
+						} else {
+							"text".into()
+						})
+					})
+					.control_binding(ControlBinding::text(value))
+					.into_page()
+			}))
+			.into_page()
+	}
+}
+
+impl Component for HydratedDuplicateStaticPasswordInput {
+	fn name() -> &'static str {
+		"HydratedDuplicateStaticPasswordInput"
+	}
+
+	fn render(&self) -> Page {
+		PageElement::new("input")
+			.attr("type", "password")
+			.attr("type", "text")
+			.control_binding(ControlBinding::text(self.value))
+			.into_page()
+	}
+}
+
+impl Component for HydratedReactiveNumberInput {
+	fn name() -> &'static str {
+		"HydratedReactiveNumberInput"
+	}
+
+	fn render(&self) -> Page {
+		let max = self.max;
+		PageElement::new("input")
+			.attr("type", "number")
+			.reactive_attr("max", move || Some(max.get().to_string().into()))
+			.control_binding(ControlBinding::number(self.value))
+			.into_page()
+	}
+}
+
+impl Component for HydratedReactiveRangeInput {
+	fn name() -> &'static str {
+		"HydratedReactiveRangeInput"
+	}
+
+	fn render(&self) -> Page {
+		let max = self.max;
+		PageElement::new("input")
+			.attr("type", "range")
+			.reactive_attr("max", move || Some(max.get().to_string().into()))
+			.control_binding(ControlBinding::number(self.value))
+			.into_page()
+	}
+}
+
+impl Component for HydratedReactiveAttributeInput {
+	fn name() -> &'static str {
+		"HydratedReactiveAttributeInput"
+	}
+
+	fn render(&self) -> Page {
+		let invalid = self.invalid.clone();
+		PageElement::new("input")
+			.attr("type", "text")
+			.reactive_attr("aria-invalid", move || {
+				Some(invalid.get().to_string().into())
+			})
+			.control_binding(ControlBinding::text(self.value.clone()))
+			.into_page()
+	}
+}
+
+#[rstest]
+#[wasm_bindgen_test]
+fn hydrated_unrelated_reactive_attributes_preserve_an_active_control_edit() {
+	ReactiveScope::run(|| {
+		// Arrange
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_input = document.create_element("input").expect("input");
+		raw_input.set_attribute("type", "text").expect("input type");
+		raw_input
+			.set_attribute("aria-invalid", "false")
+			.expect("initial reactive attribute");
+		let input: web_sys::HtmlInputElement = raw_input.clone().unchecked_into();
+		input.set_value("bound");
+		let root = Element::new(raw_input);
+		let invalid = Signal::new(false);
+		let value = Signal::new("bound".to_owned());
+		let _state = SsrStateElement::install(&document);
+		reinhardt_pages::hydration::hydrate(
+			&HydratedReactiveAttributeInput {
+				invalid: invalid.clone(),
+				value: value.clone(),
+			},
+			&root,
+		)
+		.expect("hydrate");
+		input.set_value("draft");
+
+		// Act
+		invalid.set(true);
+		with_runtime(|runtime| runtime.flush_updates());
+
+		// Assert
+		assert_eq!(value.get(), "bound");
+		assert_eq!(input.value(), "draft");
+		reinhardt_pages::cleanup_reactive_nodes();
+	});
+}
+
+#[rstest]
+#[wasm_bindgen_test]
+fn hydrated_password_type_removes_the_serialized_bound_value() {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_input = document.create_element("input").expect("input");
+		raw_input.set_attribute("type", "text").expect("input type");
+		raw_input
+			.set_attribute("value", "secret")
+			.expect("serialized value");
+		let raw_form = document.create_element("form").expect("form");
+		raw_form.append_child(&raw_input).expect("form input");
+		let form: web_sys::HtmlFormElement = raw_form.unchecked_into();
+		let input: web_sys::HtmlInputElement = raw_input.clone().unchecked_into();
+		let root = Element::new(raw_input);
+		let password_type = Signal::new(false);
+		let value = Signal::new("secret".to_owned());
+		let _state = SsrStateElement::install(&document);
+		reinhardt_pages::hydration::hydrate(
+			&HydratedReactivePasswordInput {
+				password_type,
+				value,
+			},
+			&root,
+		)
+		.expect("hydrate");
+
+		password_type.set(true);
+		with_runtime(|runtime| runtime.flush_updates());
+
+		assert_eq!(input.type_(), "password");
+		assert_eq!(input.value(), "secret");
+		assert_eq!(input.get_attribute("value"), None);
+		assert_eq!(value.get(), "secret");
+
+		password_type.set(false);
+		with_runtime(|runtime| runtime.flush_updates());
+		input.set_value("draft");
+		form.reset();
+
+		assert_eq!(input.type_(), "text");
+		assert_eq!(input.value(), "secret");
+		reinhardt_pages::cleanup_reactive_nodes();
+	});
+}
+
+#[rstest]
+#[wasm_bindgen_test]
+fn hydration_initial_password_type_removes_the_serialized_bound_value() {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_input = document.create_element("input").expect("input");
+		raw_input.set_attribute("type", "text").expect("input type");
+		raw_input
+			.set_attribute("value", "secret")
+			.expect("serialized value");
+		let input: web_sys::HtmlInputElement = raw_input.clone().unchecked_into();
+		let _cleanup = AttachedRootCleanup(raw_input.clone());
+		let root = Element::new(raw_input);
+		let password_type = Signal::new(true);
+		let value = Signal::new("secret".to_owned());
+		let _state = SsrStateElement::install(&document);
+
+		reinhardt_pages::hydration::hydrate(
+			&HydratedReactivePasswordInput {
+				password_type,
+				value,
+			},
+			&root,
+		)
+		.expect("hydrate");
+
+		assert_eq!(input.type_(), "password");
+		assert_eq!(input.value(), "secret");
+		assert_eq!(input.get_attribute("value"), None);
+		assert_eq!(value.get(), "secret");
+	});
+}
+
+#[wasm_bindgen_test]
+fn hydration_preserves_an_adopted_control_after_rejecting_its_initial_type() {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_root = document.create_element("div").expect("root");
+		let raw_input = document.create_element("input").expect("input");
+		raw_input.set_attribute("type", "text").expect("input type");
+		raw_input
+			.set_attribute("value", "server")
+			.expect("serialized value");
+		raw_root.append_child(&raw_input).expect("SSR child");
+		let input: web_sys::HtmlInputElement = raw_input.clone().unchecked_into();
+		let _cleanup = AttachedRootCleanup(raw_root.clone());
+		let root = Element::new(raw_root);
+		let file_type = Signal::new(true);
+		let value = Signal::new("server".to_owned());
+		let _state = SsrStateElement::install(&document);
+
+		reinhardt_pages::hydration::hydrate(
+			&HydratedRejectedReactiveTypeInput { file_type, value },
+			&root,
+		)
+		.expect("hydrate");
+
+		assert!(raw_input.is_same_node(root.as_web_sys().first_element_child().as_deref()));
+		assert_eq!(input.type_(), "text");
+		assert_eq!(input.value(), "server");
+		assert_eq!(value.get(), "server");
+	});
+}
+
+#[rstest]
+#[wasm_bindgen_test]
+fn hydration_initial_reactive_attributes_preserve_rejected_numeric_edits() {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_input = document.create_element("input").expect("input");
+		raw_input
+			.set_attribute("type", "number")
+			.expect("input type");
+		raw_input.set_attribute("max", "500").expect("input max");
+		let input: web_sys::HtmlInputElement = raw_input.clone().unchecked_into();
+		let _cleanup = AttachedRootCleanup(raw_input.clone());
+		input.set_value("300");
+		let root = Element::new(raw_input);
+		let max = Signal::new(500_u16);
+		let value = Signal::new(7_u8);
+		let _state = SsrStateElement::install(&document);
+
+		reinhardt_pages::hydration::hydrate(&HydratedReactiveNumberInput { max, value }, &root)
+			.expect("hydrate rejected numeric edit");
+
+		assert_eq!(input.value(), "300");
+		assert_eq!(value.get(), 7);
+	});
+}
+
+#[rstest]
+#[wasm_bindgen_test]
+fn hydration_initial_reactive_range_constraint_reconciles_browser_sanitization() {
+	ReactiveScope::run(|| {
+		// Arrange
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_input = document.create_element("input").expect("input");
+		raw_input
+			.set_attribute("type", "range")
+			.expect("input type");
+		raw_input.set_attribute("max", "100").expect("SSR max");
+		raw_input.set_attribute("value", "100").expect("SSR value");
+		let input: web_sys::HtmlInputElement = raw_input.clone().unchecked_into();
+		let _cleanup = AttachedRootCleanup(raw_input.clone());
+		let root = Element::new(raw_input);
+		let max = Signal::new(50_u16);
+		let value = Signal::new(100_u8);
+		let _state = SsrStateElement::install(&document);
+
+		// Act
+		reinhardt_pages::hydration::hydrate(&HydratedReactiveRangeInput { max, value }, &root)
+			.expect("hydrate range with a narrower reactive maximum");
+
+		// Assert
+		assert_eq!(
+			(input.max(), input.value(), value.get()),
+			("50".to_owned(), "50".to_owned(), 50)
+		);
+	});
+}
+
+#[rstest]
+#[wasm_bindgen_test]
+fn hydration_accepts_the_browser_first_static_password_type() {
+	ReactiveScope::run(|| {
+		// Arrange: hydrate the actual core renderer output.
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let value = Signal::new("secret".to_owned());
+		let component = HydratedDuplicateStaticPasswordInput { value };
+		let container = document.create_element("div").expect("container");
+		let _cleanup = AttachedRootCleanup(container.clone());
+		container.set_inner_html(&component.render().render_to_string());
+		let raw_input = container.first_element_child().expect("server input");
+		let input: web_sys::HtmlInputElement = raw_input.clone().unchecked_into();
+		let root = Element::new(raw_input);
+		let _state = SsrStateElement::install(&document);
+		assert_eq!(input.value(), "");
+		assert_eq!(input.get_attribute("value"), None);
+		assert_eq!(
+			input.get_attribute("data-rh-password-omitted").as_deref(),
+			Some("true")
+		);
+
+		// Act
+		reinhardt_pages::hydration::hydrate(&component, &root).expect("hydrate");
+
+		// Assert
+		assert_eq!(input.type_(), "password");
+		assert_eq!(input.value(), "secret");
+		assert_eq!(input.get_attribute("value"), None);
+		assert_eq!(input.get_attribute("data-rh-password-omitted"), None);
+		assert_eq!(value.get(), "secret");
+	});
+}
+
+#[wasm_bindgen_test]
+fn public_page_mount_supports_all_additional_bound_input_types() {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_root = document.create_element("div").expect("root");
+		document
+			.body()
+			.expect("body")
+			.append_child(&raw_root)
+			.expect("attach root");
+		let _cleanup = AttachedRootCleanup(raw_root.clone());
+		let root = Element::new(raw_root.clone());
+		let search = Signal::new("initial search".to_owned());
+		let tel = Signal::new("+81-3-1234-5678".to_owned());
+		let url_raw = "https://example.test\n";
+		let url = Signal::new(url_raw.to_owned());
+		let email_raw = "old@example.test\n";
+		let email = Signal::new(email_raw.to_owned());
+		let password = Signal::new("old-secret".to_owned());
+		let color = Signal::new("#112233".to_owned());
+		let date = Signal::new("2026-08-30".to_owned());
+		let datetime_local = Signal::new("2026-08-30T09:15".to_owned());
+		let month = Signal::new("2026-08".to_owned());
+		let week = Signal::new("2026-W35".to_owned());
+		let time = Signal::new("09:15".to_owned());
+		let range = Signal::new(200_i32);
+
+		page!({
+			input {
+				a11y: off,
+				id: "search",
+				type: "search",
+				bind: search
+			}
+			input {
+				a11y: off,
+				id: "tel",
+				type: "tel",
+				bind: tel
+			}
+			input {
+				a11y: off,
+				id: "url",
+				type: "url",
+				bind: url
+			}
+			input {
+				a11y: off,
+				id: "email",
+				type: "email",
+				bind: email
+			}
+			input {
+				a11y: off,
+				id: "password",
+				type: "password",
+				bind: password
+			}
+			input {
+				a11y: off,
+				id: "color",
+				type: "color",
+				bind: color
+			}
+			input {
+				a11y: off,
+				id: "date",
+				type: "date",
+				bind: date
+			}
+			input {
+				a11y: off,
+				id: "datetime-local",
+				type: "datetime-local",
+				bind: datetime_local
+			}
+			input {
+				a11y: off,
+				id: "month",
+				type: "month",
+				bind: month
+			}
+			input {
+				a11y: off,
+				id: "week",
+				type: "week",
+				bind: week
+			}
+			input {
+				a11y: off,
+				id: "time",
+				type: "time",
+				bind: time
+			}
+			input {
+				a11y: off,
+				id: "range",
+				type: "range",
+				bind: range
+			}
+		})
+		.mount(&root)
+		.expect("mount");
+
+		let initial_url: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.query_selector("#url")
+			.expect("query")
+			.expect("url input")
+			.unchecked_into();
+		assert_eq!(url.get(), initial_url.value());
+		assert_ne!(url.get(), url_raw);
+		let initial_email: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.query_selector("#email")
+			.expect("query")
+			.expect("email input")
+			.unchecked_into();
+		assert_eq!(email.get(), initial_email.value());
+		assert_ne!(email.get(), email_raw);
+		let initial_range: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.query_selector("#range")
+			.expect("query")
+			.expect("range input")
+			.unchecked_into();
+		assert_eq!(range.get(), 100);
+		assert_eq!(initial_range.value(), "100");
+
+		let check_text = |id: &str, signal: &Signal<String>, next: &str, empty: &str| {
+			let input: web_sys::HtmlInputElement = root
+				.as_web_sys()
+				.query_selector(&format!("#{id}"))
+				.expect("query")
+				.expect("input")
+				.unchecked_into();
+			let element: web_sys::Element = input.clone().unchecked_into();
+			input.focus().expect("focus");
+			input.set_value(next);
+			input
+				.dispatch_event(&web_sys::InputEvent::new("input").expect("event"))
+				.expect("dispatch");
+
+			assert_eq!(signal.get(), next);
+			let current = root
+				.as_web_sys()
+				.query_selector(&format!("#{id}"))
+				.expect("query")
+				.expect("current input");
+			assert!(element.is_same_node(Some(&current)));
+			assert!(
+				document
+					.active_element()
+					.is_some_and(|active| active.is_same_node(Some(&element)))
+			);
+
+			input.set_value("");
+			input
+				.dispatch_event(&web_sys::InputEvent::new("input").expect("event"))
+				.expect("dispatch");
+			assert_eq!(signal.get(), empty);
+			let current = root
+				.as_web_sys()
+				.query_selector(&format!("#{id}"))
+				.expect("query")
+				.expect("current input");
+			assert!(element.is_same_node(Some(&current)));
+			assert!(
+				document
+					.active_element()
+					.is_some_and(|active| active.is_same_node(Some(&element)))
+			);
+		};
+
+		check_text("search", &search, "next search", "");
+		check_text("tel", &tel, "+81-3-9876-5432", "");
+		check_text("url", &url, "https://next.example.test", "");
+		check_text("email", &email, "next@example.test", "");
+		check_text("password", &password, "next-secret", "");
+		check_text("color", &color, "#abcdef", "#000000");
+		check_text("date", &date, "2026-08-31", "");
+		check_text("datetime-local", &datetime_local, "2026-08-31T10:30", "");
+		check_text("month", &month, "2026-09", "");
+		check_text("week", &week, "2026-W36", "");
+		check_text("time", &time, "10:30", "");
+
+		let input: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.query_selector("#date")
+			.expect("query")
+			.expect("date input")
+			.unchecked_into();
+		let element: web_sys::Element = input.clone().unchecked_into();
+		input.focus().expect("focus");
+		date.set("not-a-date".to_owned());
+		assert_eq!(date.get(), "not-a-date");
+		assert_eq!(input.value(), "");
+		let current = root
+			.as_web_sys()
+			.query_selector("#date")
+			.expect("query")
+			.expect("current date input");
+		assert!(element.is_same_node(Some(&current)));
+		assert!(
+			document
+				.active_element()
+				.is_some_and(|active| active.is_same_node(Some(&element)))
+		);
+
+		let input: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.query_selector("#range")
+			.expect("query")
+			.expect("range input")
+			.unchecked_into();
+		let element: web_sys::Element = input.clone().unchecked_into();
+		input.focus().expect("focus");
+		input.set_value("42");
+		input
+			.dispatch_event(&web_sys::InputEvent::new("input").expect("event"))
+			.expect("dispatch");
+		assert_eq!(range.get(), 42);
+		let current = root
+			.as_web_sys()
+			.query_selector("#range")
+			.expect("query")
+			.expect("current range input");
+		assert!(element.is_same_node(Some(&current)));
+		assert!(
+			document
+				.active_element()
+				.is_some_and(|active| active.is_same_node(Some(&element)))
+		);
 	});
 }
 
@@ -1319,6 +2830,26 @@ struct HydratedInput {
 	observed: Rc<RefCell<String>>,
 }
 
+struct HydratedDateTimeInput {
+	value: Signal<String>,
+}
+
+impl Component for HydratedDateTimeInput {
+	fn name() -> &'static str {
+		"HydratedDateTimeInput"
+	}
+
+	fn render(&self) -> Page {
+		PageElement::new("div")
+			.child(
+				PageElement::new("input")
+					.attr("type", "datetime-local")
+					.control_binding(ControlBinding::text(self.value.clone())),
+			)
+			.into_page()
+	}
+}
+
 struct SourcePreferredHydratedInput {
 	value: Signal<String>,
 }
@@ -1672,6 +3203,44 @@ fn public_hydration_adopts_the_live_dom_property() {
 			.expect("dispatch");
 		assert_eq!(value.get(), "edited");
 		assert_eq!(&*observed.borrow(), "edited");
+		reinhardt_pages::cleanup_reactive_nodes();
+	});
+}
+
+#[wasm_bindgen_test]
+fn public_hydration_adopts_datetime_local_input_value() {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_root = document.create_element("div").expect("root");
+		let raw_input = document.create_element("input").expect("input");
+		raw_input
+			.set_attribute("type", "datetime-local")
+			.expect("input type");
+		let input: web_sys::HtmlInputElement = raw_input.clone().unchecked_into();
+		input.set_value("2026-08-31T10:30");
+		raw_root.append_child(&raw_input).expect("input append");
+		let root = Element::new(raw_root);
+		let value = Signal::new("server datetime".to_owned());
+		let _state = SsrStateElement::install(&document);
+
+		reinhardt_pages::hydration::hydrate(
+			&HydratedDateTimeInput {
+				value: value.clone(),
+			},
+			&root,
+		)
+		.expect("hydrate datetime-local input");
+
+		assert_eq!(value.get(), "2026-08-31T10:30");
+		assert!(raw_input.is_same_node(root.as_web_sys().first_element_child().as_deref()));
+		input.set_value("2026-08-31T11:45");
+		input
+			.dispatch_event(&web_sys::InputEvent::new("input").expect("event"))
+			.expect("dispatch");
+		assert_eq!(value.get(), "2026-08-31T11:45");
 		reinhardt_pages::cleanup_reactive_nodes();
 	});
 }

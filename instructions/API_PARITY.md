@@ -19,6 +19,10 @@ The level applies per symbol. A type can be P1 while selected methods are P0.
 |---|---|---|
 | `page!` controlled `bind:` directive and `control_binding` support types | Renders signal state during SSR and synchronizes values in native component tests. | Adopts the live control property during hydration, then synchronizes user and signal writes. |
 
+Both targets apply browser text-fallback sanitization for unknown input types
+and ignore reactive type or select-cardinality changes that would invalidate an
+existing binding.
+
 ## P1 API Surface
 
 | API | Native behavior | WASM behavior |

@@ -1,0 +1,5 @@
+error: `bind:` does not support input type `file`
+ --> tests/ui/page/fail/controlled_bind_unsupported_input_types.rs:8:10
+  |
+8 |             bind: (),
+  |                   ^^

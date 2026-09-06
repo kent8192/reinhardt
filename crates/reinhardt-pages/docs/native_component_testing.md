@@ -79,6 +79,10 @@ and `content_editable`. Validation is atomic: an invalid compound target patch
 does not apply its valid fields before returning `EventError::InvalidFixture`.
 The error exposes `EventFixtureError` through `std::error::Error::source`.
 
+Controlled `bind:` inputs share value normalization across initial rendering,
+Signal updates, and input fixtures. This includes text sanitization, temporal
+value validation, and range bounds and step constraints.
+
 The originating `target()` and listener `current_target()` are distinct owned
 snapshots. Bubbling creates a new current-target snapshot for each listener
 while sharing propagation and default-prevention state.

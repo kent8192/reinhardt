@@ -52,6 +52,66 @@ fn main() {
 				bind: number(number, number_error)
 			}
 			input {
+				a11y: off,
+				type: "search",
+				bind: text
+			}
+			input {
+				a11y: off,
+				type: "tel",
+				bind: text
+			}
+			input {
+				a11y: off,
+				type: "url",
+				bind: text
+			}
+			input {
+				a11y: off,
+				type: "email",
+				bind: text
+			}
+			input {
+				a11y: off,
+				type: "password",
+				bind: text
+			}
+			input {
+				a11y: off,
+				type: "color",
+				bind: text
+			}
+			input {
+				a11y: off,
+				type: "date",
+				bind: text
+			}
+			input {
+				a11y: off,
+				type: "datetime-local",
+				bind: text
+			}
+			input {
+				a11y: off,
+				type: "month",
+				bind: text
+			}
+			input {
+				a11y: off,
+				type: "week",
+				bind: text
+			}
+			input {
+				a11y: off,
+				type: "time",
+				bind: text
+			}
+			input {
+				a11y: off,
+				type: "range",
+				bind: number
+			}
+			input {
 				aria_label: "Borrowed number with parse error",
 				type: "number",
 				bind: number(&number, &number_error)

@@ -171,12 +171,67 @@ pub(crate) fn controlled_attribute_is_overridden(
 }
 
 #[cfg(wasm)]
+pub(crate) fn static_attribute_is_effective<N: AsRef<str>, V: AsRef<str>>(
+	attrs: &[(N, V)],
+	index: usize,
+) -> bool {
+	let name = attrs[index].0.as_ref();
+	if is_boolean_attr(name) {
+		return attrs
+			.iter()
+			.enumerate()
+			.find(|(_, (candidate, value))| {
+				candidate.as_ref().eq_ignore_ascii_case(name)
+					&& is_boolean_attr_truthy(value.as_ref())
+			})
+			.map_or_else(
+				|| {
+					!attrs[..index]
+						.iter()
+						.any(|(earlier, _)| earlier.as_ref().eq_ignore_ascii_case(name))
+				},
+				|(truthy_index, _)| truthy_index == index,
+			);
+	}
+	!attrs[..index]
+		.iter()
+		.any(|(earlier, _)| earlier.as_ref().eq_ignore_ascii_case(name))
+}
+
+#[cfg(wasm)]
+pub(crate) fn controlled_attribute_affects_value(
+	element: &Element,
+	binding: &ControlBinding,
+	name: &str,
+) -> bool {
+	match binding.kind() {
+		ControlKind::Text => {
+			name.eq_ignore_ascii_case("type")
+				|| (name.eq_ignore_ascii_case("multiple")
+					&& element
+						.as_web_sys()
+						.dyn_ref::<web_sys::HtmlInputElement>()
+						.is_some_and(|input| input.type_().eq_ignore_ascii_case("email")))
+		}
+		ControlKind::Number => ["type", "min", "max", "step"]
+			.iter()
+			.any(|attribute| name.eq_ignore_ascii_case(attribute)),
+		ControlKind::SelectOne | ControlKind::SelectMany => name.eq_ignore_ascii_case("multiple"),
+		ControlKind::Checkbox | ControlKind::Radio => false,
+	}
+}
+
+#[cfg(wasm)]
 pub(crate) fn initialize_control_default(element: &Element, binding: &ControlBinding) {
 	let value = crate::reactive::untracked(|| binding.read());
 	match (binding.kind(), value) {
 		(ControlKind::Text | ControlKind::Number, ControlValue::Text(value)) => {
 			if let Some(input) = element.as_web_sys().dyn_ref::<web_sys::HtmlInputElement>() {
-				input.set_default_value(&value);
+				if input.type_().eq_ignore_ascii_case("password") {
+					input.set_value(&value);
+				} else {
+					input.set_default_value(&value);
+				}
 			} else if let Some(textarea) = element
 				.as_web_sys()
 				.dyn_ref::<web_sys::HtmlTextAreaElement>()
@@ -244,8 +299,11 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 				.create_element(&tag)
 				.map_err(|_| MountError::CreateElementFailed)?;
 
-			for (name, value) in attrs {
-				if !is_safe_html_attribute(&name, &value) {
+			for (index, (name, value)) in attrs.iter().enumerate() {
+				if !static_attribute_is_effective(&attrs, index) {
+					continue;
+				}
+				if !is_safe_html_attribute(name, value) {
 					continue;
 				}
 				// Skip boolean attributes with falsy values (empty, "false", "0")
@@ -263,7 +321,7 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 				}
 
 				element
-					.set_attribute(&name, &value)
+					.set_attribute(name, value)
 					.map_err(|err_str: String| {
 						// Log detailed error to browser console
 						let msg: wasm_bindgen::JsValue = format!(
@@ -289,8 +347,83 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 					}
 				}
 
+				let initializing_reactive_attributes = std::rc::Rc::new(std::cell::Cell::new(true));
+				let reactive_attribute_effects = reactive_attrs
+					.iter()
+					.enumerate()
+					.filter(|(index, attribute)| {
+						!reactive_attrs[*index + 1..]
+							.iter()
+							.any(|later| later.name().eq_ignore_ascii_case(attribute.name()))
+					})
+					.filter(|(_, attribute)| {
+						!controlled_attribute_is_overridden(
+							control_binding.as_ref(),
+							attribute.name(),
+						)
+					})
+					.map(|(_, attribute)| {
+						let attribute = attribute.clone();
+						let element = element.clone();
+						let binding = control_binding.clone();
+						let initializing = std::rc::Rc::clone(&initializing_reactive_attributes);
+						crate::reactive::Effect::new(move || {
+							let value = attribute.value();
+							if binding.as_ref().is_some_and(|binding| {
+								!crate::control_binding::controlled_attribute_update_is_supported(
+									&element.as_web_sys().tag_name(),
+									binding.kind(),
+									attribute.name(),
+									value.as_deref(),
+								)
+							}) {
+								return;
+							}
+							match value {
+								Some(value)
+									if !is_safe_html_attribute(attribute.name(), &value) =>
+								{
+									let _ = element.remove_attribute(attribute.name());
+								}
+								Some(value)
+									if is_boolean_attr(attribute.name())
+										&& !is_boolean_attr_truthy(&value) =>
+								{
+									let _ = element.remove_attribute(attribute.name());
+								}
+								Some(value) => {
+									let _ = element.set_attribute(attribute.name(), &value);
+								}
+								None => {
+									let _ = element.remove_attribute(attribute.name());
+								}
+							}
+							if !initializing.get()
+								&& let Some(binding) = binding.as_ref()
+								&& controlled_attribute_affects_value(
+									&element,
+									binding,
+									attribute.name(),
+								) && let Err(error) =
+								crate::dom::control_binding::reconcile_control_binding(
+									&element, binding,
+								) {
+								web_sys::console::error_1(
+									&format!("controlled input attribute update failed: {error}")
+										.into(),
+								);
+							}
+						})
+					})
+					.collect::<Vec<_>>();
 				if let Some(binding) = control_binding.as_ref() {
 					initialize_control_default(&element, binding);
+				}
+				if !reactive_attribute_effects.is_empty() {
+					initializing_reactive_attributes.set(false);
+					if let Some(binding) = control_binding.as_ref() {
+						crate::dom::control_binding::reconcile_control_binding(&element, binding)?;
+					}
 				}
 				let binding_controller = control_binding
 					.clone()
@@ -327,42 +460,6 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 				parent
 					.append_child(element.clone())
 					.map_err(|_| MountError::AppendChildFailed)?;
-				let reactive_attribute_effects = reactive_attrs
-					.iter()
-					.enumerate()
-					.filter(|(index, attribute)| {
-						!reactive_attrs[*index + 1..]
-							.iter()
-							.any(|later| later.name().eq_ignore_ascii_case(attribute.name()))
-					})
-					.filter(|(_, attribute)| {
-						!controlled_attribute_is_overridden(
-							control_binding.as_ref(),
-							attribute.name(),
-						)
-					})
-					.map(|(_, attribute)| {
-						let attribute = attribute.clone();
-						let element = element.clone();
-						crate::reactive::Effect::new(move || match attribute.value() {
-							Some(value) if !is_safe_html_attribute(attribute.name(), &value) => {
-								let _ = element.remove_attribute(attribute.name());
-							}
-							Some(value)
-								if is_boolean_attr(attribute.name())
-									&& !is_boolean_attr_truthy(&value) =>
-							{
-								let _ = element.remove_attribute(attribute.name());
-							}
-							Some(value) => {
-								let _ = element.set_attribute(attribute.name(), &value);
-							}
-							None => {
-								let _ = element.remove_attribute(attribute.name());
-							}
-						})
-					})
-					.collect::<Vec<_>>();
 				store_reactive_node((
 					binding_controller,
 					event_handles,

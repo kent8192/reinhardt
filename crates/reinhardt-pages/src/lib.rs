@@ -461,16 +461,38 @@
 //! ## Controlled form elements
 //!
 //! The `bind:` directive connects native form controls to typed [`Signal`]
-//! values. Text and radio groups use `Signal<String>`, checkboxes use
-//! `Signal<bool>`, numeric inputs use a primitive implementing [`NumberValue`],
-//! and multiple selects use `Signal<Vec<String>>`. Numeric bindings may expose
-//! a [`NumberParseError`] signal that retains recoverable invalid editor text.
+//! values. String-valued inputs (`text`, `search`, `tel`, `url`, `email`,
+//! `password`, `color`, `date`, `datetime-local`, `month`, `week`, and `time`)
+//! and radio groups use `Signal<String>`, checkboxes use `Signal<bool>`, numeric
+//! inputs use a primitive implementing [`NumberValue`], and multiple selects
+//! use `Signal<Vec<String>>`. Date/time inputs use the browser's serialized
+//! value, with `""` for an empty or browser-rejected editor value. Browser
+//! normalization of a valid application write updates the signal, such as
+//! `2026-08-31 10:30` becoming `2026-08-31T10:30` for `datetime-local`. When an
+//! invalid application value is sanitized to `""`, the original signal is
+//! preserved.
+//! Password values stay out of HTML attributes. Resetting a connected password
+//! form reconciles its signal in a deferred task; cancelled resets and
+//! unmounted controls do not change the signal.
+//! Numeric bindings may expose a [`NumberParseError`] signal that retains
+//! recoverable invalid editor text.
 //! Owned signal handles, shared references, and mutable references are supported,
 //! including both signals passed to `number(value, error)`.
 //! Only unmodified Arrow/Home/End keyboard moves are predicted; modifier-key
 //! commands and already-canceled key events are treated as unknown. When a
 //! pointer-positioned number edit is sanitized before its inaccessible selection
 //! can be recovered, the error reports the browser's empty value.
+//! Reactive `type` and `multiple` updates are applied only while the resulting
+//! control remains compatible with its binding. Initial hydration writes
+//! browser-normalized range values back after reactive `min`, `max`, or `step`
+//! constraints apply, while ordinary number inputs retain rejected editor text.
+//! Multiple range controls bound to one signal reconcile browser-normalized
+//! values only when their bounds overlap at an accepted value and their grids
+//! match: equal steps with aligned bases, or all `step="any"`. Differing grids,
+//! including continuous/stepped pairs, keep normalization local even if they
+//! share valid values. Decimal grid alignment allows bounded floating-point
+//! roundoff. Reactive constraints refresh shared peers, and each controlled
+//! range write updates its default step base before live value normalization.
 //! Radio `value` expressions are evaluated once per rendered element. A bound
 //! single select projects only its first matching option in tree order during
 //! SSR, including options resolved inside a pending boundary; a multiple

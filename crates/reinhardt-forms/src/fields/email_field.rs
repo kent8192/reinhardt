@@ -4,10 +4,8 @@ use crate::field::{FieldError, FieldResult, FormField, Widget};
 use regex::Regex;
 use std::sync::LazyLock;
 
-/// Email validation regex pattern.
 const EMAIL_PATTERN: &str = r"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$";
 
-/// Cached email validation regex to avoid repeated compilation.
 static EMAIL_REGEX: LazyLock<Regex> =
 	LazyLock::new(|| Regex::new(EMAIL_PATTERN).expect("Email regex pattern is valid"));
 
@@ -190,7 +188,6 @@ impl FormField for EmailField {
 					.as_str()
 					.ok_or_else(|| FieldError::Validation("Expected string".to_string()))?;
 
-				// Trim whitespace
 				let s = s.trim();
 
 				// Return empty string if not required and empty
@@ -232,5 +229,49 @@ impl FormField for EmailField {
 				Ok(serde_json::Value::String(s.to_string()))
 			}
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::rstest;
+
+	#[rstest]
+	fn direct_email_field_strips_by_default() {
+		let field = EmailField::new("email".to_owned());
+
+		assert_eq!(
+			field
+				.clean(Some(&serde_json::json!("  person@example.com  ")))
+				.unwrap(),
+			serde_json::json!("person@example.com")
+		);
+	}
+
+	#[rstest]
+	fn direct_email_field_preserves_its_legacy_localhost_compatibility() {
+		let field = EmailField::new("email".to_owned());
+
+		assert_eq!(
+			field
+				.clean(Some(&serde_json::json!("person@localhost")))
+				.unwrap(),
+			serde_json::json!("person@localhost")
+		);
+	}
+
+	#[rstest]
+	#[case(None)]
+	#[case(Some(serde_json::json!("   ")))]
+	fn required_email_field_preserves_the_legacy_field_name_message(
+		#[case] value: Option<serde_json::Value>,
+	) {
+		let field = EmailField::new("email".to_owned()).required();
+
+		assert_eq!(
+			field.clean(value.as_ref()).unwrap_err().to_string(),
+			"email"
+		);
 	}
 }

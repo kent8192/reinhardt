@@ -3,10 +3,11 @@
 use std::marker::PhantomData;
 
 use reinhardt_core::model_form::{
-	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError,
-	ModelFormPolicy, ModelFormSchema, NativeModelFormPayload,
+	ModelFormCleanedPayload, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload,
+	ModelFormPayloadError, ModelFormPolicy, ModelFormSchema, ModelFormValidatingPayload,
+	NativeModelFormPayload,
 };
-use reinhardt_pages::form;
+use reinhardt_pages::{form, use_form};
 
 struct Question;
 struct QuestionFields;
@@ -31,6 +32,7 @@ const QUESTION_FIELDS: [ModelFormFieldDescriptor; 2] = [
 		nullable: false,
 		editable: true,
 		generated_relation_id: false,
+		trim: false,
 	},
 	ModelFormFieldDescriptor {
 		name: "owner_id",
@@ -43,6 +45,7 @@ const QUESTION_FIELDS: [ModelFormFieldDescriptor; 2] = [
 		nullable: false,
 		editable: true,
 		generated_relation_id: true,
+		trim: false,
 	},
 ];
 
@@ -55,13 +58,16 @@ impl ModelFormSchema for QuestionFormSchema {
 }
 
 impl QuestionFormSchema {
-	fn owner_id() -> &'static ModelFormFieldDescriptor {
+	const fn owner_id() -> &'static ModelFormFieldDescriptor {
 		&QUESTION_FIELDS[1]
 	}
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(bound = "")]
 struct QuestionModelFormData<P: ModelFormPolicy> {
 	title: Option<String>,
+	#[serde(skip)]
 	_policy: PhantomData<P>,
 }
 
@@ -127,38 +133,55 @@ impl<P: ModelFormPolicy> ModelFormPayload<P> for QuestionModelFormData<P> {
 	}
 }
 
+struct CleanedQuestionModelFormData<P: ModelFormPolicy>(QuestionModelFormData<P>);
+
+impl<P: ModelFormPolicy> ModelFormCleanedPayload for CleanedQuestionModelFormData<P> {
+	type Raw = QuestionModelFormData<P>;
+
+	fn into_raw(self) -> Self::Raw {
+		self.0
+	}
+}
+
+impl<P: ModelFormPolicy> ModelFormValidatingPayload for QuestionModelFormData<P> {
+	type Cleaned = CleanedQuestionModelFormData<P>;
+
+	fn clean_and_validate(
+		mut self,
+	) -> Result<Self::Cleaned, reinhardt_core::validators::ValidationErrors> {
+		reinhardt_forms::model_form::clean_generated_payload::<QuestionFormSchema, P, _>(
+			&mut self,
+		)?;
+		Ok(CleanedQuestionModelFormData(self))
+	}
+}
+
 impl<P: ModelFormPolicy> NativeModelFormPayload for QuestionModelFormData<P> {
 	fn from_native_form_value(_value: serde_json::Value) -> Result<Self, serde_json::Error> {
 		Ok(Self::empty())
 	}
 }
 
-async fn save_question<P: ModelFormPolicy>(
-	_payload: QuestionModelFormData<P>,
+#[reinhardt_pages::server_fn::server_fn(model_form = true)]
+async fn save_question(
+	_payload: QuestionModelFormData<QuestionFields>,
 ) -> Result<(), reinhardt_pages::ServerFnError> {
 	Ok(())
 }
 
-mod save_question {
-	// Generated server-function markers use the lower-case `marker` name.
-	#[allow(non_camel_case_types)]
-	pub struct marker;
-
-	impl reinhardt_pages::server_fn::ServerFnMetadata for marker {
-		const PATH: &'static str = "/api/server_fn/save_question";
-		const NAME: &'static str = "save_question";
-		const IS_JSON_CODEC: bool = true;
-	}
-}
-
 fn main() {
 	reinhardt_core::reactive::ReactiveScope::run(|| {
-		let _form = form! {
+		let form = form! {
 			name: QuestionForm,
 			model: Question,
 			policy: QuestionFields,
 			exclude: [owner_id],
 			server_fn: save_question,
 		};
+		let field = form
+			.field("title")
+			.expect("exclude selection retains dynamic field lookup");
+		let runtime = use_form(&form).build();
+		runtime.set_value(field, "dynamic".to_owned());
 	});
 }

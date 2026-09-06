@@ -1,0 +1,5 @@
+error: `trim` is only valid on editable text, email, or URL ModelForm fields
+ --> tests/ui/model/fail/form_trim_non_text.rs:9:9
+  |
+9 |     #[form(trim)]
+  |            ^^^^

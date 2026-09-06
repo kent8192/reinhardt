@@ -1,0 +1,8 @@
+error[E0599]: no method named `into_model` found for struct `ClusterModelFormData<P>` in the current scope
+  --> tests/ui/model/fail/form_raw_payload_into_model.rs:18:14
+   |
+ 8 | #[model(app_label = "forms", form = true)]
+   | ------------------------------------------ method `into_model` not found for this struct
+...
+18 |     let _ = raw.into_model();
+   |                 ^^^^^^^^^^ method not found in `ClusterModelFormData<AllEditableModelFields>`

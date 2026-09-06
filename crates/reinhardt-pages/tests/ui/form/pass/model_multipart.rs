@@ -2,16 +2,18 @@
 
 include!("../model_multipart_support.rs");
 
-use reinhardt_pages::form;
+use reinhardt_pages::{form, use_form};
 
 fn main() {
 	reinhardt_core::reactive::ReactiveScope::run(|| {
-		let _form = form! {
+		let form = form! {
 			name: UploadForm,
 			model: Upload,
 			policy: UploadPolicy,
 			fields: [title, document, avatar],
 			server_fn: upload,
 		};
+		let runtime = use_form(&form).build();
+		let _mutation = form.server_mutation(&runtime).build();
 	});
 }

@@ -3,6 +3,7 @@
 #[allow(unexpected_cfgs)]
 use chrono::{DateTime, NaiveDate, Utc};
 use reinhardt_macros::model;
+use rstest::rstest;
 use serde::{Deserialize, Serialize};
 
 include!("ui/model/support.rs");
@@ -15,15 +16,23 @@ use model_form::{
 
 #[model(app_label = "forms", form = true)]
 #[derive(Clone, Deserialize, Serialize)]
+#[form(validate = validate_form_document)]
 struct FormDocument {
 	#[field(primary_key = true)]
 	id: i64,
 	#[field(min_length = 3, max_length = 200)]
+	#[form(trim)]
 	title: String,
 	#[field(max_length = 64)]
 	secret: String,
 	#[field(max_length = 64, blank = true)]
 	nullable: Option<Option<String>>,
+}
+
+fn validate_form_document<P: ModelFormPolicy>(
+	_payload: &CleanedFormDocumentModelFormData<P>,
+) -> Result<(), validators::ValidationErrors> {
+	Ok(())
 }
 
 #[model(app_label = "forms")]
@@ -331,6 +340,21 @@ fn generated_payload_applies_policy_and_preserves_nullable_values() {
 	assert!(error.to_string().contains("unexpected"));
 }
 
+#[rstest]
+fn generated_payload_is_cloneable_and_exposes_an_opaque_cleaned_type() {
+	fn assert_clone<T: Clone>() {}
+
+	assert_clone::<FormDocumentModelFormData<TitleOnly>>();
+	let _: Option<CleanedFormDocumentModelFormData<TitleOnly>> = None;
+
+	let mut payload = FormDocumentModelFormData::<TitleOnly>::empty();
+	payload
+		.set_title("snapshot".to_owned())
+		.expect("allowed field should be set");
+	let snapshot = payload.clone();
+	assert_eq!(snapshot.title(), Some(&"snapshot".to_owned()));
+}
+
 #[test]
 fn generated_schema_exposes_descriptors_and_target_primary_key_kinds() {
 	assert_eq!(
@@ -347,8 +371,10 @@ fn generated_schema_exposes_descriptors_and_target_primary_key_kinds() {
 			nullable: false,
 			editable: true,
 			generated_relation_id: false,
+			trim: true,
 		}
 	);
+	assert!(!FormDocumentFormSchema::secret().trim);
 	assert!(FormDocumentFormSchema::nullable().nullable);
 	assert_eq!(
 		StringKeyChildFormSchema::target_id().kind,

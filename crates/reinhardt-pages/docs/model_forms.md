@@ -57,6 +57,8 @@ is checked against the selected contract fields. The generated data type is a
 strict JSON boundary: it serializes selected supplied fields only and rejects
 unknown keys, duplicate keys, and incompatible values on deserialization. A
 nullable selected value distinguishes omission from an explicit JSON `null`.
+Validation rejects non-finite values in non-nullable `f32`/`f64` fields on both
+native and WASM targets, including typed assignments to fields with defaults.
 
 Selected fields may use `String`, `bool`, and the native ORM-supported numeric
 primitives `i32`, `i64`, `f32`, and `f64`,
@@ -214,7 +216,7 @@ schema, or the server-side field policy.
 
 When an explicit model-field selection includes a `File` or `Image` field,
 `form!` renders a multipart form and calls a normal function-like
-`#[server_fn]` directly. Use one client-visible server-function parameter for
+`#[server_fn(model_form_payload = "UploadModelFormData<UploadPolicy>")]` directly. Use one client-visible server-function parameter for
 each selected field, with the exact same field name, order, and count:
 
 ```rust
@@ -222,7 +224,7 @@ use reinhardt::core::parsers::UploadedFile;
 use reinhardt::pages::form;
 use reinhardt::pages::server_fn::{server_fn, ServerFnError};
 
-#[server_fn]
+#[server_fn(model_form_payload = "UploadModelFormData<UploadPolicy>")]
 async fn upload(
     title: String,
     document: UploadedFile,
@@ -240,6 +242,32 @@ let upload_form = form! {
     server_fn: upload,
 };
 ```
+
+The endpoint's `model_form_payload` binds the generated schema and server policy
+through its concrete payload type. Its HTTP adapter repeats scalar normalization,
+field constraints, and `#[form(validate = ...)]` before calling the upload function,
+including for direct multipart requests. Both field and application validation use
+the intersection of that policy and the endpoint's declared arguments. Required
+fields outside the selection do not block submission, and requests containing
+unselected arguments are rejected. File argument kinds and required uploads are
+checked before application validation. The form's model and policy must produce
+exactly the declared endpoint payload type.
+Ordinary multipart endpoints without this binding cannot serve model-backed forms.
+
+Generated cleaned file and image getters return
+`Option<ModelFormFileValue<'_, FileField>>` or the corresponding `ImageField`
+candidate. `Stored` contains an existing or server-defaulted storage reference;
+`Uploaded` contains the pending upload's field name, original filename, declared
+content type, and byte size. Missing files and nullable clears both return `None`.
+For example, a validator can require a caption whenever `payload.avatar().is_some()`
+and match `ModelFormFileValue::Uploaded(upload)` to inspect upload metadata.
+
+Browser preflight and the HTTP adapter supply this metadata separately from JSON
+scalar values, before running the generated application callback. A JSON object
+cannot claim that a file was uploaded. Filenames and content types remain
+client-provided metadata; they do not become trusted storage paths or prove image
+validity. Upload metadata is discarded by `into_raw()`. The handler receives the
+original upload bytes and performs storage validation and persistence explicitly.
 
 Scalar fields are encoded as JSON multipart parts, while `File` and `Image`
 fields use `UploadedFile` or `Option<UploadedFile>`. The direct multipart
@@ -292,11 +320,86 @@ match runtime.submit_server_fn(|| create_form.submit_response()).await? {
 }
 ```
 
+The generated form also exposes a persistent mutation handle. This keeps the
+latest typed success value available after dispatch, unlike the one-shot
+`submit_response()` future:
+
+```rust,ignore
+let mutation = create_form
+    .server_mutation(&runtime)
+    .reset_form_on_success()
+    .build();
+
+match mutation.dispatch() {
+    MutationDispatchOutcome::Dispatched => {
+        let latest = mutation.result();
+        let _ = latest;
+    }
+    MutationDispatchOutcome::AlreadyPending
+    | MutationDispatchOutcome::ValidationFailed
+    | MutationDispatchOutcome::UnsupportedTarget => {}
+}
+```
+
+Use `submit_response()` when the caller needs the immediate awaited response.
+Use `form.server_mutation(&runtime)` when the UI should observe phase, pending
+state, latest `ServerFnError`, and the latest successful typed result through a
+reusable handle. `is_pending()` reactively observes the shared runtime, so every
+mutation handle attached to the same form stays busy during another handle's
+submission.
+
 Structured `ServerFnError` field errors are routed through the same runtime:
 matching selected fields are available from `get_field_state`, while errors
 for unselected or unknown fields remain in `form_state().form_error`. Explicit
 field selections provide typed accessors such as `title_field()`; forms using
 `exclude` can resolve a selected field with `form.field("title")`.
+
+Model-form controls retain the raw browser value while the user is editing.
+For example, opt-in trimming does not rewrite the mounted input, and an invalid
+URL remains available for correction. Immediately before every generated
+submission, Pages builds an owned snapshot in generated schema order, applies
+field conversion and normalization, and runs the generated synchronous
+validation pipeline under the form's `fields` or `exclude` selection policy.
+Required fields outside that selection do not block the snapshot. The endpoint
+payload keeps its declared policy, which the server validates independently.
+The normalized raw payload is sent only when validation succeeds; the editable
+control state remains unchanged.
+
+Handwritten model payloads, including compile-test fixtures, must implement
+`ModelFormValidatingPayload` in addition to `ModelFormPayload`. Its cleaned
+payload must implement `ModelFormCleanedPayload` with `Raw` set to the original
+payload type. Model-generated payloads provide both contracts automatically.
+
+URL snapshot validation uses `reinhardt_core::validators::UrlValidator` on
+native and WASM targets, matching generated server validation. Query strings
+and fragments may follow the host directly, as in
+`https://example.com?query=value` and `https://example.com#section`.
+
+Snapshot errors combine conversion failures with generated validation errors
+in schema order, with form-level errors last. A control that cannot be converted
+keeps its conversion error instead of a secondary missing-value error.
+
+Snapshot validation failures become the same structured `ServerFnError` used
+for server responses. A recognized selected field is routed to
+`get_field_state(field).error`; `_all`, excluded, and unknown field names are
+routed to `form_state().form_error`. Automatic form submission stops before
+the server-function adapter is called. The payload sent after successful
+client-side validation is still an ordinary raw payload, so native server code
+must independently call `clean_and_validate()` at its trust boundary.
+`reset_form_on_success()` resets the generated runtime after a successful
+server mutation, but the mutation handle still retains its latest result until
+`mutation.reset()` is called. This lets the UI clear browser controls while
+continuing to render a success token or server-generated identifier. If a form
+or mutation success callback starts another submission, the automatic reset is
+skipped while that submission is pending to preserve its input and state.
+
+Model-form mutation construction does not require a separate named
+`ModelFormData` contract in the style of issue #6217. `form.server_mutation(&runtime)`
+binds the generated payload alias internally and constructs the builder from the
+same `form!` definition that drives submission. The attached runtime is the
+authoritative form instance for validation, payload snapshots, and matching
+browser-file cleanup, including when multiple instances share one generated
+form type.
 
 ## Excluded fields
 
@@ -394,6 +497,10 @@ before setting the model-form control instead of relying on the UTC convention.
 Editable assigned primary keys, such as natural string keys or integer keys
 with `auto_increment = false`, are included in generated create-form schemas.
 Database-generated primary keys remain excluded.
+
+Updates reject supplied primary keys before cross-field validation, including
+raw identifiers such as `r#type` supplied under the wire name `type`. Omitting
+the primary key preserves the existing value.
 
 ## Native create and update
 

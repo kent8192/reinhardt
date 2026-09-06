@@ -1,0 +1,5 @@
+error: unknown form field option; expected `trim`
+ --> tests/ui/model/fail/form_unknown_option.rs:9:9
+  |
+9 |     #[form(lowercase)]
+  |            ^^^^^^^^^

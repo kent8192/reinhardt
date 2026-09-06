@@ -1,9 +1,10 @@
+use rstest::rstest;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 use std::process::Output;
 
-#[test]
+#[rstest]
 fn model_generated_payload_executes_on_wasm() {
 	let crate_dir = tempfile::tempdir().expect("create temporary fixture directory");
 	let target_dir = tempfile::tempdir().expect("create temporary target directory");
@@ -30,7 +31,7 @@ publish = false
 [workspace]
 
 [features]
-native = ["reinhardt/core", "reinhardt/database", "reinhardt/forms"]
+native = ["reinhardt/core", "reinhardt/database", "reinhardt/forms", "reinhardt/image-fields"]
 
 [dependencies]
 reinhardt = {{ path = "{}", package = "reinhardt-web", default-features = false }}
@@ -46,7 +47,11 @@ ctor = "0.8.0"
 linkme = "0.3"
 
 [dev-dependencies]
+rstest = "0.26"
 wasm-bindgen-test = "={}"
+
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]
+serial_test = "3"
 "#,
 			repo_root.display(),
 			repo_root.join("crates/reinhardt-core").display(),
@@ -62,30 +67,32 @@ wasm-bindgen-test = "={}"
 "#,
 	)
 	.expect("write fixture build script");
-	fs::copy(
-		fixture_dir.join("src/lib.rs"),
-		crate_dir.path().join("src/lib.rs"),
-	)
-	.expect("copy fixture source");
+	for source in ["lib.rs", "named_validation.rs", "validation_regressions.rs"] {
+		fs::copy(
+			fixture_dir.join("src").join(source),
+			crate_dir.path().join("src").join(source),
+		)
+		.expect("copy fixture source");
+	}
 
 	let manifest_path = crate_dir.path().join("Cargo.toml");
 	let target_path = target_dir.path().to_path_buf();
-	let native_output = native_fixture_check_command(&manifest_path, &target_path)
+	let native_output = native_fixture_test_command(&manifest_path, &target_path)
 		.arg("--offline")
 		.output()
-		.expect("compile native model macro parity fixture");
+		.expect("run native model macro parity fixture tests");
 	let native_output = if native_output.status.success()
 		|| !offline_dependency_resolution_failed(&native_output)
 	{
 		native_output
 	} else {
-		native_fixture_check_command(&manifest_path, &target_path)
+		native_fixture_test_command(&manifest_path, &target_path)
 			.output()
-			.expect("compile native model macro parity fixture without offline mode")
+			.expect("run native model macro parity fixture tests without offline mode")
 	};
 	assert!(
 		native_output.status.success(),
-		"native model macro parity fixture should compile the same declaration\nstdout:\n{}\nstderr:\n{}",
+		"native model macro parity fixture should execute the same declaration\nstdout:\n{}\nstderr:\n{}",
 		String::from_utf8_lossy(&native_output.stdout),
 		String::from_utf8_lossy(&native_output.stderr),
 	);
@@ -117,9 +124,41 @@ wasm-bindgen-test = "={}"
 		String::from_utf8_lossy(&output.stdout),
 		String::from_utf8_lossy(&output.stderr)
 	);
+	// wasm-bindgen-test-runner interleaves platform-dependent harness and log
+	// output, so the complete process output cannot be compared exactly. These
+	// guards instead require each exact generated test name after a successful exit.
 	assert!(
 		runtime_output.contains("generated_named_contract_executes_in_wasm_runtime"),
 		"WASM model macro parity fixture must execute the generated named contract test\n{runtime_output}",
+	);
+	assert!(
+		runtime_output
+			.contains("named_contract_normalizes_defaults_and_runs_application_validation"),
+		"WASM model macro parity fixture must execute named validation\n{runtime_output}",
+	);
+	assert!(
+		runtime_output.contains("generated_payload_cleans_and_validates_in_wasm_runtime"),
+		"WASM model macro parity fixture must execute generated validation\n{runtime_output}",
+	);
+	assert!(
+		runtime_output
+			.contains("generated_required_email_uses_the_canonical_message_in_wasm_runtime"),
+		"WASM model macro parity fixture must execute required email parity\n{runtime_output}",
+	);
+	assert!(
+		runtime_output.contains(
+			"generated_create_and_update_semantics_match_the_server_boundary_in_wasm_runtime"
+		),
+		"WASM model macro parity fixture must execute create/update parity\n{runtime_output}",
+	);
+	assert!(
+		runtime_output
+			.contains("generated_required_scalars_use_canonical_create_errors_in_wasm_runtime"),
+		"WASM model macro parity fixture must execute required scalar parity\n{runtime_output}",
+	);
+	assert!(
+		runtime_output.contains("generated_snapshot_deferral_only_accepts_required_uploads"),
+		"WASM model macro parity fixture must execute upload deferral validation\n{runtime_output}",
 	);
 
 	let dependency_tree = wasm_dependency_tree_command(&manifest_path)
@@ -167,10 +206,11 @@ fn wasm_fixture_test_command(
 	command
 }
 
-fn native_fixture_check_command(manifest_path: &Path, target_path: &Path) -> Command {
+fn native_fixture_test_command(manifest_path: &Path, target_path: &Path) -> Command {
 	let mut command = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
 	command
-		.arg("check")
+		.arg("test")
+		.arg("--lib")
 		.arg("--manifest-path")
 		.arg(manifest_path)
 		.arg("--features")

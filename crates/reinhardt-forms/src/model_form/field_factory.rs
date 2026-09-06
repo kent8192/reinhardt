@@ -2,19 +2,80 @@
 
 use chrono::{DateTime, Datelike, NaiveDateTime, SecondsFormat, Utc};
 use reinhardt_core::model_form::{ModelFormFieldDescriptor, ModelFormFieldKind};
+use reinhardt_core::validators::{EmailValidator, UrlValidator, Validator};
 use rust_decimal::Decimal;
 use std::str::FromStr;
 
 use crate::{
-	BooleanField, CharField, DateField, DateTimeField, DecimalField, EmailField, FieldError,
-	FieldResult, FloatField, FormField, IntegerField, JSONField, TimeField, URLField, UUIDField,
-	Widget,
+	BooleanField, CharField, DateField, DateTimeField, DecimalField, FieldError, FieldResult,
+	FloatField, FormField, IntegerField, JSONField, TimeField, UUIDField, Widget,
 };
 
 #[derive(Debug, Clone, Copy)]
 enum ModelDateTimeKind {
 	AwareUtc,
 	Naive,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ModelFormatKind {
+	Email,
+	Url,
+}
+
+struct ModelFormatField {
+	inner: CharField,
+	kind: ModelFormatKind,
+}
+
+impl FormField for ModelFormatField {
+	fn name(&self) -> &str {
+		self.inner.name()
+	}
+
+	fn label(&self) -> Option<&str> {
+		self.inner.label()
+	}
+
+	fn required(&self) -> bool {
+		self.inner.required
+	}
+
+	fn help_text(&self) -> Option<&str> {
+		self.inner.help_text()
+	}
+
+	fn widget(&self) -> &Widget {
+		self.inner.widget()
+	}
+
+	fn initial(&self) -> Option<&serde_json::Value> {
+		self.inner.initial()
+	}
+
+	fn clean(&self, value: Option<&serde_json::Value>) -> FieldResult<serde_json::Value> {
+		let cleaned = self.inner.clean(value)?;
+		let Some(value) = cleaned.as_str() else {
+			return Err(FieldError::invalid(None, "Expected string"));
+		};
+		if value.is_empty() {
+			return Ok(cleaned);
+		}
+
+		let valid = match self.kind {
+			ModelFormatKind::Email => EmailValidator::new().validate(value).is_ok(),
+			ModelFormatKind::Url => UrlValidator::new().validate(value).is_ok(),
+		};
+		if valid {
+			Ok(cleaned)
+		} else {
+			let message = match self.kind {
+				ModelFormatKind::Email => "Enter a valid email address",
+				ModelFormatKind::Url => "Enter a valid URL",
+			};
+			Err(FieldError::Validation(message.to_owned()))
+		}
+	}
 }
 
 struct ModelDateTimeField {
@@ -404,6 +465,7 @@ impl FormField for ModelDateTimeField {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 	use serde_json::json;
 
 	#[test]
@@ -440,6 +502,7 @@ mod tests {
 				nullable: false,
 				editable: true,
 				generated_relation_id: false,
+				trim: false,
 			});
 
 			assert_eq!(field.name(), name);
@@ -455,12 +518,129 @@ mod tests {
 					nullable: false,
 					editable: true,
 					generated_relation_id: false,
+					trim: false,
 				},
 				Some(&existing),
 			);
 			assert_eq!(trusted.clean(Some(&existing)).unwrap(), existing);
 			assert!(trusted.clean(Some(&upload)).is_err());
 		}
+	}
+
+	#[rstest]
+	fn generated_textual_fields_strip_only_when_declared() {
+		for kind in [
+			ModelFormFieldKind::Text {
+				min_length: None,
+				max_length: None,
+				multiline: false,
+			},
+			ModelFormFieldKind::Email {
+				min_length: None,
+				max_length: None,
+			},
+			ModelFormFieldKind::Url {
+				min_length: None,
+				max_length: None,
+			},
+		] {
+			let value = match kind {
+				ModelFormFieldKind::Text { .. } => json!("  value  "),
+				ModelFormFieldKind::Email { .. } => json!("  person@example.com  "),
+				ModelFormFieldKind::Url { .. } => json!("  https://example.com  "),
+				_ => unreachable!("only textual field kinds are included"),
+			};
+			let expected = match kind {
+				ModelFormFieldKind::Text { .. } => json!("value"),
+				ModelFormFieldKind::Email { .. } => json!("person@example.com"),
+				ModelFormFieldKind::Url { .. } => json!("https://example.com"),
+				_ => unreachable!("only textual field kinds are included"),
+			};
+			let expected_untrimmed_error = match kind {
+				ModelFormFieldKind::Email { .. } => Some("Enter a valid email address"),
+				ModelFormFieldKind::Url { .. } => Some("Enter a valid URL"),
+				ModelFormFieldKind::Text { .. } => None,
+				_ => unreachable!("only textual field kinds are included"),
+			};
+			let descriptor = |trim| ModelFormFieldDescriptor {
+				name: "value",
+				kind,
+				required: true,
+				has_default: false,
+				nullable: false,
+				editable: true,
+				generated_relation_id: false,
+				trim,
+			};
+
+			let untrimmed = create_form_field(&descriptor(false));
+			let trimmed = create_form_field(&descriptor(true));
+
+			if let Some(message) = expected_untrimmed_error {
+				assert_eq!(
+					untrimmed.clean(Some(&value)).unwrap_err().to_string(),
+					message
+				);
+			} else {
+				assert_eq!(untrimmed.clean(Some(&value)).unwrap(), value);
+			}
+			assert_eq!(trimmed.clean(Some(&value)).unwrap(), expected);
+		}
+	}
+
+	#[rstest]
+	fn generated_format_fields_use_target_neutral_validation_boundaries() {
+		let descriptor = |kind, trim| ModelFormFieldDescriptor {
+			name: "value",
+			kind,
+			required: true,
+			has_default: false,
+			nullable: false,
+			editable: true,
+			generated_relation_id: false,
+			trim,
+		};
+		let email = create_form_field(&descriptor(
+			ModelFormFieldKind::Email {
+				min_length: None,
+				max_length: None,
+			},
+			true,
+		));
+		let url = create_form_field(&descriptor(
+			ModelFormFieldKind::Url {
+				min_length: None,
+				max_length: None,
+			},
+			true,
+		));
+
+		assert_eq!(
+			email.clean(None).unwrap_err().to_string(),
+			"This field is required."
+		);
+		assert_eq!(
+			email.clean(Some(&json!("   "))).unwrap_err().to_string(),
+			"This field is required."
+		);
+		assert_eq!(
+			email
+				.clean(Some(&json!("person@localhost")))
+				.unwrap_err()
+				.to_string(),
+			"Enter a valid email address"
+		);
+		assert_eq!(
+			url.clean(Some(&json!("https://example.com?query=value")))
+				.unwrap(),
+			json!("https://example.com?query=value")
+		);
+		assert_eq!(
+			url.clean(Some(&json!("https://example.com:123456/")))
+				.unwrap_err()
+				.to_string(),
+			"Enter a valid URL"
+		);
 	}
 }
 
@@ -486,6 +666,7 @@ pub(super) fn create_form_field_with_trusted_value(
 			field.required = descriptor.required;
 			field.min_length = min_length;
 			field.max_length = max_length;
+			field.strip = descriptor.trim;
 			if multiline {
 				field.widget = Widget::TextArea;
 			}
@@ -495,21 +676,30 @@ pub(super) fn create_form_field_with_trusted_value(
 			min_length,
 			max_length,
 		} => {
-			let mut field = EmailField::new(name);
+			let mut field = CharField::new(name);
 			field.required = descriptor.required;
 			field.min_length = min_length;
 			field.max_length = max_length;
-			Box::new(field)
+			field.strip = descriptor.trim;
+			field.widget = Widget::EmailInput;
+			Box::new(ModelFormatField {
+				inner: field,
+				kind: ModelFormatKind::Email,
+			})
 		}
 		ModelFormFieldKind::Url {
 			min_length,
 			max_length,
 		} => {
-			let mut field = URLField::new(name);
+			let mut field = CharField::new(name);
 			field.required = descriptor.required;
 			field.min_length = min_length;
 			field.max_length = max_length;
-			Box::new(field)
+			field.strip = descriptor.trim;
+			Box::new(ModelFormatField {
+				inner: field,
+				kind: ModelFormatKind::Url,
+			})
 		}
 		ModelFormFieldKind::Integer { min, max } => {
 			Box::new(ModelIntegerField::new(name, descriptor.required, min, max))

@@ -3,12 +3,19 @@
 use std::cell::Cell;
 
 use reinhardt_core::reactive::ReactiveScope;
+use reinhardt_core::types::page::{
+	ControlValue, ControlWriteOutcome, NumberParseError, NumberParseErrorKind,
+};
 use reinhardt_core::validators::{Validate, ValidationError, ValidationErrors};
+use reinhardt_pages::control_binding::__private::{
+	CheckboxBinding, NumberBinding, RadioBinding, SelectOneBinding, TextBinding,
+	into_control_binding,
+};
 use reinhardt_pages::server_fn::ServerFnError;
 use reinhardt_pages::server_fn::server_fn;
 use reinhardt_pages::{
-	ClientForm, ClientFormChoiceSource, ClientFormChoices, FieldError, ResetOnDeps,
-	UseFormAsyncSubmitOutcome, use_form,
+	ClientForm, ClientFormChoiceSource, ClientFormChoices, FieldError, MutationDispatchOutcome,
+	ResetOnDeps, UseFormAsyncSubmitOutcome, UseFormSubmitOutcome, use_form,
 };
 use serde::{Deserialize, Serialize};
 
@@ -110,6 +117,280 @@ fn client_form_defaults_and_request_conversion() {
 		assert_eq!(request.tenant_id.as_deref(), Some("tenant-a"));
 		assert_eq!(request.revision, 7);
 		assert_eq!(request.server_token, "token-a");
+	});
+}
+
+#[test]
+fn client_form_runtime_bindings_update_typed_fields_and_report_numeric_rejections() {
+	ReactiveScope::run(|| {
+		let form = ProjectRequestClientForm::new().with_defaults(ProjectRequest {
+			name: "Ada".to_string(),
+			title: None,
+			retry_count: 41,
+			optional_retry_count: None,
+			active: false,
+			optional_active: None,
+			provider_mode: ProviderMode::Fake,
+			optional_mode: None,
+			tenant_id: None,
+			revision: 0,
+			server_token: String::new(),
+		});
+		let runtime = use_form(&form).build();
+
+		let text = into_control_binding::<TextBinding, _>(
+			runtime.field(ProjectRequestClientFormField::Name),
+			(),
+		);
+		assert_eq!(text.read(), ControlValue::Text("Ada".to_string()));
+		text.write(ControlValue::Text("Grace".to_string())).unwrap();
+		assert_eq!(
+			runtime
+				.watch_field::<String>(ProjectRequestClientFormField::Name)
+				.get(),
+			"Grace"
+		);
+
+		let radio = into_control_binding::<RadioBinding, _>(
+			runtime.field(ProjectRequestClientFormField::Name),
+			"Linus".to_string(),
+		);
+		radio.write(ControlValue::Checked(true)).unwrap();
+		assert_eq!(
+			runtime
+				.watch_field::<String>(ProjectRequestClientFormField::Name)
+				.get(),
+			"Linus"
+		);
+
+		let select = into_control_binding::<SelectOneBinding, _>(
+			runtime.field(ProjectRequestClientFormField::Name),
+			(),
+		);
+		select
+			.write(ControlValue::Text("Margaret".to_string()))
+			.unwrap();
+		assert_eq!(
+			runtime
+				.watch_field::<String>(ProjectRequestClientFormField::Name)
+				.get(),
+			"Margaret"
+		);
+
+		let checkbox = into_control_binding::<CheckboxBinding, _>(
+			runtime.field(ProjectRequestClientFormField::Active),
+			(),
+		);
+		checkbox.write(ControlValue::Checked(true)).unwrap();
+		assert!(
+			runtime
+				.watch_field::<bool>(ProjectRequestClientFormField::Active)
+				.get()
+		);
+
+		let number = into_control_binding::<NumberBinding, _>(
+			runtime.field(ProjectRequestClientFormField::RetryCount),
+			(),
+		);
+		assert!(matches!(
+			number.write(ControlValue::Text("1e".to_string())).unwrap(),
+			ControlWriteOutcome::Rejected(_)
+		));
+		assert_eq!(
+			runtime
+				.watch_field::<i32>(ProjectRequestClientFormField::RetryCount)
+				.get(),
+			41
+		);
+		assert!(
+			runtime
+				.form_state()
+				.field_errors
+				.get()
+				.contains_key(&ProjectRequestClientFormField::RetryCount)
+		);
+		assert_eq!(
+			runtime.handle_submit(),
+			UseFormSubmitOutcome::ValidationFailed
+		);
+
+		number.write(ControlValue::Text("42".to_string())).unwrap();
+		assert_eq!(
+			runtime
+				.watch_field::<i32>(ProjectRequestClientFormField::RetryCount)
+				.get(),
+			42
+		);
+		assert!(
+			!runtime
+				.form_state()
+				.field_errors
+				.get()
+				.contains_key(&ProjectRequestClientFormField::RetryCount)
+		);
+	});
+}
+
+#[rstest::rstest]
+#[case("-")]
+#[case("1e")]
+fn rejected_numeric_edits_touch_a_pristine_client_form(#[case] raw: &str) {
+	ReactiveScope::run(|| {
+		// Arrange
+		let form = ProjectRequestClientForm::new();
+		let runtime = use_form(&form).build();
+		let field = form.retry_count_field();
+		let binding = into_control_binding::<NumberBinding, _>(runtime.field(field), ());
+		let initial = binding.read();
+		assert!(!runtime.get_field_state(field).is_touched);
+		assert!(!runtime.form_state().is_touched.get());
+
+		// Act
+		let outcome = binding.write(ControlValue::Text(raw.to_owned())).unwrap();
+
+		// Assert
+		assert_eq!(
+			outcome,
+			ControlWriteOutcome::Rejected(NumberParseError::from_raw_kind(
+				raw,
+				NumberParseErrorKind::Incomplete
+			)),
+		);
+		assert_eq!(binding.read(), initial);
+		assert!(runtime.get_field_state(field).is_touched);
+		assert!(runtime.form_state().is_touched.get());
+		assert!(!runtime.form_state().is_dirty.get());
+		runtime.reset();
+		assert!(!runtime.get_field_state(field).is_touched);
+		assert!(!runtime.form_state().is_touched.get());
+		assert_eq!(runtime.get_field_state(field).error, None);
+	});
+}
+
+#[rstest::rstest]
+#[case::all_errors(true)]
+#[case::field_error(false)]
+fn client_form_clear_errors_preserves_numeric_parse_failures(#[case] clear_all: bool) {
+	ReactiveScope::run(|| {
+		// Arrange
+		let form = ProjectRequestClientForm::new();
+		let runtime = use_form(&form).build();
+		runtime.set_value(form.name_field(), String::from("Ada"));
+		runtime.set_value(form.retry_count_field(), 41);
+		let number =
+			into_control_binding::<NumberBinding, _>(runtime.field(form.retry_count_field()), ());
+		assert_eq!(
+			number.write(ControlValue::Text("1e".to_owned())).unwrap(),
+			ControlWriteOutcome::Rejected(NumberParseError::from_raw_kind(
+				"1e",
+				NumberParseErrorKind::Incomplete,
+			))
+		);
+
+		// Act
+		if clear_all {
+			runtime.clear_errors();
+		} else {
+			runtime.clear_field_error(form.retry_count_field());
+		}
+
+		// Assert
+		assert_eq!(
+			runtime.get_field_state(form.retry_count_field()).error,
+			None
+		);
+		let validation = runtime
+			.trigger()
+			.expect_err("clearing displayed errors must preserve invalid numeric input");
+		assert_eq!(validation.field_errors().len(), 1);
+		assert_eq!(
+			validation.field_errors().get(&form.retry_count_field()),
+			Some(&FieldError::new(
+				"cannot parse numeric control value \"1e\": Incomplete"
+			))
+		);
+		assert_eq!(
+			runtime.handle_submit(),
+			UseFormSubmitOutcome::ValidationFailed
+		);
+		assert_eq!(runtime.get_values().retry_count, 41);
+		assert_eq!(
+			number.write(ControlValue::Text("42".to_owned())).unwrap(),
+			ControlWriteOutcome::Committed
+		);
+		assert_eq!(
+			runtime.get_field_state(form.retry_count_field()).error,
+			None
+		);
+	});
+}
+
+#[derive(Clone, Debug, PartialEq, ClientForm)]
+struct NumericInputsRequest {
+	count: i32,
+	ratio: f64,
+}
+
+#[rstest::rstest]
+fn client_form_reset_field_clears_only_its_numeric_parse_error() {
+	ReactiveScope::run(|| {
+		// Arrange
+		let form = NumericInputsRequestClientForm::new().with_defaults(NumericInputsRequest {
+			count: 41,
+			ratio: 2.5,
+		});
+		let runtime = use_form(&form).build();
+		let count = into_control_binding::<NumberBinding, _>(runtime.field(form.count_field()), ());
+		let ratio = into_control_binding::<NumberBinding, _>(runtime.field(form.ratio_field()), ());
+		count.write(ControlValue::Text("42".to_owned())).unwrap();
+		for binding in [&count, &ratio] {
+			assert_eq!(
+				binding.write(ControlValue::Text("1e".to_owned())).unwrap(),
+				ControlWriteOutcome::Rejected(NumberParseError::from_raw_kind(
+					"1e",
+					NumberParseErrorKind::Incomplete,
+				))
+			);
+		}
+		assert_eq!(
+			runtime
+				.trigger()
+				.expect_err("numeric input must be validated without DTO validation")
+				.field_errors()
+				.len(),
+			2
+		);
+
+		// Act
+		runtime.reset_field(form.count_field());
+
+		// Assert
+		assert_eq!(count.read(), ControlValue::Text("41".to_owned()));
+		assert_eq!(runtime.get_field_state(form.count_field()).error, None);
+		let validation = runtime
+			.trigger()
+			.expect_err("resetting one field must preserve the other invalid numeric input");
+		assert_eq!(validation.field_errors().len(), 1);
+		assert_eq!(
+			validation.field_errors().get(&form.ratio_field()),
+			Some(&FieldError::new(
+				"cannot parse numeric control value \"1e\": Incomplete"
+			))
+		);
+		assert_eq!(
+			runtime.handle_submit(),
+			UseFormSubmitOutcome::ValidationFailed
+		);
+
+		// A typed write and a full reset also replace invalid numeric input.
+		runtime.set_value(form.ratio_field(), 3.5_f64);
+		assert_eq!(runtime.handle_submit(), UseFormSubmitOutcome::Submitted);
+		count.write(ControlValue::Text("1e".to_owned())).unwrap();
+		runtime.reset();
+		assert_eq!(runtime.get_values().count, 41);
+		assert_eq!(runtime.get_values().ratio, 2.5);
+		assert_eq!(runtime.form_state().field_errors.get().len(), 0);
+		assert_eq!(runtime.handle_submit(), UseFormSubmitOutcome::Submitted);
 	});
 }
 
@@ -483,6 +764,15 @@ pub struct SubmitProjectResponse {
 	name: String,
 }
 
+fn assert_submit_future<Fut>(value: Fut) -> Fut
+where
+	Fut: std::future::Future<
+			Output = Result<UseFormAsyncSubmitOutcome<SubmitProjectResponse>, ServerFnError>,
+		>,
+{
+	value
+}
+
 #[server_fn]
 async fn submit_project(
 	request: crate::SubmitProjectRequest,
@@ -510,6 +800,33 @@ async fn client_form_server_submit_blocks_validation_failure() {
 
 	assert_eq!(outcome, UseFormAsyncSubmitOutcome::ValidationFailed);
 	assert_eq!(SUBMIT_CALL_COUNT.with(Cell::get), 0);
+}
+
+#[test]
+fn client_form_server_mutation_is_unsupported_on_native() {
+	SUBMIT_CALL_COUNT.with(|count| count.set(0));
+	let scope = ReactiveScope::new();
+	scope.enter(|| {
+		let form = SubmitProjectRequestClientForm::new().with_defaults(SubmitProjectRequest {
+			name: "demo".to_string(),
+		});
+		let runtime = use_form(&form).build();
+		let mutation = form.server_mutation(&runtime).build();
+		let submit_future = assert_submit_future(form.submit(&runtime));
+
+		assert_eq!(
+			mutation.dispatch(),
+			MutationDispatchOutcome::UnsupportedTarget
+		);
+		assert_eq!(mutation.result(), None);
+		assert_eq!(mutation.error(), None);
+		assert!(!runtime.form_state().is_submitting.get());
+		assert!(!runtime.form_state().is_submit_successful.get());
+		assert_eq!(runtime.form_state().form_error.get(), None);
+		assert_eq!(SUBMIT_CALL_COUNT.with(Cell::get), 0);
+
+		drop(submit_future);
+	});
 }
 
 #[tokio::test]

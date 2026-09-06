@@ -135,6 +135,8 @@ pub fn style(input: TokenStream) -> TokenStream {
 /// - `use_inject = true` - (**Deprecated**) No longer needed; kept for backwards compatibility (emits warning)
 /// - `endpoint = "/custom/path"` - Custom endpoint path
 /// - `codec = "json"` - Serialization codec (json, url, msgpack)
+/// - `model_form_payload = "UploadModelFormData<UploadPolicy>"` - Validates multipart
+///   model scalars with this generated payload before invoking the server function
 ///
 /// ```ignore
 /// #[server_fn(endpoint = "/api/users/get")]

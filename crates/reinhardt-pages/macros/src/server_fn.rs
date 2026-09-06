@@ -162,6 +162,9 @@ pub(crate) struct ServerFnOptions {
 	/// This is deliberately opt-in because a normal JSON server function may
 	/// also use a single parameter named `payload`.
 	pub model_form: bool,
+
+	/// Generated payload binding scalar validation and policy for a multipart endpoint.
+	pub model_form_payload: Option<syn::Type>,
 }
 
 fn default_codec() -> String {
@@ -177,6 +180,7 @@ impl Default for ServerFnOptions {
 			no_csrf: false,
 			pre_validate: false,
 			model_form: false,
+			model_form_payload: None,
 		}
 	}
 }
@@ -977,6 +981,13 @@ fn generate_server_fn(info: &ServerFnInfo) -> proc_macro2::TokenStream {
 	let uses_multipart = wire_params
 		.iter()
 		.any(|parameter| !matches!(parameter.kind, WireParamKind::Json));
+	if info.options.model_form_payload.is_some() && (!uses_multipart || info.options.model_form) {
+		return syn::Error::new_spanned(
+			&func.sig,
+			"server_fn(model_form_payload = ...) requires file arguments and cannot use model_form = true",
+		)
+		.to_compile_error();
+	}
 
 	// Auto-detect #[inject] parameters unconditionally
 	let inject_params = detect_inject_params(&func.sig.inputs);
@@ -2118,12 +2129,15 @@ fn generate_server_handler(
 	// `reinhardt-web/msw`) so that `MockableServerFn` is in scope.
 	let msw_enabled = cfg!(feature = "msw");
 
-	let result_types = extract_result_types(return_type);
 	let emits_public_metadata = info.emits_typed_response_metadata();
 	let emits_msw_metadata = emits_public_metadata && !uses_multipart;
-	let emits_typed_response_metadata = emits_public_metadata && result_types.is_some();
-	let (metadata_response_type, metadata_error_type) =
-		result_types.unwrap_or_else(|| (quote! {}, quote! {}));
+	let emits_typed_response_metadata = emits_public_metadata;
+	let metadata_response_type = quote! {
+		<#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Response
+	};
+	let metadata_error_type = quote! {
+		<#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Error
+	};
 	let response_metadata_type_aliases = if emits_typed_response_metadata {
 		quote! {
 			#[doc(hidden)]
@@ -2146,13 +2160,12 @@ fn generate_server_handler(
 	};
 	let model_form_payload_error = quote! {
 		.map_err(|error| {
-			#pages_crate::ServerFnError::validation_with_message(
-				error.to_string(),
-				::core::iter::empty::<(&str, &str)>(),
+			#pages_crate::ServerFnError::from(
+				state.payload_error_to_validation(error),
 			)
 		})?
 	};
-	let model_form_server_fn_impl = if uses_multipart {
+	let model_form_server_fn_impl = if let Some(payload_type) = &info.options.model_form_payload {
 		let selection_bounds: Vec<_> = wire_params
 			.iter()
 			.enumerate()
@@ -2205,7 +2218,28 @@ fn generate_server_handler(
 				}
 			})
 			.collect();
-		let model_form_argument_names = wire_params.iter().map(|parameter| &parameter.name);
+		let model_form_argument_validation: Vec<_> = wire_params
+			.iter()
+			.zip(regular_param_types.iter())
+			.map(|(parameter, parameter_type)| {
+				let field_name = wire_param_name(parameter);
+				match parameter.kind {
+					WireParamKind::Json => quote! {
+						let _: #parameter_type = state.json_argument(#field_name)?;
+					},
+					WireParamKind::File => quote! {
+						let _ = state.required_file_argument(#field_name)?;
+					},
+					WireParamKind::OptionalFile => quote! {
+						let _ = state.optional_file_argument(#field_name)?;
+					},
+				}
+			})
+			.collect();
+		let model_form_argument_names: Vec<_> = wire_params
+			.iter()
+			.map(|parameter| &parameter.name)
+			.collect();
 		let argument_count = wire_params.len();
 		quote! {
 			impl<__ReinhardtSelection, __ReinhardtSchema, __ReinhardtPolicy>
@@ -2219,7 +2253,12 @@ fn generate_server_handler(
 				__ReinhardtPolicy: #pages_crate::form::ModelFormPolicy,
 				__ReinhardtSelection:
 					#pages_crate::form::ModelFormSelectionCount<#argument_count>
-					#(+ #selection_bounds)*,
+					#(+ #selection_bounds)*
+					+ #pages_crate::form::ModelFormSelectionPayload<
+						__ReinhardtSchema,
+						__ReinhardtPolicy,
+						Payload = #payload_type,
+					>,
 					#return_type: #pages_crate::server_fn::ServerFnQueryResult,
 					#pages_crate::ServerFnError:
 						::core::convert::Into<
@@ -2233,6 +2272,27 @@ fn generate_server_handler(
 
 					type Response = <#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Response;
 					type Error = <#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Error;
+
+				fn validate_input(
+					state: &#pages_crate::form::ModelFormState<
+						__ReinhardtSchema,
+						__ReinhardtPolicy,
+					>,
+				) -> ::core::result::Result<
+					(),
+					#pages_crate::form::ModelFormPayloadError,
+				> {
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					{
+						#(#model_form_argument_validation)*
+						::core::result::Result::Ok(())
+					}
+					#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+					{
+						let _ = state;
+						::core::result::Result::Ok(())
+					}
+				}
 
 				fn submit(
 					state: &#pages_crate::form::ModelFormState<
@@ -2284,6 +2344,30 @@ fn generate_server_handler(
 						type Response = <#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Response;
 						type Error = #pages_crate::ServerFnError;
 
+					fn validate_input(
+						state: &#pages_crate::form::ModelFormState<
+							__ReinhardtSchema,
+							__ReinhardtPolicy,
+						>,
+					) -> ::core::result::Result<
+						(),
+						#pages_crate::form::ModelFormPayloadError,
+					> {
+						#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+						{
+							<__ReinhardtSelection as #pages_crate::form::ModelFormSelectionPayload<
+								__ReinhardtSchema,
+								__ReinhardtPolicy,
+							>>::build_payload(state)
+								.map(|_| ())
+						}
+						#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+						{
+							let _ = state;
+							::core::result::Result::Ok(())
+						}
+					}
+
 					fn submit(
 						state: &#pages_crate::form::ModelFormState<
 							__ReinhardtSchema,
@@ -2320,26 +2404,68 @@ fn generate_server_handler(
 	} else {
 		quote! {}
 	};
-	let request_metadata_type_aliases =
-		if !uses_multipart && emits_typed_response_metadata && regular_param_types.len() == 1 {
-			let request_type = regular_param_types[0];
-			quote! {
-				#[doc(hidden)]
-				#vis type #request_alias = #request_type;
-			}
-		} else {
-			quote! {}
+	let request_metadata_type_aliases = if !uses_multipart && emits_typed_response_metadata {
+		let request_type = match regular_param_types.as_slice() {
+			[] => quote! { () },
+			[request_type] => quote! { #request_type },
+			_ => quote! { (#(#regular_param_types),*) },
 		};
-	let request_metadata_impl =
-		if !uses_multipart && emits_typed_response_metadata && regular_param_types.len() == 1 {
-			quote! {
-				impl #pages_crate::server_fn::ServerFnRequestMetadata for marker {
-					type Request = super::#request_alias;
+		quote! {
+			#[doc(hidden)]
+			#vis type #request_alias = #request_type;
+		}
+	} else {
+		quote! {}
+	};
+	let request_metadata_impl = if !uses_multipart && emits_typed_response_metadata {
+		quote! {
+			impl #pages_crate::server_fn::ServerFnRequestMetadata for marker {
+				type Request = super::#request_alias;
+			}
+		}
+	} else {
+		quote! {}
+	};
+	let mutation_call = match regular_param_types.as_slice() {
+		[] => quote! {
+			let () = request;
+			super::#name().await
+		},
+		[_] => quote! {
+			super::#name(request).await
+		},
+		_ => quote! {
+			let (#(#regular_param_names),*) = request;
+			super::#name(#(#regular_param_names),*).await
+		},
+	};
+	let mutation_helper_tokens = if !uses_multipart && emits_typed_response_metadata {
+		quote! {
+			/// Returns a target-neutral mutation callable for this server function.
+			pub fn mutation() -> impl Fn(
+				<marker as #pages_crate::server_fn::ServerFnRequestMetadata>::Request,
+			) -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<
+				Output = ::std::result::Result<
+					<marker as #pages_crate::server_fn::ServerFnResponseMetadata>::Response,
+					<marker as #pages_crate::server_fn::ServerFnResponseMetadata>::Error,
+				>,
+			>>> {
+				|request| {
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					{
+						::std::boxed::Box::pin(async move { #mutation_call })
+					}
+					#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+					{
+						let _request = request;
+						::std::boxed::Box::pin(async move { ::core::unreachable!() })
+					}
 				}
 			}
-		} else {
-			quote! {}
-		};
+		}
+	} else {
+		quote! {}
+	};
 
 	// Convert inject param names to string literals for INJECTED_PARAMS const
 	let inject_param_name_strs: Vec<String> = inject_params
@@ -2797,12 +2923,25 @@ fn generate_server_handler(
 
 			#response_metadata_impl
 			#request_metadata_impl
+			#mutation_helper_tokens
 			#model_form_server_fn_impl
 			#query_helper_tokens
 
 			#msw_wasm_inner_tokens
 		}
 	};
+	let multipart_model_validation = info.options.model_form_payload.as_ref().map(|payload_type| {
+		quote! {
+			if let Err(error) = arguments.validate_model_form::<#payload_type, _, #name::marker>() {
+				let error_body = ::serde_json::to_vec(&error)
+					.map(#pages_crate::__private::bytes::Bytes::from)
+					.unwrap_or_else(|_| #pages_crate::__private::bytes::Bytes::from_static(
+						br#"{"version":1,"kind":"server","status":500,"message":"Internal server error","field_errors":[]}"#,
+					));
+				return Err(error_body);
+			}
+		}
+	});
 	let handler_execution = if uses_multipart {
 		quote! {
 			let __handler_result = async {
@@ -2811,6 +2950,7 @@ fn generate_server_handler(
 				let mut arguments = #pages_crate::server_fn::MultipartArguments::from_request(&__req)
 					.await
 					.map_err(|_| __invalid_request_error())?;
+				#multipart_model_validation
 				#(#multipart_argument_extraction)*
 				arguments.finish().map_err(|_| __invalid_request_error())?;
 				#multipart_validation_code
@@ -2953,6 +3093,7 @@ fn generate_server_handler(
 
 			#response_metadata_impl
 			#request_metadata_impl
+			#mutation_helper_tokens
 			#model_form_server_fn_impl
 
 			// Native-only handler entry point for explicit router registration.
@@ -2980,23 +3121,6 @@ fn generate_server_handler(
 		// optional MSW Args / MockableServerFn impl is gated inside.
 		#wasm_marker_tokens
 	}
-}
-
-/// Extracts both result types when the return type is a direct `Result<T, E>`.
-fn extract_result_types(
-	return_type: &syn::Type,
-) -> Option<(proc_macro2::TokenStream, proc_macro2::TokenStream)> {
-	if let syn::Type::Path(type_path) = return_type
-		&& let Some(segment) = type_path.path.segments.last()
-		&& segment.ident == "Result"
-		&& let syn::PathArguments::AngleBracketed(args) = &segment.arguments
-		&& let Some(syn::GenericArgument::Type(ok_type)) = args.args.first()
-		&& args.args.len() >= 2
-		&& let Some(syn::GenericArgument::Type(err_type)) = args.args.iter().nth(1)
-	{
-		return Some((quote! { #ok_type }, quote! { #err_type }));
-	}
-	None
 }
 
 #[cfg(test)]
@@ -3068,6 +3192,17 @@ mod tests {
 		assert_eq!(options.endpoint, Some("/custom".to_string()));
 		assert_eq!(options.codec, "json");
 		assert!(options.model_form);
+
+		let nested = NestedMeta::parse_meta_list(quote! {
+			model_form_payload = "UploadModelFormData<UploadPolicy>"
+		})
+		.unwrap();
+		let options = ServerFnOptions::from_list(&nested).unwrap();
+		let payload = options.model_form_payload.unwrap();
+		assert_eq!(
+			quote!(#payload).to_string(),
+			quote!(UploadModelFormData<UploadPolicy>).to_string(),
+		);
 	}
 
 	#[test]
@@ -3269,7 +3404,7 @@ mod tests {
 		let info = ServerFnInfo {
 			func,
 			options: ServerFnOptions {
-				model_form: true,
+				model_form_payload: Some(parse_quote!(UploadModelFormData<UploadPolicy>)),
 				..ServerFnOptions::default()
 			},
 			codec_explicit: false,
@@ -3283,8 +3418,12 @@ mod tests {
 
 		let generated = generate_server_fn(&info).to_string();
 
-		assert_eq!(generated.matches("json_argument (\"type\")").count(), 2);
+		// Both target handlers validate and decode the same normalized wire name.
+		assert_eq!(generated.matches("json_argument (\"type\")").count(), 4);
 		assert_eq!(generated.matches("json_argument (\"r#type\")").count(), 0);
+		let validation = generated.find("arguments . validate_model_form").unwrap();
+		let extraction = generated.find("arguments . take_json").unwrap();
+		assert!(validation < extraction);
 	}
 
 	#[test]
@@ -3792,6 +3931,68 @@ mod tests {
 				&& generated.contains("{ data }"),
 			"the native fallback must bind and forward the declared parameter name: {generated}"
 		);
+	}
+
+	#[rstest::rstest]
+	fn model_form_submission_adapters_preserve_structured_payload_errors() {
+		use syn::parse_quote;
+
+		let multipart_func: ItemFn = parse_quote! {
+			async fn upload(title: String, document: UploadedFile) -> Result<(), ServerFnError> {
+				Ok(())
+			}
+		};
+		let multipart_info = ServerFnInfo {
+			func: multipart_func,
+			options: ServerFnOptions {
+				model_form_payload: Some(parse_quote!(UploadModelFormData<UploadPolicy>)),
+				..ServerFnOptions::default()
+			},
+			codec_explicit: false,
+			metadata_name: None,
+			endpoint_tokens: None,
+			metadata_name_tokens: None,
+			detail: false,
+			transactional: false,
+			structured_error: false,
+		};
+		let payload_func: ItemFn = parse_quote! {
+			async fn save(data: QuestionModelFormData<AllEditableModelFields>) -> Result<(), ServerFnError> {
+				Ok(())
+			}
+		};
+		let payload_info = ServerFnInfo {
+			func: payload_func,
+			options: ServerFnOptions {
+				model_form: true,
+				..ServerFnOptions::default()
+			},
+			codec_explicit: false,
+			metadata_name: None,
+			endpoint_tokens: None,
+			metadata_name_tokens: None,
+			detail: false,
+			transactional: false,
+			structured_error: false,
+		};
+
+		let multipart = generate_server_fn(&multipart_info).to_string();
+		let payload = generate_server_fn(&payload_info).to_string();
+
+		for (generated, expected_mappings) in [(multipart, 4), (payload, 2)] {
+			assert_eq!(
+				generated
+					.matches("state . payload_error_to_validation (error)")
+					.count(),
+				expected_mappings
+			);
+			assert_eq!(
+				generated
+					.matches("validation_with_message (error . to_string")
+					.count(),
+				0
+			);
+		}
 	}
 
 	#[test]

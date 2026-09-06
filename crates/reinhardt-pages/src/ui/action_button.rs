@@ -168,6 +168,8 @@ where
 mod tests {
 	use super::*;
 	use crate::reactive::{ReactiveScope, use_action};
+	#[cfg(all(native, feature = "testing"))]
+	use std::{cell::RefCell, rc::Rc};
 
 	#[test]
 	fn action_button_renders_idle_markup() {
@@ -192,7 +194,11 @@ mod tests {
 	#[cfg(all(native, feature = "testing"))]
 	#[test]
 	fn pending_state_controls_and_overrides_managed_attributes() {
-		let _task_sink = crate::platform::install_task_sink(|_| {});
+		let queued = Rc::new(RefCell::new(Vec::new()));
+		let queued_for_sink = Rc::clone(&queued);
+		let _task_sink = crate::platform::install_task_sink(move |task| {
+			queued_for_sink.borrow_mut().push(task);
+		});
 
 		ReactiveScope::run(|| {
 			let action = use_action(|_: u32| async { Ok::<u32, String>(1) });
@@ -209,5 +215,6 @@ mod tests {
 				r#"<button type="button" data-kind="save" disabled="disabled" aria-busy="true">Save</button>"#
 			);
 		});
+		assert_eq!(queued.borrow().len(), 1);
 	}
 }

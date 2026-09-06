@@ -81,6 +81,7 @@ impl Validator<str> for UrlValidator {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	/// Tests based on Django validators/tests.py URL validation tests
 	#[test]
@@ -137,13 +138,19 @@ mod tests {
 		}
 	}
 
-	#[test]
+	#[rstest]
 	fn test_url_validator_with_ports() {
 		let validator = UrlValidator::new();
 		assert!(validator.validate("http://example.com:8080/").is_ok());
 		assert!(validator.validate("http://example.com:80/").is_ok());
 		assert!(validator.validate("https://example.com:443/").is_ok());
 		assert!(validator.validate("http://localhost:3000/").is_ok());
+		assert_eq!(
+			validator.validate("http://example.com:123456/"),
+			Err(ValidationError::InvalidUrl(
+				"http://example.com:123456/".to_owned()
+			))
+		);
 	}
 
 	#[test]
@@ -163,10 +170,10 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_url_validator_with_query_strings() {
 		let validator = UrlValidator::new();
-		assert!(validator.validate("http://example.com?query=value").is_ok());
+		assert_eq!(validator.validate("http://example.com?query=value"), Ok(()));
 		assert!(
 			validator
 				.validate("http://example.com/?query=value")
@@ -179,10 +186,10 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_url_validator_with_fragments() {
 		let validator = UrlValidator::new();
-		assert!(validator.validate("http://example.com#section").is_ok());
+		assert_eq!(validator.validate("http://example.com#section"), Ok(()));
 		assert!(validator.validate("http://example.com/#section").is_ok());
 		assert!(
 			validator

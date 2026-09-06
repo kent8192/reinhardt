@@ -41,6 +41,16 @@ pub mod exception {
 	pub type Result<T> = core::result::Result<T, Error>;
 }
 
+pub mod validators {
+	#[derive(Debug, Clone)]
+	pub enum ValidationError {
+		Custom(String),
+	}
+
+	#[derive(Debug, Clone, Default)]
+	pub struct ValidationErrors;
+}
+
 pub mod model_info {
 	pub trait InfoModel {
 		type PrimaryKey;
@@ -157,7 +167,9 @@ pub mod model_form {
 		}
 	}
 
-	pub trait ModelFormContractField: Copy + Eq + core::hash::Hash + core::fmt::Debug + 'static {
+	pub trait ModelFormContractField:
+		Copy + Eq + core::hash::Hash + core::fmt::Debug + 'static
+	{
 		fn name(self) -> &'static str;
 	}
 
@@ -186,6 +198,22 @@ pub mod model_form {
 			field: &str,
 			value: serde_json::Value,
 		) -> Result<(), ModelFormPayloadError>;
+		fn clear_json(&mut self, field: &str) -> Result<(), ModelFormPayloadError> {
+			Err(ModelFormPayloadError::UnknownField {
+				field: field.to_owned(),
+			})
+		}
+		fn apply_defaults(&mut self) {}
+		fn is_defaulted(&self, _field: &str) -> bool {
+			false
+		}
+		fn set_normalized_json(
+			&mut self,
+			field: &str,
+			value: serde_json::Value,
+		) -> Result<(), ModelFormPayloadError> {
+			self.set_json(field, value)
+		}
 	}
 
 	pub trait NativeModelFormPayload: Sized {
@@ -272,6 +300,7 @@ pub mod model_form {
 		pub nullable: bool,
 		pub editable: bool,
 		pub generated_relation_id: bool,
+		pub trim: bool,
 	}
 
 	#[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,0 +1,5 @@
+error: required non-editable model field name collides with generated model-form server context; rename the field or provide a model default
+  --> tests/macros/ui/fail/model_form_server_context_state_collision.rs:15:2
+   |
+15 |     _state: i64,
+   |     ^^^^^^

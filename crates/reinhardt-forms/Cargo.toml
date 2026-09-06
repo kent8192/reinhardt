@@ -44,6 +44,7 @@ reinhardt-apps = { path = "../reinhardt-apps" }
 reinhardt-db = { path = "../reinhardt-db", features = ["associations"] }
 tokio-test = "0.4"
 rstest = { workspace = true }
+serial_test = { workspace = true }
 proptest = { workspace = true }
 tempfile = "3"
 # Workaround for KI-2 (rust-lang/cargo#4242, rust-lang/cargo#15151):

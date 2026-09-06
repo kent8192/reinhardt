@@ -4,6 +4,7 @@
 use bytes::Bytes;
 use hyper::{Method, header};
 use reinhardt_core::parsers::UploadedFile;
+use reinhardt_core::validators::{ValidationError, ValidationErrors};
 use reinhardt_di::params::{FromRequest, ParamContext, ParamError, ParamResult};
 use reinhardt_http::Request;
 use reinhardt_pages::server_fn::{
@@ -51,6 +52,31 @@ async fn invalid_choice(choice_id: String) -> Result<(), ServerFnError> {
 		));
 	}
 
+	Ok(())
+}
+
+async fn ensure_cluster_name_available(name: &str) -> Result<(), ValidationErrors> {
+	let mut errors = ValidationErrors::new();
+	if name == "taken" {
+		errors.add(
+			"_all",
+			ValidationError::Custom("Cluster creation was rejected".to_owned()),
+		);
+		errors.add(
+			"name",
+			ValidationError::Custom("A cluster with this name already exists".to_owned()),
+		);
+	}
+	if errors.is_empty() {
+		Ok(())
+	} else {
+		Err(errors)
+	}
+}
+
+#[server_fn]
+async fn validate_cluster_server_boundary(name: String) -> Result<(), ServerFnError> {
+	ensure_cluster_name_available(&name).await?;
 	Ok(())
 }
 
@@ -858,6 +884,43 @@ async fn validation_handler_returns_versioned_error_envelope() {
 	assert_eq!(value["version"], 1);
 	assert_eq!(error.field_errors()[0].field(), "choice_id");
 	assert_eq!(error.field_errors()[0].message(), "Select a choice");
+}
+
+#[rstest]
+#[tokio::test]
+async fn validation_errors_from_async_cluster_checks_route_field_and_form_errors() {
+	// Arrange
+	let request = Request::builder()
+		.method(Method::POST)
+		.uri("/api/server_fn/validate_cluster_server_boundary")
+		.body(Bytes::from_static(br#"{"name":"taken"}"#))
+		.build()
+		.expect("cluster validation request should build");
+
+	// Act
+	let body = validate_cluster_server_boundary::marker::handle(request)
+		.await
+		.expect_err("async cluster validation should reject a taken name");
+	let error: ServerFnError = serde_json::from_slice(&body).expect("error should be valid JSON");
+
+	// Assert
+	assert_eq!(
+		validate_cluster_server_boundary::marker::error_status(&body),
+		422
+	);
+	assert_eq!(error.kind(), ServerFnErrorKind::Validation);
+	assert_eq!(error.status(), Some(422));
+	assert_eq!(error.field_errors().len(), 2);
+	assert_eq!(error.field_errors()[0].field(), "name");
+	assert_eq!(
+		error.field_errors()[0].message(),
+		"A cluster with this name already exists"
+	);
+	assert_eq!(error.field_errors()[1].field(), "_all");
+	assert_eq!(
+		error.field_errors()[1].message(),
+		"Cluster creation was rejected"
+	);
 }
 
 #[tokio::test]

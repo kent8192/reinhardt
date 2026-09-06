@@ -1,0 +1,5 @@
+error: duplicate `trim` form field option
+ --> tests/ui/model/fail/form_trim_duplicate.rs:9:15
+  |
+9 |     #[form(trim, trim)]
+  |                  ^^^^

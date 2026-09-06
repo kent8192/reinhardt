@@ -116,3 +116,37 @@ fn multipart_model_form_rejects_requiredness_mismatch_on_wasm() {
 		"model-form field type or requiredness does not match server-function argument",
 	);
 }
+
+#[test]
+fn multipart_model_form_rejects_an_unvalidated_endpoint_on_wasm() {
+	check_wasm_fixture(
+		"model-form-multipart-unvalidated",
+		r#"let _form = form! {
+		name: UnvalidatedUploadForm,
+		model: Upload,
+		policy: UploadPolicy,
+		fields: [title, document, avatar],
+		server_fn: upload_unvalidated,
+	};"#,
+		"ModelFormServerFn",
+	);
+}
+
+#[test]
+fn multipart_model_form_rejects_a_different_endpoint_policy_on_wasm() {
+	check_wasm_fixture(
+		"model-form-multipart-policy-mismatch",
+		r#"struct OtherPolicy;
+	impl ModelFormPolicy for OtherPolicy {
+		fn allows(field: &str) -> bool { UploadPolicy::allows(field) }
+	}
+	let _form = form! {
+		name: OtherPolicyUploadForm,
+		model: Upload,
+		policy: OtherPolicy,
+		fields: [title, document, avatar],
+		server_fn: upload,
+	};"#,
+		"type mismatch resolving",
+	);
+}

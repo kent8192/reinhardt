@@ -19,6 +19,8 @@ thread_local! {
 		const { RefCell::new(None) };
 	static ACTIVE_HYDRATION_ADOPTED_TARGETS: RefCell<Option<Rc<RefCell<Vec<NodeId>>>>> =
 		const { RefCell::new(None) };
+	static ACTIVE_HYDRATION_RADIO_SNAPSHOTS: RefCell<Option<js_sys::WeakMap>> =
+		const { RefCell::new(None) };
 	static ACTIVE_REJECTED_NUMBER_SNAPSHOTS: RefCell<Option<RejectedNumberSnapshotStore>> =
 		const { RefCell::new(None) };
 	static ACTIVE_NUMBER_BINDINGS: RefCell<Vec<MountedNumberBinding>> = const { RefCell::new(Vec::new()) };
@@ -27,6 +29,7 @@ thread_local! {
 struct ActiveHydrationSnapshotStoreGuard {
 	previous: Option<HydrationSnapshotStore>,
 	previous_adopted_targets: Option<Rc<RefCell<Vec<NodeId>>>>,
+	previous_radio_snapshots: Option<js_sys::WeakMap>,
 	previous_rejected_number_snapshots: Option<RejectedNumberSnapshotStore>,
 }
 
@@ -37,6 +40,9 @@ impl Drop for ActiveHydrationSnapshotStoreGuard {
 		});
 		ACTIVE_HYDRATION_ADOPTED_TARGETS.with(|active| {
 			active.replace(self.previous_adopted_targets.take());
+		});
+		ACTIVE_HYDRATION_RADIO_SNAPSHOTS.with(|active| {
+			active.replace(self.previous_radio_snapshots.take());
 		});
 		ACTIVE_REJECTED_NUMBER_SNAPSHOTS.with(|active| {
 			active.replace(self.previous_rejected_number_snapshots.take());
@@ -77,6 +83,7 @@ impl Drop for HydrationSnapshotTransaction {
 }
 
 pub(crate) fn with_hydration_snapshot_transaction<T, E>(
+	root: &Element,
 	f: impl FnOnce() -> Result<T, E>,
 ) -> Result<T, E> {
 	let mut transaction = HydrationSnapshotTransaction::new();
@@ -84,11 +91,14 @@ pub(crate) fn with_hydration_snapshot_transaction<T, E>(
 		.with(|active| active.replace(Some(transaction.store.clone())));
 	let previous_adopted_targets = ACTIVE_HYDRATION_ADOPTED_TARGETS
 		.with(|active| active.replace(Some(Rc::new(RefCell::new(Vec::new())))));
+	let previous_radio_snapshots = ACTIVE_HYDRATION_RADIO_SNAPSHOTS
+		.with(|active| active.replace(Some(snapshot_hydration_radios(root))));
 	let previous_rejected_number_snapshots = ACTIVE_REJECTED_NUMBER_SNAPSHOTS
 		.with(|active| active.replace(Some(Rc::new(RefCell::new(Vec::new())))));
 	let guard = ActiveHydrationSnapshotStoreGuard {
 		previous,
 		previous_adopted_targets,
+		previous_radio_snapshots,
 		previous_rejected_number_snapshots,
 	};
 	let result = f();
@@ -97,6 +107,35 @@ pub(crate) fn with_hydration_snapshot_transaction<T, E>(
 		transaction.commit();
 	}
 	result
+}
+
+fn snapshot_hydration_radios(root: &Element) -> js_sys::WeakMap {
+	// Restoring one radio or updating its binding can uncheck a later sibling
+	// before hydration reaches it. Preserve every live selection before any writes.
+	let inputs = root
+		.as_web_sys()
+		.query_selector_all("input")
+		.expect("static input selector");
+	let snapshots = js_sys::WeakMap::new();
+	for input in std::iter::once(root.as_web_sys().clone().into())
+		.chain((0..inputs.length()).filter_map(|index| inputs.item(index)))
+		.filter_map(|node| node.dyn_into::<web_sys::HtmlInputElement>().ok())
+		.filter(|input| input.type_() == "radio")
+	{
+		snapshots.set(input.as_ref(), &input.checked().into());
+	}
+	snapshots
+}
+
+fn hydration_radio_value(element: &Element) -> Option<ControlValue> {
+	ACTIVE_HYDRATION_RADIO_SNAPSHOTS.with(|active| {
+		active.borrow().as_ref().and_then(|snapshots| {
+			snapshots
+				.get(element.as_web_sys().as_ref())
+				.as_bool()
+				.map(ControlValue::Checked)
+		})
+	})
 }
 
 struct ActiveRejectedNumberSnapshotStoreGuard {
@@ -511,7 +550,8 @@ impl ControlBindingController {
 			.as_ref()
 			.map(|registration| registration.position);
 		let (listeners, state) = install_listeners(&element, &binding, None, number_position);
-		let live_value = read_control(&element, binding.kind())?;
+		let live_value = hydration_radio_value(&element)
+			.map_or_else(|| read_control(&element, binding.kind()), Ok)?;
 		let password_value_was_omitted = password_value_was_omitted
 			&& binding.kind() == ControlKind::Text
 			&& element
@@ -521,6 +561,7 @@ impl ControlBindingController {
 			&& matches!(&live_value, ControlValue::Text(value) if value.is_empty());
 		let expected_value = untracked(|| binding.read());
 		let should_restore_expected = password_value_was_omitted
+			|| binding.source_preferred_on_hydration()
 			|| hydration_target_was_adopted(&binding)
 			|| (matches!(
 				binding.kind(),
@@ -555,6 +596,10 @@ impl ControlBindingController {
 			}
 			adopted || rejected
 		};
+		if binding.kind() == ControlKind::Radio {
+			// Earlier radio writes may have changed this property since the snapshot.
+			write_control(&element, binding.kind(), &untracked(|| binding.read()))?;
+		}
 		let option_observer = install_select_option_observer(&element, &binding);
 		let password_reset_listener = install_password_reset_listener(&element, &binding, &state);
 		let effect = install_effect(element, binding, true, state);
@@ -1595,21 +1640,29 @@ mod tests {
 	fn mounted_text_control_synchronizes_both_directions() {
 		let scope = ReactiveScope::new();
 		scope.enter(|| {
-			let element = element("input");
-			let input: web_sys::HtmlInputElement = element.as_web_sys().clone().unchecked_into();
-			let signal = Signal::new("signal".to_owned());
-			let _controller =
-				ControlBindingController::mount(element, ControlBinding::text(signal.clone()))
-					.expect("binding");
+			for input_type in ["text", "email", "url", "password"] {
+				// Arrange
+				let element = element("input");
+				let input: web_sys::HtmlInputElement =
+					element.as_web_sys().clone().unchecked_into();
+				input.set_type(input_type);
+				let signal = Signal::new("signal".to_owned());
+				let _controller =
+					ControlBindingController::mount(element, ControlBinding::text(signal.clone()))
+						.expect("binding");
 
-			assert_eq!(input.value(), "signal");
-			input.set_value("dom");
-			input
-				.dispatch_event(&web_sys::InputEvent::new("input").expect("input event"))
-				.expect("dispatch");
-			assert_eq!(signal.get(), "dom");
-			signal.set("updated".to_owned());
-			assert_eq!(input.value(), "updated");
+				// Act
+				assert_eq!(input.value(), "signal");
+				input.set_value("dom");
+				input
+					.dispatch_event(&web_sys::InputEvent::new("input").expect("input event"))
+					.expect("dispatch");
+				assert_eq!(signal.get(), "dom");
+				signal.set("updated".to_owned());
+
+				// Assert
+				assert_eq!(input.value(), "updated");
+			}
 		});
 	}
 

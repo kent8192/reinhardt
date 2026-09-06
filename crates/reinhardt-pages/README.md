@@ -259,6 +259,8 @@ control shape determines the signal type: `String` for string-valued inputs
 `datetime-local`, `month`, `week`, and `time`), radio, and single-select
 controls; `bool` for checkboxes; a supported numeric primitive for `number`
 and `range` inputs; and `Vec<String>` for multiple selects.
+Signal bindings accept owned handles, shared references, and mutable references,
+including both signals passed to `number(value, error)`.
 
 Native component tests mirror browser value sanitization. Low-level text
 bindings on inputs with a missing, empty, or unknown `type` remove line breaks
@@ -482,6 +484,47 @@ Model-backed browser submits retain the server function's typed response;
 `submit_server_fn` exposes it through `UseFormAsyncSubmitOutcome` and routes
 structured field errors into the same runtime state.
 
+Submit events validate their current DOM snapshot immediately, so invalid input
+supersedes earlier pending or queued submissions before another request starts.
+Pages validates an owned raw snapshot before generated submission, but the
+client is not a trust boundary. The server must repeat the generated pipeline,
+run any async application validator explicitly, and construct from the cleaned
+payload with server-owned context:
+
+```rust,ignore
+use reinhardt_core::model_form::{
+    ModelFormUpdatingPayload,
+    ModelFormValidatingPayload,
+};
+
+let cleaned = payload.clean_and_validate()?;
+ensure_cluster_name_available(&cleaned).await?;
+let cluster = cleaned.into_model(
+    ClusterModelFormServerContext::new().organization_id(organization_id),
+)?;
+
+let cleaned = update_payload.clean_and_validate_for_update(&existing)?;
+ensure_cluster_name_available(&cleaned).await?;
+let updated = cleaned.apply_to(existing)?;
+```
+
+Raw control edits remain available for correction while submission validation
+builds a separate normalized snapshot. Numeric bindings validate each parsed
+value before replacing the last accepted number. Clearing an optional numeric
+binding follows the same omission and null rules as payload construction.
+
+Cleaned payloads are not deserializable. For partial updates, first call
+`update_payload.clean_and_validate_for_update(&existing)`. This validates the
+post-merge candidate, including synchronous cross-field rules, while returning
+a partial cleaned payload. Then `cleaned.apply_to(existing)` changes only
+supplied public fields and preserves primary keys, server-owned values, and
+omitted fields. Bring `ModelFormUpdatingPayload` into scope for the update
+method; `clean_and_validate()` remains the strict create boundary.
+Use `#[form(validate = path)]` for synchronous cross-field validation and
+`#[form(trim)]` for opt-in generated text, email, or URL trimming;
+`#[field(...)]` remains database and model metadata. Database failures remain
+the persistence boundary rather than form validation errors.
+
 For model-derived controls, explicit field allowlists, display overrides,
 trusted server setters, and native async persistence, see
 [Model-backed Pages forms](docs/model_forms.md). Legacy model mode submits one
@@ -507,6 +550,73 @@ let login_form = form! {
 let runtime = use_form(&login_form).build();
 runtime.set_value(login_form.username_field(), "ada".to_string());
 ```
+
+#### Typed field bindings and reset ownership
+
+`UseFormReturn` owns the values, errors, touched/dirty state, and mounted
+controls for a generated form. Bind a generated field with
+`runtime.field(...)`:
+
+- `ClientForm`: `runtime.field(LoginClientFormField::Email)` when the
+  generated field enum is in scope;
+- an ordinary `form!`: `runtime.field(login_form.email_field())`;
+- a ModelForm with `fields: [email]`: `runtime.field(model_form.email_field())`.
+
+The ModelForm accessor is generated only for an explicit `fields: [...]`
+selection; its internal token type remains private. Tokens from different forms
+are rejected by Rust. A valid token paired with an incompatible control is
+detected when the page is built and panics with the field and control kind.
+
+The supported value/control matrix is:
+
+| Generated value | Supported controls |
+|---|---|
+| `String` | text, email, URL, password or textarea, radio, select-one |
+| `T: NumberValue` | number (`input[type=number]`) |
+| `bool` | checkbox |
+| `Vec<String>` | select-many |
+
+`RangeInput` and `input[type=range]` are not currently compatible with a typed
+runtime field binding; use an unbound or application-specific path for range
+controls.
+
+Call `runtime.reset()` explicitly to restore current defaults. The reset is
+source-first, clears field/collection/path/form/submit errors and
+touched/dirty/submitting/success state, and returns `use_form_action` handles
+to idle. It is not automatic after a successful submit and is not connected to
+a native `<button type="reset">` or reset event. Use
+`runtime.sync_after_native_reset()` only when the application deliberately
+handles the browser's native reset behavior. Pending network work continues;
+stale form-action completions cannot repopulate form-owned submit state, while
+standalone `use_action` handles are outside this reset boundary. Reset skips
+connected actions whose child scope has already been disposed.
+
+Fresh mount writes runtime values to the DOM. Hydration is normally DOM-first,
+so edits made after SSR and before hydration are preserved. A reset performed
+before hydration makes runtime field bindings source-preferred, causing reset
+defaults to replace stale SSR properties. Direct `Signal` bindings retain
+normal DOM-first hydration. Radio selections are captured before hydration
+updates sibling controls, preserving edits regardless of option order.
+
+For numeric bindings, invalid or incomplete raw text remains in the editor and
+the typed value remains the last valid value. The associated
+`NumberParseError` keeps the raw text and failure kind and is surfaced through
+field error state. Rejected edits mark the field as touched while leaving its
+typed value and dirty state unchanged. Clearing displayed errors with `clear_errors()` or
+`clear_field_error()` preserves the parse failure and continues to block
+validation and submission. A valid numeric write clears it; `reset_field()`
+clears only the restored field's parse state, while `reset()` restores every
+formatted default and clears all parse state. Generated `EmailInput`,
+`UrlInput`, and `PasswordInput` widgets also synchronize their mounted values
+on reset.
+
+Every native ModelForm submit supersedes earlier requests, including snapshots
+rejected during DOM value conversion. A rejected snapshot clears loading and
+success state while retaining its validation error and selected files.
+
+Typed runtime field bindings do not cover file inputs, named `model_form:`
+contracts, ModelForm `exclude: [...]`, or nested collection paths. Use the existing generated file,
+string, and collection APIs for those cases.
 
 DTO request types can opt in to generated client-form companions with
 `ClientForm`. This keeps request field names, enum choices, and typed request
@@ -584,6 +694,55 @@ if !save.is_pending() {
     save.submit();
 }
 ```
+
+`use_form_action` remains the generic local async helper for validated form
+work that does not need `#[server_fn]`-specific adapters, invalidation, or
+navigation. Use `use_server_mutation` when the mutation should expose one
+target-neutral status/result handle:
+
+```rust,ignore
+use reinhardt_pages::prelude::*;
+
+let query_client = QueryClient::new_ssr(QueryDefaults::default());
+let remove = use_server_mutation(delete_cluster)
+    .invalidate_family(query_client, clusters::family())
+    .redirect("/clusters")
+    .build();
+let outcome = remove.dispatch(cluster_id);
+```
+
+Use a tuple closure when the client-side input differs from the server
+function's ordinary multi-argument signature:
+
+```rust,ignore
+let remove = use_server_mutation(|(cluster_id, force): (String, bool)| {
+    delete_cluster(cluster_id, force)
+})
+.build();
+```
+
+Generated forms bind the same mutation builder to the current runtime:
+
+```rust,ignore
+let mutation = form
+    .server_mutation(&runtime)
+    .reset_form_on_success()
+    .build();
+let outcome = mutation.dispatch();
+```
+
+For injected or extractor server functions, use the generated
+`function_name::mutation()` adapter so ambient server parameters stay off the
+client input:
+
+```rust,ignore
+let remove = use_server_mutation(delete_cluster::mutation()).build();
+let outcome = remove.dispatch(cluster_id);
+```
+
+Native dispatch returns `MutationDispatchOutcome::UnsupportedTarget` and does
+not validate, invoke the server function, invalidate queries, reset forms, or
+navigate.
 
 For native form submission and headless status UI, attach the form action's
 submit handler to the containing form and use the form-aware primitives:
@@ -696,6 +855,12 @@ Argument identifiers become multipart part names. All other client-visible
 arguments remain scalar JSON parts, and the response codec remains JSON; do
 not add a multipart codec option. Raw Rust identifiers use their unraw part
 name, such as `type` for `r#type`.
+
+Endpoints used by a model-backed upload form must declare
+`#[server_fn(model_form_payload = "UploadModelFormData<UploadPolicy>")]`.
+The generated HTTP adapter normalizes and validates scalar arguments against
+that payload before running the function, including on direct multipart posts.
+See [model file and image forms](docs/model_forms.md#file-and-image-fields).
 
 ```rust,no_run
 use reinhardt_core::parsers::UploadedFile;

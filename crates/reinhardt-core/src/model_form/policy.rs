@@ -46,6 +46,43 @@ pub trait ModelFormPayload<P: ModelFormPolicy>: Sized {
 		field: &str,
 		value: serde_json::Value,
 	) -> Result<(), ModelFormPayloadError>;
+
+	/// Removes a supplied value while preserving omission separately from JSON null.
+	///
+	/// Parity: P2. Generated native and WASM payloads support this normalization hook.
+	#[doc(hidden)]
+	fn clear_json(&mut self, field: &str) -> Result<(), ModelFormPayloadError> {
+		Err(ModelFormPayloadError::InvalidValue {
+			field: field.to_owned(),
+			message: "This payload does not support omitting supplied fields.".to_owned(),
+		})
+	}
+
+	/// Fills omitted fields with their declared model defaults before create validation.
+	///
+	/// Parity: P2. Generated payloads evaluate each missing default once on either target.
+	#[doc(hidden)]
+	fn apply_defaults(&mut self) {}
+
+	/// Reports whether a value came from a previously evaluated model default.
+	///
+	/// Parity: P2. Normalization preserves evaluated defaults on native and WASM.
+	#[doc(hidden)]
+	fn is_defaulted(&self, _field: &str) -> bool {
+		false
+	}
+
+	/// Stores a normalized value without discarding its model-default provenance.
+	///
+	/// Parity: P2. Generated native and WASM cleaners use this internal write path.
+	#[doc(hidden)]
+	fn set_normalized_json(
+		&mut self,
+		field: &str,
+		value: serde_json::Value,
+	) -> Result<(), ModelFormPayloadError> {
+		self.set_json(field, value)
+	}
 }
 
 /// Converts an already-normalized native HTML form object into a model-form payload.
@@ -294,6 +331,7 @@ mod tests {
 					nullable: false,
 					editable: true,
 					generated_relation_id: false,
+					trim: false,
 				},
 				ModelFormFieldDescriptor {
 					name: "count",
@@ -306,6 +344,7 @@ mod tests {
 					nullable: false,
 					editable: true,
 					generated_relation_id: false,
+					trim: false,
 				},
 				ModelFormFieldDescriptor {
 					name: "metadata",
@@ -315,6 +354,7 @@ mod tests {
 					nullable: true,
 					editable: true,
 					generated_relation_id: false,
+					trim: false,
 				},
 				ModelFormFieldDescriptor {
 					name: "created_at",
@@ -324,6 +364,7 @@ mod tests {
 					nullable: false,
 					editable: true,
 					generated_relation_id: false,
+					trim: false,
 				},
 				ModelFormFieldDescriptor {
 					name: "title",
@@ -337,6 +378,7 @@ mod tests {
 					nullable: false,
 					editable: true,
 					generated_relation_id: false,
+					trim: false,
 				},
 				ModelFormFieldDescriptor {
 					name: "accent",
@@ -350,6 +392,7 @@ mod tests {
 					nullable: true,
 					editable: true,
 					generated_relation_id: false,
+					trim: false,
 				},
 				ModelFormFieldDescriptor {
 					name: "summary",
@@ -363,6 +406,7 @@ mod tests {
 					nullable: true,
 					editable: true,
 					generated_relation_id: false,
+					trim: false,
 				},
 				ModelFormFieldDescriptor {
 					name: "owner_id",
@@ -375,6 +419,7 @@ mod tests {
 					nullable: false,
 					editable: false,
 					generated_relation_id: false,
+					trim: false,
 				},
 			];
 			&FIELDS
@@ -395,6 +440,7 @@ mod tests {
 				nullable: true,
 				editable: true,
 				generated_relation_id: false,
+				trim: false,
 			}];
 			&FIELDS
 		}
@@ -414,6 +460,7 @@ mod tests {
 				nullable: true,
 				editable: true,
 				generated_relation_id: false,
+				trim: false,
 			}];
 			&FIELDS
 		}

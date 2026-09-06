@@ -476,6 +476,8 @@
 //! unmounted controls do not change the signal.
 //! Numeric bindings may expose a [`NumberParseError`] signal that retains
 //! recoverable invalid editor text.
+//! Owned signal handles, shared references, and mutable references are supported,
+//! including both signals passed to `number(value, error)`.
 //! Only unmodified Arrow/Home/End keyboard moves are predicted; modifier-key
 //! commands and already-canceled key events are treated as unknown. When a
 //! pointer-positioned number edit is sanitized before its inaccessible selection
@@ -559,6 +561,96 @@
 //! runtime.set_value(login_form.username_field(), "ada".to_string());
 //! ```
 //!
+//! ### Typed field bindings and reset ownership
+//!
+//! A generated form's runtime is the owner of values and mounted control
+//! state. Call [`UseFormReturn::field`] with the generated token and pass the
+//! opaque handle to `bind:`. The token spelling depends on the form source:
+//!
+//! - `ClientForm`: `runtime.field(LoginClientFormField::Email)` when the
+//!   generated field enum is in scope;
+//! - an ordinary `form!`: `runtime.field(login_form.email_field())`;
+//! - a ModelForm using `fields: [email]`:
+//!   `runtime.field(model_form.email_field())`.
+//!
+//! ModelForm field accessors are generated only for the explicit `fields: [...]`
+//! selection. The accessor keeps the internal model token private while still
+//! providing the same typed binding contract.
+//!
+//! ```rust,no_run
+//! use reinhardt_pages::{form, page, use_form};
+//! use reinhardt_pages::reactive::ReactiveScope;
+//!
+//! ReactiveScope::run(|| {
+//!     let form = form! {
+//!         name: LoginForm,
+//!         action: "/login",
+//!         fields: {
+//!             email: EmailField { required },
+//!         },
+//!     };
+//!     let runtime = use_form(&form).build();
+//!     let _page = page!({
+//!         input {
+//!             aria_label: "Email",
+//!             bind: runtime.field(form.email_field()),
+//!         }
+//!     });
+//!     runtime.reset();
+//! });
+//! ```
+//!
+//! The supported value/control matrix is:
+//!
+//! | Generated value | Supported controls |
+//! | --- | --- |
+//! | `String` | text, email, URL, password or textarea, radio, select-one |
+//! | `T` implementing [`NumberValue`] | number (`input[type=number]`) |
+//! | `bool` | checkbox |
+//! | `Vec<String>` | select-many |
+//!
+//! `RangeInput` and `input[type=range]` are not currently compatible with a
+//! typed runtime field binding; use an unbound or application-specific path
+//! for range controls.
+//!
+//! A token from another form fails at the Rust type boundary. A token from the
+//! right form paired with an incompatible control is valid Rust but panics at
+//! page construction with a message naming the field and requested control.
+//!
+//! Reset is explicit: [`UseFormReturn::reset`] applies the current defaults
+//! source-first, clears field/collection/path/form/submit errors and
+//! touched/dirty/submitting/success state, and returns connected
+//! [`FormAction`] handles to idle. It does not run automatically after a
+//! successful submission and it is not wired to a native reset button or reset
+//! event. [`UseFormReturn::sync_after_native_reset`] remains available when an
+//! application deliberately handles the browser's native reset behavior.
+//! A pending `use_form_action` request is not cancelled; its stale completion
+//! cannot repopulate form-owned submit state. Standalone [`use_action`] handles
+//! are not connected to this reset boundary.
+//!
+//! Fresh mount writes runtime values to the DOM. Hydration is normally
+//! DOM-first, preserving an edit made after SSR and before hydration. If the
+//! application calls `runtime.reset()` before hydration, runtime field
+//! bindings become source-preferred and write the reset defaults instead of
+//! adopting stale SSR properties. Existing direct `Signal` bindings retain
+//! their normal DOM-first hydration behavior.
+//!
+//! Numeric bindings preserve invalid editor text and the last valid typed
+//! value. The current [`NumberParseError`] retains the raw text and failure
+//! kind; generated form runtimes expose it through field error state. Clearing
+//! displayed errors preserves parse failures and continues to block validation
+//! and submission. A valid numeric write clears the parse failure;
+//! [`UseFormReturn::reset_field`] clears it only for the restored field, while
+//! `reset()` restores every formatted default and clears all parse state.
+//! Generated email, URL, and password widgets synchronize their mounted values
+//! on reset as well.
+//!
+//! Typed runtime bindings intentionally exclude file inputs, named `model_form:`
+//! contracts, ModelForm `exclude: [...]` declarations, and nested collection paths. Those forms
+//! keep their existing generated/file/collection APIs. The binding categories
+//! above reuse the existing `page!` classification and do not add a second DOM
+//! registry or application-facing adapter type.
+//!
 //! DTO request types can opt in to generated client-form companions with
 //! [`ClientForm`]. The generated form keeps enum choices and typed request
 //! assembly tied to the request type while using the same [`use_form`] runtime.
@@ -631,6 +723,98 @@
 //!     save.submit();
 //! }
 //! ```
+//!
+//! `use_form_action` remains the generic local async helper for validated form
+//! workflows. Use [`use_server_mutation`] when the work is a server mutation and
+//! you want one target-neutral status handle with invalidation and redirect
+//! hooks:
+//!
+//! ```rust,no_run
+//! use reinhardt_pages::prelude::*;
+//! use reinhardt_pages::server_fn::ServerFnError;
+//!
+//! async fn delete_cluster(cluster_id: String) -> Result<(), ServerFnError> {
+//!     let _ = cluster_id;
+//!     Ok(())
+//! }
+//!
+//! mod clusters {
+//!     use reinhardt_pages::prelude::*;
+//!     use reinhardt_pages::server_fn::ServerFnError;
+//!
+//!     pub fn family() -> QueryFamily<(), Vec<String>, ServerFnError> {
+//!         QueryFamily::new("docs.clusters.list.v1")
+//!     }
+//! }
+//!
+//! let query_client = QueryClient::new_ssr(QueryDefaults::default());
+//! let remove = use_server_mutation(delete_cluster)
+//!     .invalidate_family(query_client, clusters::family())
+//!     .redirect("/clusters")
+//!     .build();
+//! let outcome = remove.dispatch("cluster-1".to_owned());
+//! # let _ = outcome;
+//! ```
+//!
+//! Adapt multiple client arguments explicitly with a tuple closure:
+//!
+//! ```rust,no_run
+//! use reinhardt_pages::prelude::*;
+//! use reinhardt_pages::server_fn::ServerFnError;
+//!
+//! async fn delete_cluster(cluster_id: String, force: bool) -> Result<(), ServerFnError> {
+//!     let _ = (cluster_id, force);
+//!     Ok(())
+//! }
+//!
+//! let remove = use_server_mutation(|(cluster_id, force): (String, bool)| {
+//!     delete_cluster(cluster_id, force)
+//! })
+//! .build();
+//! # let _ = remove;
+//! ```
+//!
+//! Generated `function_name::mutation()` adapters keep injected or extractor
+//! parameters out of the client input shape:
+//!
+//! ```rust,no_run
+//! # mod docs {
+//! use async_trait::async_trait;
+//! use reinhardt_di::{DiResult, Injectable, InjectionContext};
+//! use reinhardt_pages::prelude::*;
+//! use reinhardt_pages::server_fn::{ServerFnError, server_fn};
+//!
+//! #[derive(Clone)]
+//! pub struct CurrentOrg;
+//!
+//! #[async_trait]
+//! impl Injectable for CurrentOrg {
+//!     async fn inject(_ctx: &InjectionContext) -> DiResult<Self> {
+//!         Ok(Self)
+//!     }
+//! }
+//!
+//! #[server_fn]
+//! pub async fn delete_cluster(
+//!     cluster_id: String,
+//!     #[inject] current_org: CurrentOrg,
+//! ) -> Result<(), ServerFnError> {
+//!     let _ = (cluster_id, current_org);
+//!     Ok(())
+//! }
+//!
+//! pub fn build_remove() -> ServerMutation<String, ()> {
+//!     use_server_mutation(delete_cluster::mutation()).build()
+//! }
+//! # }
+//! let remove = docs::build_remove();
+//! let outcome = remove.dispatch("cluster-1".to_owned());
+//! # let _ = outcome;
+//! ```
+//!
+//! Native dispatch returns [`MutationDispatchOutcome::UnsupportedTarget`] and
+//! does not validate, invoke the mutation closure, invalidate queries, reset
+//! generated forms, or navigate.
 //!
 //! Use [`ui::FormActionButton`] with [`FormAction::submit_handler`] to preserve
 //! native form submit semantics. [`ui::FormActionResultPanel`] renders
@@ -920,6 +1104,7 @@ pub mod form;
 // API and communication
 pub mod api;
 pub mod server_fn;
+pub mod server_mutation;
 
 // Server-side rendering
 pub mod ssr;
@@ -993,8 +1178,8 @@ pub use form_state::{
 	FieldError, FieldPathState, FieldState, FocusError, FormAction, FormCollectionRuntimeSource,
 	FormEvent, FormRuntimeSource, FormState, FormSubscription, FormValidationError,
 	FormWidgetAdapter, FormWidgetError, FormWidgetValueKind, NoDeps, ResetOnDeps, RevalidateOn,
-	UseFormAsyncSubmitOutcome, UseFormBuilder, UseFormReturn, UseFormSubmitOutcome, use_form,
-	use_form_action,
+	RuntimeControlBindingRequest, RuntimeFieldBinding, UseFormAsyncSubmitOutcome, UseFormBuilder,
+	UseFormReturn, UseFormSubmitOutcome, use_form, use_form_action,
 };
 pub use hydration::{HydrationContext, HydrationError, hydrate};
 pub use portal::{Portal, PortalError, PortalHandle, PortalTarget, mount_portal};
@@ -1046,6 +1231,10 @@ pub use router::{NavigationGuardId, Path, Query, RouteLoaderId};
 pub use router::{NavigationType, navigate, navigate_named, navigate_or_reload};
 pub use server_fn::{
 	ServerFn, ServerFnError, ServerFnErrorKind, ServerFnErrorPayload, ServerFnFieldError,
+};
+pub use server_mutation::{
+	FormServerMutation, FormServerMutationBuilder, MutationDispatchOutcome, ServerMutation,
+	ServerMutationBuilder, use_server_mutation,
 };
 pub use ssr::SsrState;
 #[cfg(native)]

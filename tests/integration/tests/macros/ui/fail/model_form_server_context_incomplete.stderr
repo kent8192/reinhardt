@@ -1,0 +1,16 @@
+error[E0308]: mismatched types
+  --> tests/macros/ui/fail/model_form_server_context_incomplete.rs:23:29
+   |
+23 |     let _ = cleaned.into_model(ClusterModelFormServerContext::new());
+   |                     ---------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `ClusterModelFormServerContext<...>`, found `ClusterModelFormServerContext`
+   |                     |
+   |                     arguments to this method are incorrect
+   |
+   = note: expected struct `ClusterModelFormServerContext<ClusterModelFormOrganizationIdPresent>`
+              found struct `ClusterModelFormServerContext<ClusterModelFormOrganizationIdMissing>`
+note: method defined here
+  --> tests/macros/ui/fail/model_form_server_context_incomplete.rs:8:1
+   |
+ 8 | #[model(app_label = "model_form_ui", form = true, info = false)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the derive macro `::reinhardt::macros::Model` (in Nightly builds, run with -Z macro-backtrace for more info)

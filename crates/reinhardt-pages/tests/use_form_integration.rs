@@ -1959,8 +1959,10 @@ async fn submit_server_fn_returns_submitted_outcome() {
 	);
 }
 
+#[rstest::rstest]
 #[tokio::test]
 async fn submit_server_fn_routes_typed_server_errors() {
+	// Arrange
 	let profile = form! {
 		name: TypedAsyncServerErrorForm,
 		action: "/profile",
@@ -1972,15 +1974,17 @@ async fn submit_server_fn_routes_typed_server_errors() {
 	};
 	let runtime = use_form(&profile).build();
 
+	// Act
 	let result = runtime
 		.submit_server_fn(|| async {
-			Err::<(), _>(ServerFnError::validation_with_message(
-				"Validation failed",
-				[("display_name", "Display name is already used")],
-			))
+			Err::<(), _>(ServerFnError::validation([(
+				"display_name",
+				"Display name is already used",
+			)]))
 		})
 		.await;
 
+	// Assert
 	assert!(matches!(result, Err(error) if error.kind() == ServerFnErrorKind::Validation));
 	assert_eq!(
 		runtime
@@ -2344,5 +2348,110 @@ fn form_action_ui_preserves_submit_semantics_and_renders_validation_errors() {
 			panel.render().render_to_string(),
 			"validation:email is required"
 		);
+	});
+}
+
+#[rstest::rstest]
+#[serial_test::serial(reactive_runtime)]
+fn form_reset_ignores_disposed_connected_action_scope() {
+	ReactiveScope::run(|| {
+		// Arrange
+		let profile = form! {
+			name: ProfileForm,
+			action: "/profile",
+			fields: {
+				display_name: CharField {
+					initial: "Ada",
+				}
+			}
+		};
+		let runtime = use_form(&profile).build();
+		let child_scope = ReactiveScope::new();
+		let retained_action = {
+			let action = child_scope
+				.enter(|| use_form_action(&runtime, |_values| async { Ok::<(), String>(()) }));
+			action.clone()
+		};
+		runtime.set_value(profile.display_name_field(), "Grace".to_owned());
+		runtime.set_error(profile.display_name_field(), FieldError::new("invalid"));
+		child_scope.dispose();
+
+		// Act
+		runtime.reset();
+
+		// Assert
+		assert_eq!(retained_action.form().get_values().display_name, "Ada");
+		assert!(!runtime.form_state().is_dirty.get());
+		assert!(!runtime.form_state().is_touched.get());
+		assert_eq!(
+			runtime.get_field_state(profile.display_name_field()).error,
+			None
+		);
+	});
+}
+
+#[rstest::rstest]
+#[case::field_reset("reset_field")]
+#[case::field_write("set_value")]
+#[case::all_values("set_values")]
+#[case::form_reset("reset")]
+fn numeric_editor_errors_survive_display_clearing_until_values_are_repaired(#[case] repair: &str) {
+	use reinhardt_pages::component::ControlValue;
+	use reinhardt_pages::control_binding::__private::{NumberBinding, into_control_binding};
+
+	ReactiveScope::run(|| {
+		// Arrange
+		let form = form! {
+			name: NumericRepairForm,
+			action: "/numbers",
+			fields: {
+				count: IntegerField {},
+				ratio: FloatField {},
+			},
+		};
+		let runtime = use_form(&form).build();
+		let count = into_control_binding::<NumberBinding, _>(runtime.field(form.count_field()), ());
+		let ratio = into_control_binding::<NumberBinding, _>(runtime.field(form.ratio_field()), ());
+		count.write(ControlValue::Text("7".to_owned())).unwrap();
+		count.write(ControlValue::Text("1e".to_owned())).unwrap();
+		ratio.write(ControlValue::Text("-".to_owned())).unwrap();
+
+		// Act: clearing messages cannot make the stale typed value submittable.
+		runtime.clear_errors();
+		runtime.clear_field_error(form.count_field());
+		let errors = runtime
+			.trigger()
+			.expect_err("raw numeric errors still block validation");
+		assert_eq!(errors.field_errors().len(), 2);
+		assert_eq!(form.count().get(), 7);
+
+		match repair {
+			"reset_field" => runtime.reset_field(form.count_field()),
+			"set_value" => runtime.set_value(form.count_field(), 0_i64),
+			"set_values" => {
+				let mut values = runtime.get_values();
+				values.count = 0;
+				runtime.set_values(values);
+			}
+			"reset" => runtime.reset(),
+			_ => unreachable!("known repair operation"),
+		}
+
+		// Assert: repairing one field preserves the other rejected editor value.
+		assert_eq!(form.count().get(), 0);
+		assert_eq!(runtime.get_field_state(form.count_field()).error, None);
+		if matches!(repair, "reset_field" | "set_value") {
+			let errors = runtime.trigger().expect_err("ratio is still invalid");
+			assert_eq!(errors.field_errors().len(), 1);
+			assert_eq!(
+				errors
+					.field_errors()
+					.get(&form.ratio_field())
+					.map(FieldError::message),
+				Some("cannot parse numeric control value \"-\": Incomplete"),
+			);
+			runtime.reset_field(form.ratio_field());
+		}
+		assert!(runtime.trigger().is_ok());
 	});
 }

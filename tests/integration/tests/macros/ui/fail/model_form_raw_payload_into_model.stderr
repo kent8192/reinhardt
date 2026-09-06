@@ -1,0 +1,14 @@
+error[E0599]: no method named `into_model` found for struct `ClusterModelFormData<P>` in the current scope
+  --> tests/macros/ui/fail/model_form_raw_payload_into_model.rs:22:14
+   |
+ 8 | #[model(app_label = "model_form_ui", form = true, info = false)]
+   | ---------------------------------------------------------------- method `into_model` not found for this struct
+...
+22 |     let _ = raw.into_model(context);
+   |                 ^^^^^^^^^^
+   |
+help: there is a method `into_box` with a similar name, but with different arguments
+  --> $CARGO/ra_ap_stdx-$VERSION/src/anymap.rs
+   |
+   |     fn into_box(self) -> Box<A>;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -796,28 +796,23 @@ fn generate_control_binding(
 		TypedControlBindingExpr::Direct(value) => value,
 		TypedControlBindingExpr::NumberWithError { value, .. } => value,
 	};
-	let value = wrap_value_expr_with_captures(
-		quote! { #pages_crate::reactive::copy_signal_handle(#value) },
-		value,
-		pages_crate,
-		ctx,
-	);
 	let binding_span = binding.span;
+	let private = quote! { #pages_crate::control_binding::__private };
 	let descriptor = match (&binding.kind, &binding.expression) {
 		(TypedControlBindingKind::Text, _) => {
-			quote_spanned!(binding_span=> #pages_crate::component::ControlBinding::text(#value))
+			quote_spanned!(binding_span=> #private::into_control_binding::<#private::TextBinding, _>(#value, ()))
 		}
 		(TypedControlBindingKind::Checkbox, _) => {
-			quote_spanned!(binding_span=> #pages_crate::component::ControlBinding::checkbox(#value))
+			quote_spanned!(binding_span=> #private::into_control_binding::<#private::CheckboxBinding, _>(#value, ()))
 		}
 		(TypedControlBindingKind::SelectOne, _) => {
-			quote_spanned!(binding_span=> #pages_crate::component::ControlBinding::select_one(#value))
+			quote_spanned!(binding_span=> #private::into_control_binding::<#private::SelectOneBinding, _>(#value, ()))
 		}
 		(TypedControlBindingKind::SelectMany, _) => {
-			quote_spanned!(binding_span=> #pages_crate::component::ControlBinding::select_many(#value))
+			quote_spanned!(binding_span=> #private::into_control_binding::<#private::SelectManyBinding, _>(#value, ()))
 		}
 		(TypedControlBindingKind::Number, TypedControlBindingExpr::Direct(_)) => {
-			quote_spanned!(binding_span=> #pages_crate::component::ControlBinding::number(#value))
+			quote_spanned!(binding_span=> #private::into_control_binding::<#private::NumberBinding, _>(#value, ()))
 		}
 		(
 			TypedControlBindingKind::Number,
@@ -829,23 +824,22 @@ fn generate_control_binding(
 				pages_crate,
 				ctx,
 			);
-			quote_spanned!(binding_span=> #pages_crate::component::ControlBinding::number_with_error(
-				#value,
-				#error
-			))
+			quote_spanned!(binding_span=> #private::into_control_binding::<#private::NumberBinding, _>((#pages_crate::reactive::copy_signal_handle(#value), #error), ()))
 		}
 		(TypedControlBindingKind::Radio, _) => {
 			let radio_value = radio_value_override.unwrap_or_else(|| {
 				let radio_value = binding.radio_value.as_ref().expect("validated radio value");
-				let radio_value = wrap_expr_with_captures(radio_value, pages_crate, ctx);
-				quote! { (#radio_value).to_string() }
+				wrap_value_expr_with_captures(
+					quote! { (#radio_value).to_string() },
+					radio_value,
+					pages_crate,
+					ctx,
+				)
 			});
-			quote_spanned!(binding_span=> #pages_crate::component::ControlBinding::radio(
-				#value,
-				#radio_value
-			))
+			quote_spanned!(binding_span=> #private::into_control_binding::<#private::RadioBinding, _>(#value, #radio_value))
 		}
 	};
+	let descriptor = wrap_value_expr_with_captures(descriptor, value, pages_crate, ctx);
 	quote!(.control_binding(#descriptor))
 }
 
@@ -2063,7 +2057,7 @@ mod tests {
 	}
 
 	#[test]
-	fn test_control_binding_codegen_passes_copy_signals_by_value() {
+	fn test_control_binding_codegen_uses_typed_source_adapters() {
 		let input = quote::quote!(|
 			text: Signal<String>,
 			checked: Signal<bool>,
@@ -2090,7 +2084,15 @@ mod tests {
 		let ctx = CodegenContext::new(typed_ast.implicit_captures());
 		let pages_crate = quote::quote!(reinhardt_pages);
 
-		for node in &root.children {
+		let expected_markers = [
+			"TextBinding",
+			"CheckboxBinding",
+			"RadioBinding",
+			"NumberBinding",
+			"SelectOneBinding",
+			"SelectManyBinding",
+		];
+		for (node, marker) in root.children.iter().zip(expected_markers) {
 			let TypedPageNode::Element(element) = node else {
 				panic!("expected bound control");
 			};
@@ -2104,7 +2106,9 @@ mod tests {
 			)
 			.to_string()
 			.replace(' ', "");
-			assert!(!output.contains(".clone()"));
+			assert!(output.contains("control_binding::__private::into_control_binding"));
+			assert!(output.contains(marker));
+			assert!(!output.contains("ControlBinding::text"));
 		}
 	}
 

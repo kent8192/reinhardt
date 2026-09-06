@@ -2,10 +2,8 @@ use crate::field::{FieldError, FieldResult, FormField, Widget};
 use regex::Regex;
 use std::sync::LazyLock;
 
-/// URL validation regex pattern.
 const URL_PATTERN: &str = r"^https?://(?:(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}|localhost|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?::\d+)?(?:/[^\s]*)?$";
 
-/// Cached URL validation regex to avoid repeated compilation.
 static URL_REGEX: LazyLock<Regex> =
 	LazyLock::new(|| Regex::new(URL_PATTERN).expect("URL regex pattern is valid"));
 
@@ -136,6 +134,7 @@ impl FormField for URLField {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	#[test]
 	fn test_urlfield_valid() {
@@ -178,6 +177,37 @@ mod tests {
 		assert_eq!(
 			field.clean(Some(&serde_json::json!(""))).unwrap(),
 			serde_json::json!("")
+		);
+	}
+
+	#[rstest]
+	fn direct_url_field_strips_by_default() {
+		let field = URLField::new("website".to_owned());
+
+		assert_eq!(
+			field
+				.clean(Some(&serde_json::json!("  https://example.com  ")))
+				.unwrap(),
+			serde_json::json!("https://example.com")
+		);
+	}
+
+	#[rstest]
+	fn direct_url_field_preserves_its_legacy_boundary() {
+		let field = URLField::new("website".to_owned());
+
+		assert_eq!(
+			field
+				.clean(Some(&serde_json::json!("https://example.com?query=value")))
+				.unwrap_err()
+				.to_string(),
+			"Enter a valid URL"
+		);
+		assert_eq!(
+			field
+				.clean(Some(&serde_json::json!("https://example.com:123456/")))
+				.unwrap(),
+			serde_json::json!("https://example.com:123456/")
 		);
 	}
 }

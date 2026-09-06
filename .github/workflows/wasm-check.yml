@@ -257,6 +257,8 @@ jobs:
             cargo test --target wasm32-unknown-unknown \
               --features testing \
               --test csrf_wasm_test --test server_fn_wasm_test \
+              --test server_mutation_wasm_test \
+              --test model_form_file_upload_wasm_test \
               --test client_launcher_navigation_test \
               --test navigation_guard_wasm_test \
               --test document_head_wasm_test \
@@ -328,7 +330,9 @@ jobs:
   wasm-consumer-fixture:
     name: WASM Consumer Fixture (#4161 regression)
     runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
-    timeout-minutes: 30
+    # Cold CLI builds plus native and WASM checks need the same budget as
+    # the other Rust compilation jobs, even when dependency caches miss.
+    timeout-minutes: 360
     steps:
       - name: Free Disk Space (Ubuntu)
         if: ${{ !contains(inputs.runner || '', 'self-hosted') }}

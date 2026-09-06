@@ -1,9 +1,9 @@
 //! Typed model-form runtime values work without optional Pages features on both targets.
 
 use reinhardt_core::model_form::{
-	AllEditableModelFields, ModelFormContract, ModelFormContractField, ModelFormContractSchema,
-	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError,
-	NativeModelFormPayload,
+	AllEditableModelFields, ModelFormCleanedPayload, ModelFormContract, ModelFormContractField,
+	ModelFormContractSchema, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload,
+	ModelFormPayloadError, ModelFormValidatingPayload, NativeModelFormPayload,
 };
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 use reinhardt_pages::{form, use_form};
@@ -33,6 +33,7 @@ const fn scalar(
 		nullable,
 		editable: true,
 		generated_relation_id: false,
+		trim: false,
 	}
 }
 
@@ -81,6 +82,27 @@ impl ModelFormPayload<AllEditableModelFields> for ScalarData {
 	) -> Result<(), ModelFormPayloadError> {
 		self.0.insert(field.to_owned(), value);
 		Ok(())
+	}
+}
+
+struct CleanedScalarData(ScalarData);
+
+impl ModelFormCleanedPayload for CleanedScalarData {
+	type Raw = ScalarData;
+
+	fn into_raw(self) -> Self::Raw {
+		self.0
+	}
+}
+
+impl ModelFormValidatingPayload for ScalarData {
+	type Cleaned = CleanedScalarData;
+
+	fn clean_and_validate(
+		self,
+	) -> Result<Self::Cleaned, reinhardt_core::validators::ValidationErrors> {
+		// This fixture exercises scalar transport without additional validation rules.
+		Ok(CleanedScalarData(self))
 	}
 }
 

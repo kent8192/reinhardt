@@ -2,6 +2,7 @@
 //!
 //! Provides parsing of XML content into a JSON-like structure using quick-xml.
 //! Supports attributes, namespaces, and CDATA sections.
+//! Input must be valid UTF-8; malformed byte sequences produce validation errors.
 
 use super::parser::{ParseResult, ParsedData, Parser};
 use crate::exception::Error;
@@ -213,7 +214,7 @@ impl XMLParser {
 		loop {
 			match reader.read_event() {
 				Ok(Event::Start(e)) => {
-					let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+					let name = e.name().as_ref().to_owned();
 					let mut obj = Map::new();
 
 					// Handle attributes
@@ -247,9 +248,7 @@ impl XMLParser {
 				}
 
 				Ok(Event::Text(e)) => {
-					let text = e
-						.xml_content(xml_version)
-						.map_err(|e| Error::Validation(format!("XML decode error: {}", e)))?;
+					let text = e.xml_content(xml_version);
 
 					if self.config.trim_text {
 						let trimmed = text.trim();
@@ -262,7 +261,7 @@ impl XMLParser {
 				}
 
 				Ok(Event::CData(e)) => {
-					let text = String::from_utf8_lossy(e.into_inner().as_ref()).to_string();
+					let text = e.into_inner();
 					if self.config.preserve_cdata {
 						current_text.push_str(&format!("<![CDATA[{}]]>", text));
 					} else {
@@ -271,7 +270,7 @@ impl XMLParser {
 				}
 
 				Ok(Event::Empty(e)) => {
-					let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+					let name = e.name().as_ref().to_owned();
 					let mut obj = Map::new();
 
 					// Handle attributes
@@ -321,14 +320,8 @@ impl XMLParser {
 			let attr =
 				attr.map_err(|e| Error::Validation(format!("XML attribute error: {}", e)))?;
 
-			let key = format!(
-				"{}{}",
-				self.config.attribute_prefix,
-				String::from_utf8_lossy(attr.key.as_ref())
-			);
-
-			let value_str = String::from_utf8_lossy(&attr.value).to_string();
-			let value = self.parse_value(&value_str);
+			let key = format!("{}{}", self.config.attribute_prefix, attr.key.as_ref());
+			let value = self.parse_value(&attr.value);
 
 			obj.insert(key, value);
 		}
@@ -402,6 +395,35 @@ impl Parser for XMLParser {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn test_xml_parser_utf8_validation() {
+		// Arrange
+		let parser = XMLParser::new();
+		let xml = r#"<root 言語="日本語"><名前>雪</名前><空 属性="値"/><注><![CDATA[雪 < 雨]]></注></root>"#;
+
+		// Act
+		let value = parser.parse_xml(xml.as_bytes()).unwrap();
+
+		// Assert
+		assert_eq!(
+			value,
+			json!({"root": {
+				"@言語": "日本語",
+				"名前": {"#text": "雪"},
+				"空": {"@属性": "値"},
+				"注": {"#text": "雪 < 雨"},
+			}})
+		);
+		for bytes in [
+			b"<\xff/>".as_slice(),
+			b"<root>\xff</root>",
+			b"<root name=\"\xff\"/>",
+			b"<root><![CDATA[\xff]]></root>",
+		] {
+			assert!(matches!(parser.parse_xml(bytes), Err(Error::Validation(_))));
+		}
+	}
 
 	#[tokio::test]
 	async fn test_xml_parser_simple() {

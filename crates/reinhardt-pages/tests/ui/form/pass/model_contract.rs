@@ -27,6 +27,9 @@ fn main() {
 		};
 		let _: QuestionCreateFormData = form.data().expect("contract payload should build");
 		assert_contract_field(&form);
+		let runtime = reinhardt_pages::use_form(&form).build();
+		let _: reinhardt_pages::FormServerMutationBuilder<_, _, _, QuestionResponse> =
+			form.server_mutation(&runtime);
 
 		#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 		{

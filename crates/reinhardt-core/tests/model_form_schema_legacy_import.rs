@@ -18,6 +18,7 @@ impl ModelFormSchema for LegacySchema {
 			nullable: false,
 			editable: true,
 			generated_relation_id: false,
+			trim: false,
 		}];
 		&FIELDS
 	}

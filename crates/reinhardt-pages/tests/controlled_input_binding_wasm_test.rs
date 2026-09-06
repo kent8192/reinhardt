@@ -2850,6 +2850,10 @@ impl Component for HydratedDateTimeInput {
 	}
 }
 
+struct SourcePreferredHydratedInput {
+	value: Signal<String>,
+}
+
 struct HydratedInputAfterText {
 	value: Signal<String>,
 }
@@ -3059,6 +3063,20 @@ impl Component for HydratedInput {
 	}
 }
 
+impl Component for SourcePreferredHydratedInput {
+	fn name() -> &'static str {
+		"SourcePreferredHydratedInput"
+	}
+
+	fn render(&self) -> Page {
+		PageElement::new("input")
+			.control_binding(
+				ControlBinding::text(self.value.clone()).prefer_source_on_hydration(|| true),
+			)
+			.into_page()
+	}
+}
+
 struct ScopeAllocatingHydratedInput;
 
 impl Component for ScopeAllocatingHydratedInput {
@@ -3225,6 +3243,178 @@ fn public_hydration_adopts_datetime_local_input_value() {
 		assert_eq!(value.get(), "2026-08-31T11:45");
 		reinhardt_pages::cleanup_reactive_nodes();
 	});
+}
+
+#[wasm_bindgen_test]
+fn source_preferred_hydration_restores_runtime_value_in_place() {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw = document.create_element("input").expect("input");
+		let input: web_sys::HtmlInputElement = raw.clone().unchecked_into();
+		input.set_value("stale live input");
+		let node_before = input.clone();
+		let root = Element::new(raw);
+		let value = Signal::new("reset value".to_owned());
+		let _state = SsrStateElement::install(&document);
+
+		reinhardt_pages::hydration::hydrate(
+			&SourcePreferredHydratedInput {
+				value: value.clone(),
+			},
+			&root,
+		)
+		.expect("hydrate source-preferred input");
+
+		assert_eq!(value.get(), "reset value");
+		assert_eq!(input.value(), "reset value");
+		assert!(node_before.is_same_node(Some(&input)));
+		reinhardt_pages::cleanup_reactive_nodes();
+	});
+}
+
+struct HydratedRadioForm(Page);
+
+impl Component for HydratedRadioForm {
+	fn name() -> &'static str {
+		"HydratedRadioForm"
+	}
+
+	fn render(&self) -> Page {
+		self.0.clone()
+	}
+}
+
+impl Drop for HydratedRadioForm {
+	fn drop(&mut self) {
+		reinhardt_pages::cleanup_reactive_nodes();
+	}
+}
+
+#[wasm_bindgen_test]
+fn generated_radio_hydration_preserves_live_selection_and_runtime_reset() {
+	for (edit_selection, reset_before_hydration, expected) in [
+		(true, false, ["b", "a"]),
+		(true, true, ["a", "b"]),
+		(false, false, ["a", "b"]),
+	] {
+		ReactiveScope::run(|| {
+			// Arrange: both groups use the same choice values in opposite SSR states.
+			let form = reinhardt_pages::form! {
+				name: RadioHydrationForm,
+				action: "/radio-hydration",
+				method: Get,
+				fields: {
+					first: ChoiceField<String> {
+						bind: true,
+						initial: "a",
+						widget: RadioSelect,
+						choices_from: "choices",
+						choice_value: "value",
+						choice_label: "label",
+					},
+					second: ChoiceField<String> {
+						bind: true,
+						initial: "b",
+						widget: RadioSelect,
+						choices_from: "choices",
+						choice_value: "value",
+						choice_label: "label",
+					},
+				},
+			};
+			let choices = vec![
+				("a".to_owned(), "A".to_owned()),
+				("b".to_owned(), "B".to_owned()),
+			];
+			form.first_choices.set(choices.clone());
+			form.second_choices.set(choices);
+			let runtime = reinhardt_pages::use_form(&form).build();
+			let component = HydratedRadioForm(
+				PageElement::new("div")
+					.child(form.clone().into_page())
+					.into_page(),
+			);
+			let document = web_sys::window()
+				.expect("window")
+				.document()
+				.expect("document");
+			let wrapper = document.create_element("div").expect("SSR wrapper");
+			wrapper.set_inner_html(&component.render().render_to_string());
+			let root = Element::new(wrapper.first_element_child().expect("SSR root"));
+			let inputs = || {
+				let nodes = root
+					.as_web_sys()
+					.query_selector_all("input[type=radio]")
+					.expect("radio inputs");
+				(0..nodes.length())
+					.map(|index| {
+						nodes
+							.item(index)
+							.expect("radio input")
+							.unchecked_into::<web_sys::HtmlInputElement>()
+					})
+					.collect::<Vec<_>>()
+			};
+			let original_inputs = inputs();
+			assert_eq!(original_inputs.len(), 4);
+			for input in &original_inputs {
+				input.set_checked(false);
+			}
+			if edit_selection {
+				original_inputs[1].set_checked(true);
+				original_inputs[2].set_checked(true);
+			}
+			if reset_before_hydration {
+				runtime.reset();
+			}
+			let _state = SsrStateElement::install(&document);
+
+			// Act
+			reinhardt_pages::hydration::hydrate(&component, &root).expect("hydrate radio form");
+
+			// Assert: later and earlier choices are adopted independently, unless reset wins.
+			assert_eq!(
+				[form.first.get(), form.second.get()],
+				expected.map(str::to_owned)
+			);
+			assert_eq!(
+				inputs()
+					.iter()
+					.map(|input| input.checked())
+					.collect::<Vec<_>>(),
+				vec![
+					expected[0] == "a",
+					expected[0] == "b",
+					expected[1] == "a",
+					expected[1] == "b"
+				],
+			);
+			let hydrated_inputs = inputs();
+			runtime.reset();
+			assert_eq!(
+				[form.first.get(), form.second.get()],
+				["a".to_owned(), "b".to_owned()]
+			);
+			assert_eq!(
+				inputs()
+					.iter()
+					.map(|input| input.checked())
+					.collect::<Vec<_>>(),
+				vec![true, false, false, true],
+			);
+			assert_eq!(
+				hydrated_inputs
+					.iter()
+					.zip(inputs())
+					.map(|(before, after)| before.is_same_node(Some(&after)))
+					.collect::<Vec<_>>(),
+				vec![true; 4],
+			);
+		});
+	}
 }
 
 #[wasm_bindgen_test]

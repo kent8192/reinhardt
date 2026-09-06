@@ -232,6 +232,42 @@ fn client_form_runtime_bindings_update_typed_fields_and_report_numeric_rejection
 }
 
 #[rstest::rstest]
+#[case("-")]
+#[case("1e")]
+fn rejected_numeric_edits_touch_a_pristine_client_form(#[case] raw: &str) {
+	ReactiveScope::run(|| {
+		// Arrange
+		let form = ProjectRequestClientForm::new();
+		let runtime = use_form(&form).build();
+		let field = form.retry_count_field();
+		let binding = into_control_binding::<NumberBinding, _>(runtime.field(field), ());
+		let initial = binding.read();
+		assert!(!runtime.get_field_state(field).is_touched);
+		assert!(!runtime.form_state().is_touched.get());
+
+		// Act
+		let outcome = binding.write(ControlValue::Text(raw.to_owned())).unwrap();
+
+		// Assert
+		assert_eq!(
+			outcome,
+			ControlWriteOutcome::Rejected(NumberParseError::from_raw_kind(
+				raw,
+				NumberParseErrorKind::Incomplete
+			)),
+		);
+		assert_eq!(binding.read(), initial);
+		assert!(runtime.get_field_state(field).is_touched);
+		assert!(runtime.form_state().is_touched.get());
+		assert!(!runtime.form_state().is_dirty.get());
+		runtime.reset();
+		assert!(!runtime.get_field_state(field).is_touched);
+		assert!(!runtime.form_state().is_touched.get());
+		assert_eq!(runtime.get_field_state(field).error, None);
+	});
+}
+
+#[rstest::rstest]
 #[case::all_errors(true)]
 #[case::field_error(false)]
 fn client_form_clear_errors_preserves_numeric_parse_failures(#[case] clear_all: bool) {

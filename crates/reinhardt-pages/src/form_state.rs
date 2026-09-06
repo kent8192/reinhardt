@@ -37,7 +37,8 @@
 //! those bindings write the reset defaults instead of adopting stale SSR DOM.
 //! Invalid numeric text retains the raw editor text, keeps the last valid
 //! typed value, and reports a [`crate::NumberParseError`] until a valid write or an
-//! explicit reset clears the tracked error.
+//! explicit reset clears the tracked error. Rejected numeric edits mark the field
+//! as touched without changing its typed value or dirty state.
 
 use std::any::{Any, type_name};
 use std::cell::Cell;
@@ -903,6 +904,16 @@ where
 			let changed_collection_keys = form.runtime_changed_collection_keys(&current, &previous);
 			*observed_values.borrow_mut() = current.clone();
 
+			if !signal_sync_suppressed.get() {
+				let previous_errors = custom_widget_error_fields.borrow();
+				for (field, error) in &custom_widget_errors {
+					if previous_errors.get(field) != Some(error) {
+						touched_fields.borrow_mut().insert(*field, true);
+						state.is_touched.set(true);
+					}
+				}
+			}
+
 			if signal_sync_suppressed.get() || (changed_fields.is_empty() && !values_changed) {
 				if !signal_sync_suppressed.get() {
 					sync_custom_widget_errors_in_state(
@@ -1236,7 +1247,7 @@ where
 		let values_signal = Signal::new(current_values.clone());
 		let subscribers = Rc::new(RefCell::new(Vec::new()));
 		let observed_values = Rc::new(RefCell::new(current_values));
-		let custom_widget_error_fields = Rc::new(RefCell::new(HashMap::new()));
+		let custom_widget_error_fields = Rc::new(RefCell::new(collect_custom_widget_errors(&form)));
 		let next_collection_item_key = Rc::new(Cell::new(1));
 		let signal_sync_suppressed = Rc::new(Cell::new(false));
 		let submit_generation = Rc::new(Cell::new(0_u64));

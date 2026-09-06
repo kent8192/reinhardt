@@ -548,3 +548,61 @@ fn static_model_form_bindings_reject_unsupported_control_pairs() {
 		assert!(select_many.is_none());
 	});
 }
+
+#[rstest]
+fn rejected_numeric_edits_touch_pristine_generated_forms() {
+	reinhardt_core::reactive::ReactiveScope::run(|| {
+		// Arrange
+		let regular = form! {
+			name: NumericInteractionForm,
+			action: "/count",
+			fields: {
+				count: IntegerField {}
+			}
+		};
+		let regular_runtime = use_form(&regular).build();
+		let model = binding_form!();
+		let model_runtime = use_form(&model).build();
+		let regular_binding = into_control_binding::<NumberBinding, _>(
+			regular_runtime.field(regular.count_field()),
+			(),
+		);
+		let model_binding =
+			into_control_binding::<NumberBinding, _>(model_runtime.field(model.count_field()), ());
+		assert!(!regular_runtime.form_state().is_touched.get());
+		assert!(!model_runtime.form_state().is_touched.get());
+
+		// Act
+		for binding in [&regular_binding, &model_binding] {
+			assert_eq!(
+				binding.write(ControlValue::Text("1e".to_owned())),
+				Ok(ControlWriteOutcome::Rejected(
+					reinhardt_pages::NumberParseError::from_raw_kind(
+						"1e",
+						NumberParseErrorKind::Incomplete
+					),
+				)),
+			);
+		}
+
+		// Assert
+		assert!(
+			regular_runtime
+				.get_field_state(regular.count_field())
+				.is_touched
+		);
+		assert!(
+			model_runtime
+				.get_field_state(model.count_field())
+				.is_touched
+		);
+		assert!(regular_runtime.form_state().is_touched.get());
+		assert!(model_runtime.form_state().is_touched.get());
+		assert!(!regular_runtime.form_state().is_dirty.get());
+		assert!(!model_runtime.form_state().is_dirty.get());
+		regular_runtime.reset();
+		model_runtime.reset();
+		assert!(!regular_runtime.form_state().is_touched.get());
+		assert!(!model_runtime.form_state().is_touched.get());
+	});
+}

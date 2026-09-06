@@ -518,7 +518,8 @@ normal DOM-first hydration.
 For numeric bindings, invalid or incomplete raw text remains in the editor and
 the typed value remains the last valid value. The associated
 `NumberParseError` keeps the raw text and failure kind and is surfaced through
-field error state. Clearing displayed errors with `clear_errors()` or
+field error state. Rejected edits mark the field as touched while leaving its
+typed value and dirty state unchanged. Clearing displayed errors with `clear_errors()` or
 `clear_field_error()` preserves the parse failure and continues to block
 validation and submission. A valid numeric write clears it; `reset_field()`
 clears only the restored field's parse state, while `reset()` restores every

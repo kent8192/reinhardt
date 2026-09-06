@@ -56,6 +56,14 @@ impl ModelFormPolicy for UploadPolicy {
 fn validate_upload<P: ModelFormPolicy>(
 	payload: &CleanedUploadModelFormData<P>,
 ) -> Result<(), ValidationErrors> {
+	if P::allows("category") && payload.category().is_none() {
+		let mut errors = ValidationErrors::new();
+		errors.add(
+			"_all",
+			ValidationError::Custom("Selected category must be present".to_owned()),
+		);
+		return Err(errors);
+	}
 	if payload.title() == payload.category() {
 		let mut errors = ValidationErrors::new();
 		errors.add(
@@ -97,9 +105,19 @@ async fn upload(
 	))
 }
 
-fn request(title: &str, category: &str, document: bool, forbidden: bool) -> Request {
+#[server_fn(model_form_payload = "UploadModelFormData<UploadPolicy>")]
+async fn upload_selected(
+	title: String,
+	note: Option<String>,
+	document: UploadedFile,
+) -> Result<(String, Option<String>, usize), ServerFnError> {
+	UPLOAD_CALLS.fetch_add(1, Ordering::SeqCst);
+	Ok((title, note, document.size))
+}
+
+fn multipart_request(fields: &[(&str, serde_json::Value)], document: bool) -> Request {
 	let mut body = String::new();
-	for (name, value) in [("title", title), ("category", category), ("note", "   ")] {
+	for (name, value) in fields {
 		body.push_str(&format!(
 			"--upload\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{}\r\n",
 			serde_json::to_string(value).expect("text scalar encodes as JSON"),
@@ -107,11 +125,6 @@ fn request(title: &str, category: &str, document: bool, forbidden: bool) -> Requ
 	}
 	if document {
 		body.push_str("--upload\r\nContent-Disposition: form-data; name=\"document\"; filename=\"note.txt\"\r\nContent-Type: text/plain\r\n\r\nfile\r\n");
-	}
-	if forbidden {
-		body.push_str(
-			"--upload\r\nContent-Disposition: form-data; name=\"organization_id\"\r\n\r\n42\r\n",
-		);
 	}
 	body.push_str("--upload--\r\n");
 	Request::builder()
@@ -124,6 +137,18 @@ fn request(title: &str, category: &str, document: bool, forbidden: bool) -> Requ
 		.body(Bytes::from(body))
 		.build()
 		.expect("direct multipart request should build")
+}
+
+fn request(title: &str, category: &str, document: bool, forbidden: bool) -> Request {
+	let mut fields = vec![
+		("title", serde_json::json!(title)),
+		("category", serde_json::json!(category)),
+		("note", serde_json::json!("   ")),
+	];
+	if forbidden {
+		fields.push(("organization_id", serde_json::json!(42)));
+	}
+	multipart_request(&fields, document)
 }
 
 #[rstest]
@@ -210,5 +235,76 @@ async fn direct_multipart_still_requires_the_uploaded_file() {
 
 	// Assert
 	assert_eq!(error.status(), Some(400));
+	assert_eq!(UPLOAD_CALLS.load(Ordering::SeqCst), 0);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(model_form_multipart_validation)]
+async fn selected_multipart_ignores_unselected_required_fields_and_narrows_validator_policy() {
+	// Arrange
+	reinhardt_core::reactive::ReactiveScope::run(|| {
+		let form = reinhardt_pages::form! {
+			name: SelectedUploadForm,
+			model: Upload,
+			policy: UploadPolicy,
+			fields: [title, note, document],
+			server_fn: upload_selected,
+		};
+		assert_eq!(form.loading().get(), false);
+	});
+	UPLOAD_CALLS.store(0, Ordering::SeqCst);
+	let request = multipart_request(
+		&[
+			("title", serde_json::json!("  report  ")),
+			("note", serde_json::json!("   ")),
+		],
+		true,
+	);
+
+	// Act
+	let body = upload_selected::marker::handle(request)
+		.await
+		.expect("unselected category must not block field or application validation");
+
+	// Assert
+	assert_eq!(
+		serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+		serde_json::json!(["report", null, 4]),
+	);
+	assert_eq!(UPLOAD_CALLS.load(Ordering::SeqCst), 1);
+}
+
+#[rstest]
+#[case::missing_scalar(false, true, false, 422)]
+#[case::missing_file(true, false, false, 400)]
+#[case::unselected_scalar(true, true, true, 400)]
+#[tokio::test]
+#[serial(model_form_multipart_validation)]
+async fn selected_multipart_enforces_selected_required_fields_and_argument_allowlist(
+	#[case] title: bool,
+	#[case] document: bool,
+	#[case] category: bool,
+	#[case] status: u16,
+) {
+	// Arrange
+	UPLOAD_CALLS.store(0, Ordering::SeqCst);
+	let mut fields = Vec::new();
+	if title {
+		fields.push(("title", serde_json::json!("report")));
+	}
+	if category {
+		fields.push(("category", serde_json::json!("documents")));
+	}
+	let request = multipart_request(&fields, document);
+
+	// Act
+	let body = upload_selected::marker::handle(request)
+		.await
+		.expect_err("invalid multipart input must not reach the handler");
+	let error: ServerFnError = serde_json::from_slice(&body).unwrap();
+
+	// Assert
+	assert_eq!(error.status(), Some(status));
 	assert_eq!(UPLOAD_CALLS.load(Ordering::SeqCst), 0);
 }

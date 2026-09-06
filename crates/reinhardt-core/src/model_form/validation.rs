@@ -51,6 +51,20 @@ pub trait ModelFormValidatingPayload: Sized {
 		self.clean_and_validate()
 	}
 
+	/// Validates multipart scalars under a trusted endpoint's field selection.
+	///
+	/// **Parity: P0.** Generated native payloads intersect their declared policy
+	/// with `Q` for field and application validation. Other implementations keep
+	/// their strict validation. Only required file fields may be deferred.
+	#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+	#[doc(hidden)]
+	fn clean_and_validate_for_multipart<Q: crate::model_form::ModelFormPolicy>(
+		self,
+		deferred_files: &[&str],
+	) -> Result<Self::Cleaned, ValidationErrors> {
+		self.clean_and_validate_with_deferred_required_fields(deferred_files)
+	}
+
 	/// Normalizes and validates while deferring one required relationship identifier.
 	///
 	/// **Parity: P0.** Native inline formsets override this hidden compatibility

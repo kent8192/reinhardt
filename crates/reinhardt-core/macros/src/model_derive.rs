@@ -4381,6 +4381,41 @@ fn generate_model_form_support(
 					#validator_call
 					::core::result::Result::Ok(cleaned)
 				}
+
+				fn clean_and_validate_for_multipart<Q: #core_crate::model_form::ModelFormPolicy>(
+					self,
+					deferred_files: &[&str],
+				) -> ::core::result::Result<
+					Self::Cleaned,
+					#core_crate::validators::ValidationErrors,
+				> {
+					struct SelectedPolicy<P, Q>(::core::marker::PhantomData<(P, Q)>);
+					impl<P, Q> #core_crate::model_form::ModelFormPolicy for SelectedPolicy<P, Q>
+					where
+						P: #core_crate::model_form::ModelFormPolicy,
+						Q: #core_crate::model_form::ModelFormPolicy,
+					{
+						fn allows(field: &str) -> bool {
+							P::allows(field) && Q::allows(field)
+						}
+					}
+					let selected = #payload_name::<SelectedPolicy<P, Q>> {
+						#(#field_names: self.#field_names,)*
+						forbidden_fields: self.forbidden_fields,
+						__reinhardt_defaulted_fields: self.__reinhardt_defaulted_fields,
+						_policy: ::core::marker::PhantomData,
+					};
+					let cleaned = #core_crate::model_form::ModelFormValidatingPayload::clean_and_validate_with_deferred_required_fields(
+						selected,
+						deferred_files,
+					)?;
+					::core::result::Result::Ok(#cleaned_payload_name {
+						#(#field_names: cleaned.#field_names,)*
+						forbidden_fields: cleaned.forbidden_fields,
+						__reinhardt_defaulted_fields: cleaned.__reinhardt_defaulted_fields,
+						_policy: ::core::marker::PhantomData,
+					})
+				}
 			}
 
 		#native_form_cfg

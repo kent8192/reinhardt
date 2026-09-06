@@ -244,7 +244,10 @@ let upload_form = form! {
 The endpoint's `model_form_payload` binds the generated schema and server policy
 through its concrete payload type. Its HTTP adapter repeats scalar normalization,
 field constraints, and `#[form(validate = ...)]` before calling the upload function,
-including for direct multipart requests. Required files are checked by the typed
+including for direct multipart requests. Both field and application validation use
+the intersection of that policy and the endpoint's declared arguments. Required
+fields outside the selection do not block submission, and requests containing
+unselected arguments are rejected. Required files are checked by the typed
 multipart extractor; they are excluded from the scalar validation payload. The
 form's model and policy must produce exactly the declared endpoint payload type.
 Ordinary multipart endpoints without this binding cannot serve model-backed forms.

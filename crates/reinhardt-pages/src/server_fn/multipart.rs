@@ -8,9 +8,17 @@ use reinhardt_http::Request;
 use serde::de::DeserializeOwned;
 use std::collections::HashSet;
 
-use super::{ServerFnArgumentKind, ServerFnArgumentMetadata, ServerFnError};
+use super::{ServerFnArgumentKind, ServerFnError, ServerFnMetadata};
 
 const INVALID_REQUEST_MESSAGE: &str = "Invalid server function request";
+
+struct MultipartArgumentPolicy<M>(std::marker::PhantomData<fn() -> M>);
+
+impl<M: ServerFnMetadata> ModelFormPolicy for MultipartArgumentPolicy<M> {
+	fn allows(field: &str) -> bool {
+		M::ARGUMENTS.iter().any(|argument| argument.name == field)
+	}
+}
 
 /// Ordered multipart arguments decoded for a generated native server function.
 #[doc(hidden)]
@@ -59,15 +67,15 @@ impl MultipartArguments {
 	/// Revalidates model scalars before typed extraction and user-handler execution.
 	///
 	/// Only required file arguments are deferred to the multipart extractor.
-	/// The concrete payload binds the generated rules and server-owned policy.
-	pub fn validate_model_form<D, P>(
-		&mut self,
-		arguments: &[ServerFnArgumentMetadata],
-	) -> Result<(), ServerFnError>
+	/// The concrete payload binds the generated rules and server-owned policy;
+	/// trusted endpoint metadata narrows validation to its selected arguments.
+	pub fn validate_model_form<D, P, M>(&mut self) -> Result<(), ServerFnError>
 	where
 		D: Default + ModelFormPayload<P> + ModelFormValidatingPayload,
 		P: ModelFormPolicy,
+		M: ServerFnMetadata,
 	{
+		let arguments = M::ARGUMENTS;
 		for argument in arguments {
 			if !P::allows(argument.name) {
 				return Err(ServerFnError::validation([(
@@ -78,6 +86,16 @@ impl MultipartArguments {
 		}
 		let mut payload = D::default();
 		for part in &self.parts {
+			let name = part_name(part);
+			if !P::allows(name) {
+				return Err(ServerFnError::validation([(
+					name,
+					"This field is not allowed.",
+				)]));
+			}
+			if !MultipartArgumentPolicy::<M>::allows(name) {
+				return Err(invalid_request("unexpected_argument", Some(name)));
+			}
 			if let MultipartPart::Field { name, data } = part {
 				let value = serde_json::from_slice(data)
 					.map_err(|_| invalid_request("malformed_json", Some(name)))?;
@@ -92,7 +110,7 @@ impl MultipartArguments {
 			.map(|argument| argument.name)
 			.collect::<Vec<_>>();
 		let payload = payload
-			.clean_and_validate_with_deferred_required_fields(&deferred_files)?
+			.clean_and_validate_for_multipart::<MultipartArgumentPolicy<M>>(&deferred_files)?
 			.into_raw();
 		for argument in arguments {
 			if argument.kind != ServerFnArgumentKind::Json {

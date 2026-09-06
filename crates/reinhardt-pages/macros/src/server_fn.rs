@@ -2932,9 +2932,7 @@ fn generate_server_handler(
 	};
 	let multipart_model_validation = info.options.model_form_payload.as_ref().map(|payload_type| {
 		quote! {
-			if let Err(error) = arguments.validate_model_form::<#payload_type, _>(
-				<#name::marker as #pages_crate::server_fn::ServerFnMetadata>::ARGUMENTS,
-			) {
+			if let Err(error) = arguments.validate_model_form::<#payload_type, _, #name::marker>() {
 				let error_body = ::serde_json::to_vec(&error)
 					.map(#pages_crate::__private::bytes::Bytes::from)
 					.unwrap_or_else(|_| #pages_crate::__private::bytes::Bytes::from_static(

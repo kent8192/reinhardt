@@ -1809,6 +1809,40 @@ mod case_normalization_tests {
 	}
 
 	#[rstest]
+	#[case("date", "2026-08-31", "2026-08-31")]
+	#[case("datetime-local", "2026-08-31 10:30", "2026-08-31T10:30")]
+	#[case("month", "2026-08", "2026-08")]
+	#[case("week", "2026-W36", "2026-W36")]
+	#[case("time", "10:30", "10:30")]
+	fn native_text_binding_accepts_reactive_temporal_types(
+		#[case] temporal_type: &str,
+		#[case] initial: &str,
+		#[case] expected: &str,
+	) {
+		ReactiveScope::run(|| {
+			// Arrange
+			let input_type = Signal::new("text".to_owned());
+			let value = Signal::new(initial.to_owned());
+			let mut dom = TestDom::render(
+				PageElement::new("input")
+					.reactive_attr("type", move || Some(input_type.get().into()))
+					.control_binding(ControlBinding::text(value))
+					.into_page(),
+			);
+			let node = dom.children(dom.root())[0];
+
+			// Act
+			input_type.set(temporal_type.to_owned());
+			dom.refresh_control_bindings();
+
+			// Assert
+			assert_eq!(dom.element(node).unwrap().attr("type"), Some(temporal_type));
+			assert_eq!(dom.value(node).as_deref(), Some(expected));
+			assert_eq!(value.get(), expected);
+		});
+	}
+
+	#[rstest]
 	fn native_text_controls_apply_browser_value_sanitization() {
 		ReactiveScope::run(|| {
 			let binding = ControlBinding::text(Signal::new(String::new()));

@@ -38,6 +38,8 @@ impl fmt::Display for ControlKind {
 }
 
 /// Returns whether a reactive attribute update preserves a controlled element's kind.
+///
+/// Text bindings accept semantic and temporal inputs, including browser text fallbacks.
 #[doc(hidden)]
 pub fn controlled_attribute_update_is_supported(
 	tag: &str,
@@ -97,9 +99,22 @@ fn is_effective_text_input_type(input_type: Option<&str>) -> bool {
 }
 
 fn is_text_input_type(input_type: &str) -> bool {
-	["text", "search", "tel", "url", "email", "password", "color"]
-		.iter()
-		.any(|known| input_type.eq_ignore_ascii_case(known))
+	[
+		"text",
+		"search",
+		"tel",
+		"url",
+		"email",
+		"password",
+		"color",
+		"date",
+		"datetime-local",
+		"month",
+		"week",
+		"time",
+	]
+	.iter()
+	.any(|known| input_type.eq_ignore_ascii_case(known))
 }
 
 fn is_number_input_type(input_type: &str) -> bool {
@@ -870,6 +885,37 @@ mod tests {
 	use rstest::rstest;
 	use std::cell::RefCell;
 	use std::rc::Rc;
+
+	#[rstest]
+	#[case(Some("date"), true)]
+	#[case(Some("DATE"), true)]
+	#[case(Some("datetime-local"), true)]
+	#[case(Some("DATETIME-LOCAL"), true)]
+	#[case(Some("month"), true)]
+	#[case(Some("MONTH"), true)]
+	#[case(Some("week"), true)]
+	#[case(Some("WEEK"), true)]
+	#[case(Some("time"), true)]
+	#[case(Some("TIME"), true)]
+	#[case(None, true)]
+	#[case(Some(""), true)]
+	#[case(Some("unknown"), true)]
+	#[case(Some("file"), false)]
+	#[case(Some("number"), false)]
+	#[case(Some("checkbox"), false)]
+	fn reactive_text_input_type_updates_preserve_compatible_controls(
+		#[case] input_type: Option<&str>,
+		#[case] expected: bool,
+	) {
+		// Arrange
+		let kind = ControlKind::Text;
+
+		// Act
+		let supported = controlled_attribute_update_is_supported("INPUT", kind, "TYPE", input_type);
+
+		// Assert
+		assert_eq!(supported, expected);
+	}
 
 	#[rstest]
 	#[case("")]

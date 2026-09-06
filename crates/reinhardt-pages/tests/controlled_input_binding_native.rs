@@ -1114,23 +1114,41 @@ fn text_binding_accepts_supported_input_types(
 }
 
 #[rstest]
-fn number_binding_accepts_range_input_type(reactive_scope: ReactiveScope) {
+#[case::integer("42", 42.0)]
+#[case::fraction(".5", 0.5)]
+#[case::positive_exponent("1.25e+1", 12.5)]
+#[case::negative_exponent("1E-1", 0.1)]
+#[case::leading_plus("+10", 50.0)]
+#[case::trailing_decimal_point("10.", 50.0)]
+#[case::leading_whitespace(" 10", 50.0)]
+#[case::incomplete_exponent("1e", 50.0)]
+#[case::overflowing_exponent("1e309", 50.0)]
+fn native_range_event_values_use_html_number_grammar(
+	reactive_scope: ReactiveScope,
+	#[case] raw: &str,
+	#[case] expected: f64,
+) {
 	// Arrange
-	let value = signal_in_scope(&reactive_scope, 10_i32);
+	let value = signal_in_scope(&reactive_scope, 10.0_f64);
 	let screen = render(
 		PageElement::new("input")
 			.attr("aria-label", "Range target")
 			.attr("type", "range")
-			.control_binding(ControlBinding::number(value.clone())),
+			.attr("min", "0")
+			.attr("max", "100")
+			.attr("step", "any")
+			.control_binding(ControlBinding::number(value)),
 	);
 	let input = screen.get_by_label("Range target");
 
 	// Act
-	input.input("42");
+	input
+		.dispatch(EventFixture::input().value(raw))
+		.expect("range event should expose a sanitized HTML numeric value");
 
 	// Assert
-	assert_eq!(value.get(), 42);
-	assert_eq!(input.value().as_deref(), Some("42"));
+	assert_eq!(value.get(), expected);
+	assert_eq!(input.value(), Some(expected.to_string()));
 }
 
 #[rstest]

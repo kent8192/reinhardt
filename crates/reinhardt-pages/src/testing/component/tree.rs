@@ -1347,10 +1347,7 @@ fn normalize_native_control_value(
 	let Some((min, max, step, step_base)) = native_range_constraints(element) else {
 		return ControlValue::Text(raw);
 	};
-	let number = raw
-		.parse::<f64>()
-		.ok()
-		.filter(|number| number.is_finite())
+	let number = crate::control_binding::parse_html_number(&raw)
 		.unwrap_or_else(|| if max < min { min } else { min.midpoint(max) });
 	let normalized = if max < min {
 		min

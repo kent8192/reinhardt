@@ -4563,6 +4563,19 @@ fn generate_model_form_support(
 						}
 							continue;
 						};
+						// Non-finite typed floats serialize to null, not to an omitted value.
+						if matches!(descriptor.kind, #core_crate::model_form::ModelFormFieldKind::Float { .. })
+							&& !descriptor.nullable
+							&& !value.as_f64().is_some_and(|number| number.is_finite())
+						{
+							errors.add(
+								descriptor.name,
+								#core_crate::validators::ValidationError::Custom(
+									"Expected number or string".to_owned(),
+								),
+							);
+							continue;
+						}
 						if value.is_null() {
 							if descriptor.nullable {
 								continue;

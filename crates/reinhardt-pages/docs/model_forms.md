@@ -57,6 +57,8 @@ is checked against the selected contract fields. The generated data type is a
 strict JSON boundary: it serializes selected supplied fields only and rejects
 unknown keys, duplicate keys, and incompatible values on deserialization. A
 nullable selected value distinguishes omission from an explicit JSON `null`.
+Validation rejects non-finite values in non-nullable `f32`/`f64` fields on both
+native and WASM targets, including typed assignments to fields with defaults.
 
 Selected fields may use `String`, `bool`, and the native ORM-supported numeric
 primitives `i32`, `i64`, `f32`, and `f64`,

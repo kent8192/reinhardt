@@ -80,6 +80,18 @@ struct InvalidDefault {
 	code: String,
 }
 
+#[model(app_label = "float_candidates", form = true, info = false)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FloatCandidate {
+	#[field(primary_key = true)]
+	id: i64,
+	#[field(default = 1.5)]
+	single: f32,
+	#[field(default = 2.5)]
+	double: f64,
+	nullable: Option<f64>,
+}
+
 fn default_file() -> FileField {
 	json::from_value(json::json!({"path": "documents/default.pdf", "storage": "default"})).unwrap()
 }
@@ -158,6 +170,56 @@ mod tests {
 		fn drop(&mut self) {
 			DEFAULT_CALLS.store(self.0, Ordering::SeqCst);
 		}
+	}
+
+	#[cfg_attr(
+		not(all(target_family = "wasm", target_os = "unknown")),
+		rstest::rstest
+	)]
+	#[cfg_attr(
+		all(target_family = "wasm", target_os = "unknown"),
+		wasm_bindgen_test::wasm_bindgen_test
+	)]
+	fn nonfinite_typed_floats_are_rejected_before_null_or_omission_handling() {
+		// Arrange
+		let existing = FloatCandidate {
+			id: 7,
+			single: 1.5,
+			double: 2.5,
+			nullable: None,
+		};
+		let expected = vec![
+			("single".to_owned(), "Expected number or string".to_owned()),
+			("double".to_owned(), "Expected number or string".to_owned()),
+		];
+		for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+			let mut payload = FloatCandidateModelFormData::<AllEditableModelFields>::empty();
+			payload.set_single(value as f32).unwrap();
+			payload.set_double(value).unwrap();
+
+			// Act
+			let create_errors = payload.clone().clean_and_validate().err().unwrap();
+			let update_errors = payload
+				.clean_and_validate_for_update(&existing)
+				.err()
+				.unwrap();
+
+			// Assert
+			assert_eq!(messages(&create_errors), expected);
+			assert_eq!(messages(&update_errors), expected);
+		}
+
+		let mut payload = FloatCandidateModelFormData::<AllEditableModelFields>::empty();
+		payload.set_nullable(None).unwrap();
+		let cleaned = payload.clean_and_validate().unwrap();
+		assert_eq!(cleaned.single(), Some(&1.5));
+		assert_eq!(cleaned.double(), Some(&2.5));
+		assert_eq!(cleaned.nullable(), Some(&None));
+		let omitted = FloatCandidateModelFormData::<AllEditableModelFields>::empty()
+			.clean_and_validate_for_update(&existing)
+			.unwrap();
+		assert_eq!(omitted.single(), None);
+		assert_eq!(omitted.double(), None);
 	}
 
 	#[cfg_attr(not(all(target_family = "wasm", target_os = "unknown")), test)]

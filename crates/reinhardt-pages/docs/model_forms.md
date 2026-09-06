@@ -197,6 +197,11 @@ payload keeps its declared policy, which the server validates independently.
 The normalized raw payload is sent only when validation succeeds; the editable
 control state remains unchanged.
 
+Handwritten model payloads, including compile-test fixtures, must implement
+`ModelFormValidatingPayload` in addition to `ModelFormPayload`. Its cleaned
+payload must implement `ModelFormCleanedPayload` with `Raw` set to the original
+payload type. Model-generated payloads provide both contracts automatically.
+
 URL snapshot validation uses `reinhardt_core::validators::UrlValidator` on
 native and WASM targets, matching generated server validation. Query strings
 and fragments may follow the host directly, as in

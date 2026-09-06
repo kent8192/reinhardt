@@ -527,6 +527,10 @@ formatted default and clears all parse state. Generated `EmailInput`,
 `UrlInput`, and `PasswordInput` widgets also synchronize their mounted values
 on reset.
 
+Every native ModelForm submit supersedes earlier requests, including snapshots
+rejected during DOM value conversion. A rejected snapshot clears loading and
+success state while retaining its validation error and selected files.
+
 Typed runtime field bindings do not cover file inputs, named `model_form:`
 contracts, ModelForm `exclude: [...]`, or nested collection paths. Use the existing generated file,
 string, and collection APIs for those cases.

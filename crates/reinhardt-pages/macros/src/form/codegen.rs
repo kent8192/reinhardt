@@ -3955,6 +3955,12 @@ fn generate_model_form(
 								#pages_crate::event::SubmitEvent,
 								_,
 							>(move |event: #pages_crate::event::SubmitEvent| {
+								#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+								let submission_generation = {
+									let generation = submit_form.__submission_generation.get().wrapping_add(1);
+									submit_form.__submission_generation.set(generation);
+									generation
+								};
 								// This is mutated only by the WASM submit snapshot below.
 								#[allow(unused_mut)]
 								let mut snapshot_valid = true;
@@ -4048,19 +4054,17 @@ fn generate_model_form(
 								let submitted_state = submit_form.__model_state.borrow().clone();
 								event.prevent_default();
 								if !snapshot_valid {
+									submit_form.loading.set(false);
+									submit_form.success.set(false);
 									return;
 								}
 								#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 								{
-									let submission_generation = submit_form
-										.__submission_generation
-										.get()
-										.wrapping_add(1);
-									submit_form
-										.__submission_generation
-										.set(submission_generation);
 									let form = submit_form.clone();
 									#pages_crate::platform::spawn_task(async move {
+										if form.__submission_generation.get() != submission_generation {
+											return;
+										}
 										let _ = form
 											.submit_state(
 												submitted_state,

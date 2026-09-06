@@ -1,0 +1,5 @@
+error: named model form field `organization` has unsupported relationship type `db :: associations :: ForeignKeyField < Organization >`
+ --> tests/ui/model/fail/named_form_relationship_field.rs:9:40
+  |
+9 |     form(name = ClusterCreateForm, fields(organization))
+  |                                           ^^^^^^^^^^^^

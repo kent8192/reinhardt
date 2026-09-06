@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- *(macros)* keep Model field_metadata reachable when a field is named metadata
+
+### Testing
+
+- *(macros)* remove obsolete tinyvec version pins from isolated consumer fixtures
+
 ## [0.4.0-alpha.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.4.0-alpha.11...reinhardt-macros@v0.4.0-alpha.12) - 2026-08-30
 
 ### Added

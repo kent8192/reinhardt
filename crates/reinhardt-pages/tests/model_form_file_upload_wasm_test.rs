@@ -7,6 +7,7 @@ use std::rc::Rc;
 
 use gloo_timers::future::TimeoutFuture;
 use js_sys::{Function, Reflect};
+use reinhardt_macros::model;
 use reinhardt_pages::component::{PageExt, cleanup_reactive_nodes};
 use reinhardt_pages::dom::Element;
 use reinhardt_pages::prelude::defer_yield;
@@ -18,6 +19,27 @@ use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::*;
 
 wasm_bindgen_test_configure!(run_in_browser);
+
+#[model(
+	app_label = "pages",
+	table_name = "nullable_default_true_records",
+	form(name = NullableDefaultTrueForm, fields(published)),
+	info = false
+)]
+struct NullableDefaultTrueRecord {
+	#[field(primary_key = true)]
+	id: i64,
+	#[field(default = true, null = true)]
+	published: Option<bool>,
+}
+
+#[server_fn(model_form = true)]
+async fn save_nullable_default_true(
+	payload: NullableDefaultTrueFormData,
+) -> Result<(), ServerFnError> {
+	let _ = payload;
+	Ok(())
+}
 
 struct BodyRoot(web_sys::Element);
 
@@ -41,6 +63,39 @@ impl Drop for BodyRoot {
 	fn drop(&mut self) {
 		cleanup_reactive_nodes();
 		self.0.remove();
+	}
+}
+
+struct SuccessfulFetchGuard {
+	window: web_sys::Window,
+	previous_fetch: JsValue,
+}
+
+impl SuccessfulFetchGuard {
+	fn install() -> Self {
+		let window = web_sys::window().expect("browser window");
+		let previous_fetch =
+			Reflect::get(window.as_ref(), &JsValue::from_str("fetch")).expect("read browser fetch");
+		let stub = Function::new_with_args(
+			"_request",
+			"return Promise.resolve(new Response('null', { status: 200 }));",
+		);
+		Reflect::set(window.as_ref(), &JsValue::from_str("fetch"), stub.as_ref())
+			.expect("install successful fetch stub");
+		Self {
+			window,
+			previous_fetch,
+		}
+	}
+}
+
+impl Drop for SuccessfulFetchGuard {
+	fn drop(&mut self) {
+		let _ = Reflect::set(
+			self.window.as_ref(),
+			&JsValue::from_str("fetch"),
+			&self.previous_fetch,
+		);
 	}
 }
 
@@ -319,6 +374,52 @@ async fn wait_for_files_to_clear(root: &web_sys::Element) {
 	}
 	assert_eq!(file_count(&query_input(root, "upload-form-document")), 0);
 	assert_eq!(file_count(&query_input(root, "upload-form-avatar")), 0);
+}
+
+#[wasm_bindgen_test]
+#[serial(model_form_file_upload_globals)]
+async fn model_form_submit_clears_nullable_default_true_checkbox() {
+	let root = BodyRoot::new();
+	let _fetch = SuccessfulFetchGuard::install();
+	let scope = ReactiveScope::new();
+	let form = scope.enter(|| {
+		let form = form! {
+			name: NullableDefaultTrueCheckboxForm,
+			model_form: NullableDefaultTrueForm,
+			server_fn: save_nullable_default_true,
+		};
+		form.clone()
+			.into_page()
+			.mount(&Element::new(root.0.clone()))
+			.expect("model form mounts");
+		form
+	});
+
+	let checkbox = root
+		.0
+		.query_selector("input[name='published']")
+		.expect("query checkbox")
+		.expect("published checkbox exists")
+		.dyn_into::<web_sys::HtmlInputElement>()
+		.expect("published control is an input");
+	assert_eq!(checkbox.type_(), "checkbox");
+	assert!(checkbox.checked());
+	checkbox.set_checked(false);
+
+	submit(&query_form(&root.0));
+	let payload = form.data().expect("submitted form data should decode");
+	assert_eq!(
+		payload.get_json("published"),
+		Some(serde_json::Value::Bool(false))
+	);
+	for _ in 0..100 {
+		if form.success().get() {
+			break;
+		}
+		TimeoutFuture::new(10).await;
+	}
+	assert!(form.success().get());
+	scope.dispose();
 }
 
 #[wasm_bindgen_test]

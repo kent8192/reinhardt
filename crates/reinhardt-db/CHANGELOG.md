@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Testing
+
+- *(db)* remove obsolete tinyvec version pins from isolated consumer fixtures
+
 ### Changed
 
 - Version generated migration sources with `// reinhardt-migration-source: 1`

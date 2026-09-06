@@ -1,0 +1,5 @@
+error: named model form field `slug` has unsupported Rust type `Slug`
+ --> tests/ui/model/fail/named_form_custom_type.rs:9:41
+  |
+9 |     form(name = DocumentCreateForm, fields(slug))
+  |                                            ^^^^

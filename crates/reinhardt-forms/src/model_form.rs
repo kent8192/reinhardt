@@ -55,6 +55,24 @@ pub trait FormModel: Model + ModelFormPrimaryKeyFields + Clone + Send + Sync {
 		Self::build_from_payload(data)
 	}
 
+	/// Builds a validation-only candidate while allowing trusted deferred fields.
+	///
+	/// The compatibility default delegates a single field to
+	/// [`Self::build_from_payload_with_deferred_required_field`]. Implementations
+	/// that support multiple deferred fields must override this method. Omitted
+	/// required fields that are not listed must still fail model construction.
+	fn build_from_payload_with_deferred_required_fields<P: ModelFormPolicy>(
+		data: &Self::Data<P>,
+		deferred_fields: &[&str],
+	) -> Result<Self, ModelFormError> {
+		match deferred_fields {
+			[deferred_field] => {
+				Self::build_from_payload_with_deferred_required_field(data, deferred_field)
+			}
+			_ => Self::build_from_payload(data),
+		}
+	}
+
 	/// Applies supplied payload values to an existing candidate.
 	fn apply_payload<P: ModelFormPolicy>(
 		&mut self,
@@ -70,6 +88,11 @@ pub trait FormModel: Model + ModelFormPrimaryKeyFields + Clone + Send + Sync {
 				vec!["unknown trusted model field".to_owned()],
 			)]),
 		})
+	}
+
+	/// Returns whether the generated model accepts a trusted value for this field.
+	fn accepts_trusted_field(_field: &str) -> bool {
+		false
 	}
 
 	/// Returns the input kind accepted by a server-trusted relationship field.
@@ -295,17 +318,14 @@ where
 		self.clean_payload()?;
 		let mut candidate = match &self.instance {
 			Some(instance) => instance.clone(),
-			None => match self.trusted_field_values.keys().next() {
-				Some(field) => {
-					T::build_from_payload_with_deferred_required_field(&self.data, field)?
-				}
-				None => T::build_from_payload(&self.data)?,
-			},
+			None if self.trusted_field_values.is_empty() => T::build_from_payload(&self.data)?,
+			None => {
+				let deferred_fields = self.deferred_required_fields(None);
+				T::build_from_payload_with_deferred_required_fields(&self.data, &deferred_fields)?
+			}
 		};
 		candidate.apply_payload(&self.data)?;
-		for (field, value) in &self.trusted_field_values {
-			T::set_trusted_field_json(&mut candidate, field, value.clone())?;
-		}
+		self.apply_trusted_field_values(&mut candidate, None)?;
 
 		if let Some(validator) = &self.model_validator {
 			validator(&candidate).map_err(|errors| ModelFormError::ModelValidation { errors })?;
@@ -313,6 +333,31 @@ where
 
 		self.validated_candidate = Some(candidate.clone());
 		Ok(candidate)
+	}
+
+	fn deferred_required_fields<'a>(&'a self, additional_field: Option<&'a str>) -> Vec<&'a str> {
+		self.trusted_field_values
+			.keys()
+			.map(String::as_str)
+			.chain(additional_field)
+			.collect()
+	}
+
+	fn apply_trusted_field_values(
+		&self,
+		candidate: &mut T,
+		excluded_field: Option<&str>,
+	) -> Result<(), ModelFormError> {
+		for (field, value) in &self.trusted_field_values {
+			if excluded_field == Some(field.as_str())
+				|| (self.persistence_mode == ModelFormPersistenceMode::Update
+					&& T::primary_key_fields().contains(&field.as_str()))
+			{
+				continue;
+			}
+			T::set_trusted_field_json(candidate, field, value.clone())?;
+		}
+		Ok(())
 	}
 
 	/// Returns whether the current payload can produce a valid model candidate.
@@ -485,18 +530,40 @@ where
 		Ok(())
 	}
 
-	pub(crate) fn set_trusted_field_value(
+	/// Sets a native-only trusted field value outside the public form payload.
+	///
+	/// This P0 bridge is intended for server-owned values such as tenant or
+	/// relationship identifiers. Public input must continue through the form
+	/// payload so its field policy and validation are applied.
+	pub fn set_trusted_field_value(
 		&mut self,
 		field_name: &str,
 		value: Value,
 	) -> Result<(), ModelFormError> {
 		self.finalize_transaction_save()?;
-		if T::Schema::fields()
-			.iter()
-			.find(|descriptor| descriptor.name == field_name)
-			.is_some_and(|descriptor| descriptor.editable)
+		if self.persistence_mode == ModelFormPersistenceMode::Update
+			&& T::primary_key_fields().contains(&field_name)
 		{
+			return Err(ModelFormError::FieldValidation {
+				errors: HashMap::from([(
+					field_name.to_owned(),
+					vec!["model form primary keys cannot be updated".to_owned()],
+				)]),
+			});
+		}
+		let descriptor = T::Schema::fields()
+			.iter()
+			.find(|descriptor| descriptor.name == field_name);
+		if descriptor.is_some_and(|descriptor| descriptor.editable && P::allows(descriptor.name)) {
 			return self.set_field_value(field_name, value);
+		}
+		if !T::accepts_trusted_field(field_name) {
+			return Err(ModelFormError::FieldValidation {
+				errors: HashMap::from([(
+					field_name.to_owned(),
+					vec!["unknown model form field".to_owned()],
+				)]),
+			});
 		}
 		self.trusted_field_values
 			.insert(field_name.to_owned(), value);
@@ -526,6 +593,9 @@ where
 
 	/// Performs structural validation before an inline formset assigns a generated parent key.
 	///
+	/// Registered trusted child values are applied while only the generated parent key remains
+	/// deferred.
+	///
 	/// Model-level validation intentionally runs only after the real key is installed, so
 	/// validators may safely depend on that relationship.
 	pub(crate) fn is_valid_with_deferred_required_field(&mut self, deferred_field: &str) -> bool {
@@ -552,8 +622,11 @@ where
 		let mut candidate = match &self.instance {
 			Some(instance) => instance.clone(),
 			None => {
-				match T::build_from_payload_with_deferred_required_field(&self.data, deferred_field)
-				{
+				let deferred_fields = self.deferred_required_fields(Some(deferred_field));
+				match T::build_from_payload_with_deferred_required_fields(
+					&self.data,
+					&deferred_fields,
+				) {
 					Ok(candidate) => candidate,
 					Err(error) => {
 						self.record_validation_error(&error);
@@ -563,6 +636,10 @@ where
 			}
 		};
 		if let Err(error) = candidate.apply_payload(&self.data) {
+			self.record_validation_error(&error);
+			return false;
+		}
+		if let Err(error) = self.apply_trusted_field_values(&mut candidate, Some(deferred_field)) {
 			self.record_validation_error(&error);
 			return false;
 		}
@@ -693,6 +770,8 @@ mod tests {
 		title: String,
 		#[field(max_length = 200, editable = false)]
 		audit_actor: String,
+		#[field(max_length = 200, editable = false)]
+		tenant_key: String,
 	}
 
 	#[model(
@@ -709,7 +788,7 @@ mod tests {
 	#[model(
 		app_label = "forms",
 		table_name = "model_form_hidden_relation_records",
-		form = true,
+		form(name = HiddenRelationCreateForm, fields(title)),
 		info = false
 	)]
 	#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -721,6 +800,9 @@ mod tests {
 		#[field(editable = false)]
 		#[rel(foreign_key)]
 		owner: reinhardt_db::associations::ForeignKeyField<HiddenRelationOwner>,
+		#[field(editable = false)]
+		#[rel(foreign_key)]
+		reviewer: reinhardt_db::associations::ForeignKeyField<HiddenRelationOwner>,
 	}
 
 	#[model(
@@ -958,6 +1040,59 @@ mod tests {
 	}
 
 	#[test]
+	fn generated_model_form_rejects_trusted_primary_key_on_update() {
+		let mut data = QuestionModelFormData::<QuestionPolicy>::empty();
+		data.set_title("Updated".to_owned())
+			.expect("title is permitted by the test policy");
+		let instance = Question {
+			id: Some(19),
+			title: "Original".to_owned(),
+			owner_id: 41,
+			published: false,
+		};
+		let mut form =
+			ModelForm::<Question, QuestionPolicy>::from_payload_and_instance(data, instance);
+		let error = form
+			.set_trusted_field_value("id", json!(23))
+			.expect_err("trusted values must not retarget an update");
+
+		assert!(matches!(
+			error,
+			ModelFormError::FieldValidation { errors }
+				if errors.get("id")
+					== Some(&vec!["model form primary keys cannot be updated".to_owned()])
+		));
+		assert_eq!(
+			form.build_instance()
+				.expect("a rejected primary-key change must preserve the instance")
+				.id,
+			Some(19)
+		);
+	}
+
+	#[test]
+	fn generated_model_form_preserves_database_primary_key_after_trusted_create() {
+		let data = question_payload("Created", 41);
+		let mut form = ModelForm::<Question, QuestionPolicy>::from_payload(data);
+		form.set_trusted_field_value("id", json!(23))
+			.expect("create intent should accept a trusted assigned primary key");
+		let mut executor = RetryExecutor::new([Ok(question_row(24, "Created", 41, true))]);
+
+		let saved = tokio_test::block_on(form.save(&mut executor))
+			.expect("create should persist with the trusted input");
+		assert_eq!(saved.id, Some(24));
+
+		form.set_field_value("title", json!("Updated"))
+			.expect("the saved form should remain editable");
+		let built = form
+			.build_instance()
+			.expect("the database identity should remain valid after create");
+
+		assert_eq!(built.id, Some(24));
+		assert_eq!(built.title, "Updated");
+	}
+
+	#[test]
 	fn generated_model_form_rejects_every_composite_primary_key_field_on_update() {
 		let mut data = CompositePrimaryKeyRecordModelFormData::<AllEditableModelFields>::empty();
 		data.set_sequence(2)
@@ -1050,6 +1185,21 @@ mod tests {
 	}
 
 	#[test]
+	fn generated_model_form_keeps_the_single_deferred_field_bridge() {
+		let mut data = QuestionModelFormData::<QuestionPolicy>::empty();
+		data.set_title("Deferred owner".to_owned())
+			.expect("title is permitted by the test policy");
+
+		let built = <Question as FormModel>::build_from_payload_with_deferred_required_field(
+			&data, "owner_id",
+		)
+		.expect("the public single-field bridge should remain callable");
+
+		assert_eq!(built.title, "Deferred owner");
+		assert_eq!(built.owner_id, 0);
+	}
+
+	#[test]
 	fn generated_model_form_reports_unresolved_required_non_editable_field() {
 		let mut data = HiddenRequiredRecordModelFormData::<AllEditableModelFields>::empty();
 		data.set_title("Missing audit actor".to_owned());
@@ -1066,27 +1216,64 @@ mod tests {
 	}
 
 	#[test]
-	fn trusted_non_editable_field_builds_a_deferred_candidate() {
+	fn trusted_non_editable_fields_build_a_deferred_candidate() {
 		let mut data = HiddenRequiredRecordModelFormData::<AllEditableModelFields>::empty();
 		data.set_title("Trusted relation".to_owned());
 		let mut form = ModelForm::<HiddenRequiredRecord>::from_payload(data);
 
 		form.set_trusted_field_value("audit_actor", json!("system"))
 			.expect("a trusted non-editable field should satisfy model construction");
+		form.set_trusted_field_value("tenant_key", json!("tenant-a"))
+			.expect("all trusted required fields should be deferred together");
 		let built = form
 			.build_instance()
-			.expect("the trusted value should be retained in the candidate");
+			.expect("the trusted values should be retained in the candidate");
 
 		assert_eq!(built.audit_actor, "system");
+		assert_eq!(built.tenant_key, "tenant-a");
 	}
 
 	#[test]
-	fn generated_model_form_handles_required_non_editable_foreign_key() {
-		let mut data = HiddenRequiredRelationRecordModelFormData::<AllEditableModelFields>::empty();
-		data.set_title("Hidden relation".to_owned())
-			.expect("editable title should be accepted");
+	fn trusted_editable_field_outside_policy_builds_a_candidate() {
+		let mut data = QuestionModelFormData::<TitleOnly>::empty();
+		data.set_title("Server-owned owner".to_owned());
+		let mut form = ModelForm::<Question, TitleOnly>::from_payload(data);
 
-		let mut form = ModelForm::<HiddenRequiredRelationRecord>::from_payload(data);
+		form.set_trusted_field_value("owner_id", json!(42))
+			.expect("a policy-excluded editable field should accept a trusted value");
+		let built = form
+			.build_instance()
+			.expect("the trusted field should satisfy model construction");
+
+		assert_eq!(built.owner_id, 42);
+	}
+
+	#[test]
+	fn trusted_field_rejects_unknown_schema_name() {
+		let data = QuestionModelFormData::<TitleOnly>::empty();
+		let mut form = ModelForm::<Question, TitleOnly>::from_payload(data);
+
+		let error = form
+			.set_trusted_field_value("missing_field", json!(42))
+			.expect_err("unknown trusted fields must be rejected immediately");
+
+		let ModelFormError::FieldValidation { errors } = error else {
+			panic!("unknown trusted fields must report field validation errors");
+		};
+		assert_eq!(
+			errors,
+			HashMap::from([(
+				"missing_field".to_owned(),
+				vec!["unknown model form field".to_owned()],
+			)])
+		);
+	}
+
+	#[test]
+	fn named_contract_native_adapter_handles_required_non_editable_foreign_key() {
+		let mut data = HiddenRelationCreateFormData::default();
+		data.set_title("Hidden relation".to_owned());
+		let mut form = HiddenRelationCreateForm::model_form(data);
 		let error = form
 			.build_instance()
 			.expect_err("a missing hidden foreign key must not build a normal candidate");
@@ -1095,17 +1282,29 @@ mod tests {
 			ModelFormError::MissingModelField { field: "owner_id" }
 		));
 
-		let mut data = HiddenRequiredRelationRecordModelFormData::<AllEditableModelFields>::empty();
-		data.set_title("Trusted relation".to_owned())
-			.expect("editable title should be accepted");
-		let mut form = ModelForm::<HiddenRequiredRelationRecord>::from_payload(data);
+		let mut data = HiddenRelationCreateFormData::default();
+		data.set_title("Trusted relation".to_owned());
+		let mut form = HiddenRelationCreateForm::model_form(data);
 		form.set_trusted_field_value("owner_id", json!(42))
 			.expect("a trusted hidden foreign key should be accepted");
+		let error = form
+			.build_instance()
+			.expect_err("an unrelated hidden foreign key must remain required");
+		assert!(matches!(
+			error,
+			ModelFormError::MissingModelField {
+				field: "reviewer_id"
+			}
+		));
+
+		form.set_trusted_field_value("reviewer_id", json!(43))
+			.expect("each trusted hidden foreign key should be accepted explicitly");
 
 		let built = form
 			.build_instance()
 			.expect("the trusted deferred path should build a candidate");
 		assert_eq!(built.owner_id, 42);
+		assert_eq!(built.reviewer_id, 43);
 	}
 
 	#[test]

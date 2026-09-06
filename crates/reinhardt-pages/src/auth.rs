@@ -28,9 +28,37 @@
 //! ```
 
 use crate::reactive::{ReactiveScope, Signal};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::rc::Rc;
+
+thread_local! {
+	static AUTHENTICATION_INVALIDATION_SCHEDULED: Cell<Option<(u64, u64)>> = const { Cell::new(None) };
+	static JWT_IDENTITY_GENERATION: Cell<u64> = const { Cell::new(0) };
+}
+
+struct AuthenticationInvalidationScheduleGuard {
+	generation: (u64, u64),
+}
+
+impl Drop for AuthenticationInvalidationScheduleGuard {
+	fn drop(&mut self) {
+		AUTHENTICATION_INVALIDATION_SCHEDULED.with(|scheduled| {
+			if scheduled.get() == Some(self.generation) {
+				scheduled.set(None);
+			}
+		});
+	}
+}
+
+/// Authentication context captured when a generated server-function request starts.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ServerFnAuthenticationContext {
+	established: bool,
+	generation: u64,
+	jwt_generation: u64,
+}
 
 /// Deserializes a user ID that may be either a JSON string or a JSON number.
 ///
@@ -60,6 +88,116 @@ pub const SESSION_KEY_USERNAME: &str = "_auth_username";
 
 /// Cookie name for session ID (matches reinhardt-auth).
 pub const SESSION_COOKIE_NAME: &str = "sessionid";
+
+/// Clears authentication-dependent client state and revalidates the active route.
+///
+/// Duplicate notifications are coalesced only while they refer to the current
+/// [`AuthState`] and JWT identity generations. A login, update, state-changing
+/// logout, or JWT identity change advances the corresponding generation and
+/// supersedes any older replacement navigation.
+///
+/// Replacement uses the committed path after a yield so a 401 observed during
+/// a guard cannot recursively start nested navigation. If another navigation
+/// starts after this call and before that replacement runs, the newer attempt
+/// is preserved and the replacement is skipped.
+pub fn invalidate_authentication() {
+	let generation = (
+		auth_state().authentication_generation(),
+		JWT_IDENTITY_GENERATION.with(Cell::get),
+	);
+	invalidate_authentication_generation(generation);
+}
+
+fn invalidate_authentication_generation(generation: (u64, u64)) {
+	let coordinator = crate::app::try_with_navigation_coordinator(Rc::clone);
+	if let Some(coordinator) = coordinator {
+		let already_scheduled = AUTHENTICATION_INVALIDATION_SCHEDULED.with(|scheduled| {
+			if scheduled.get() == Some(generation) {
+				true
+			} else {
+				scheduled.set(Some(generation));
+				false
+			}
+		});
+		if already_scheduled {
+			return;
+		}
+
+		coordinator.clear_for_authentication_change();
+		let navigation_generation = coordinator.generation();
+		let schedule_guard = AuthenticationInvalidationScheduleGuard { generation };
+		crate::platform::spawn_task(async move {
+			crate::platform::defer_yield().await;
+			if coordinator.generation() != navigation_generation {
+				return;
+			}
+			let path = coordinator.current_path();
+			let _ = coordinator.navigate_with_completion_guard(
+				path,
+				crate::app::NavigationIntent::Replace,
+				schedule_guard,
+			);
+		});
+		return;
+	}
+
+	if let Some(client) = crate::reactive::query::current_query_client() {
+		client.clear_for_authentication_change();
+	}
+	AUTHENTICATION_INVALIDATION_SCHEDULED.with(|scheduled| {
+		if scheduled.get() == Some(generation) {
+			scheduled.set(None);
+		}
+	});
+}
+
+/// Reports an HTTP status for a caller that already established authentication.
+///
+/// Generated server-function stubs use [`observe_server_fn_status_for_request`]
+/// with a request-time context so an anonymous endpoint's expected 401 remains
+/// an ordinary application error.
+#[doc(hidden)]
+pub fn observe_server_fn_status(status: u16) {
+	if status == 401 {
+		clear_jwt_token();
+		auth_state().logout();
+		invalidate_authentication();
+	}
+}
+
+/// Captures whether a generated request carries an established authentication context.
+#[doc(hidden)]
+pub fn server_fn_authentication_context() -> ServerFnAuthenticationContext {
+	let state = auth_state();
+	ServerFnAuthenticationContext {
+		established: state.is_authenticated_untracked() || get_jwt_token().is_some(),
+		generation: state.authentication_generation(),
+		jwt_generation: JWT_IDENTITY_GENERATION.with(Cell::get),
+	}
+}
+
+/// Reports a generated server-function response against its request-time auth context.
+#[doc(hidden)]
+pub fn observe_server_fn_status_for_request(status: u16, context: ServerFnAuthenticationContext) {
+	if status != 401 || !context.established {
+		return;
+	}
+
+	let state = auth_state();
+	let current_context_is_established =
+		state.is_authenticated_untracked() || get_jwt_token().is_some();
+	let jwt_generation = JWT_IDENTITY_GENERATION.with(Cell::get);
+	if context.generation != state.authentication_generation()
+		|| context.jwt_generation != jwt_generation
+		|| !current_context_is_established
+	{
+		return;
+	}
+
+	clear_jwt_token();
+	state.logout();
+	invalidate_authentication();
+}
 
 struct AuthStateStore {
 	state: AuthState,
@@ -99,6 +237,8 @@ pub fn auth_state() -> AuthState {
 pub struct AuthState {
 	/// Scope that owns this state's reactive signals.
 	_scope: Rc<ReactiveScope>,
+	/// Monotonic identity for authentication-bound cache and navigation work.
+	authentication_generation: Rc<Cell<u64>>,
 	/// Whether the user is authenticated.
 	is_authenticated: Signal<bool>,
 	/// The authenticated user's ID (string to support both integer and UUID PKs).
@@ -166,6 +306,7 @@ impl AuthState {
 		let scope = Rc::new(ReactiveScope::new());
 		scope.enter(|| Self {
 			_scope: Rc::clone(&scope),
+			authentication_generation: Rc::new(Cell::new(0)),
 			is_authenticated: Signal::new(data.is_authenticated),
 			user_id: Signal::new(data.user_id),
 			username: Signal::new(data.username),
@@ -179,6 +320,19 @@ impl AuthState {
 	/// Returns whether the user is authenticated.
 	pub fn is_authenticated(&self) -> bool {
 		self.is_authenticated.get()
+	}
+
+	fn is_authenticated_untracked(&self) -> bool {
+		self.is_authenticated.get_untracked()
+	}
+
+	fn authentication_generation(&self) -> u64 {
+		self.authentication_generation.get()
+	}
+
+	fn advance_authentication_generation(&self) {
+		self.authentication_generation
+			.set(self.authentication_generation.get().wrapping_add(1));
 	}
 
 	/// Returns the authenticated user's ID.
@@ -243,6 +397,7 @@ impl AuthState {
 	/// This is typically called after a successful login or
 	/// when session data is refreshed from the server.
 	pub fn update(&self, data: AuthData) {
+		self.advance_authentication_generation();
 		self.is_authenticated.set(data.is_authenticated);
 		self.user_id.set(data.user_id);
 		self.username.set(data.username);
@@ -257,6 +412,7 @@ impl AuthState {
 	/// Resets `email`, `is_staff`, `is_superuser`, and `permissions` to defaults
 	/// to prevent stale data from a previous session.
 	pub fn login(&self, user_id: impl Into<String>, username: impl Into<String>) {
+		self.advance_authentication_generation();
 		self.is_authenticated.set(true);
 		self.user_id.set(Some(user_id.into()));
 		self.username.set(Some(username.into()));
@@ -275,6 +431,7 @@ impl AuthState {
 		is_staff: bool,
 		is_superuser: bool,
 	) {
+		self.advance_authentication_generation();
 		self.is_authenticated.set(true);
 		self.user_id.set(Some(user_id.into()));
 		self.username.set(Some(username.into()));
@@ -285,6 +442,16 @@ impl AuthState {
 
 	/// Clears the authentication state (logout).
 	pub fn logout(&self) {
+		let changed = self.is_authenticated.get_untracked()
+			|| self.user_id.get_untracked().is_some()
+			|| self.username.get_untracked().is_some()
+			|| self.email.get_untracked().is_some()
+			|| self.is_staff.get_untracked()
+			|| self.is_superuser.get_untracked()
+			|| !self.permissions.get_untracked().is_empty();
+		if changed {
+			self.advance_authentication_generation();
+		}
 		self.is_authenticated.set(false);
 		self.user_id.set(None);
 		self.username.set(None);
@@ -621,7 +788,12 @@ pub fn set_jwt_token(token: &str) {
 	if let Some(window) = web_sys::window()
 		&& let Ok(Some(storage)) = window.session_storage()
 	{
-		let _ = storage.set_item(JWT_STORAGE_KEY, token);
+		let previous = storage.get_item(JWT_STORAGE_KEY).ok().flatten();
+		if storage.set_item(JWT_STORAGE_KEY, token).is_ok() && previous.as_deref() != Some(token) {
+			JWT_IDENTITY_GENERATION.with(|generation| {
+				generation.set(generation.get().wrapping_add(1));
+			});
+		}
 	}
 }
 
@@ -639,7 +811,12 @@ pub fn clear_jwt_token() {
 	if let Some(window) = web_sys::window()
 		&& let Ok(Some(storage)) = window.session_storage()
 	{
-		let _ = storage.remove_item(JWT_STORAGE_KEY);
+		let had_token = storage.get_item(JWT_STORAGE_KEY).ok().flatten().is_some();
+		if storage.remove_item(JWT_STORAGE_KEY).is_ok() && had_token {
+			JWT_IDENTITY_GENERATION.with(|generation| {
+				generation.set(generation.get().wrapping_add(1));
+			});
+		}
 	}
 }
 
@@ -922,6 +1099,97 @@ mod tests {
 	fn test_auth_headers_non_wasm() {
 		// On non-WASM targets, auth_headers always returns None
 		assert!(auth_headers().is_none());
+	}
+
+	#[test]
+	#[cfg(not(target_arch = "wasm32"))]
+	fn authentication_invalidation_clears_current_query_client_and_ignores_non_auth_statuses() {
+		use crate::reactive::query::{
+			QueryClient, QueryDefaults, QueryFamily, QueryOptions, TestQueryRuntime,
+			provide_query_client,
+		};
+
+		let runtime = TestQueryRuntime::new();
+		let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+		let family = QueryFamily::<(), String, String>::new("auth.invalidation-status");
+		let query = client.observe(
+			family.query((), || async { Ok("authenticated".to_owned()) }),
+			QueryOptions::default(),
+		);
+		runtime.run_until_stalled();
+		assert_eq!(query.data(), Some("authenticated".to_owned()));
+
+		let _client_guard = provide_query_client(client);
+		let state = auth_state();
+		state.login("1", "authenticated");
+		observe_server_fn_status(403);
+		assert_eq!(query.data(), Some("authenticated".to_owned()));
+		observe_server_fn_status(500);
+		assert_eq!(query.data(), Some("authenticated".to_owned()));
+		observe_server_fn_status(401);
+		assert_eq!(query.data(), None);
+		assert!(!state.is_authenticated());
+		assert_eq!(state.user_id(), None);
+		assert_eq!(state.username(), None);
+		state.logout();
+	}
+
+	#[rstest::rstest]
+	#[case(false, false)]
+	#[case(true, true)]
+	#[cfg(not(target_arch = "wasm32"))]
+	fn request_scoped_401_requires_the_current_established_authentication(
+		#[case] authenticated: bool,
+		#[case] expect_invalidation: bool,
+	) {
+		use crate::reactive::query::{
+			QueryClient, QueryDefaults, QueryFamily, QueryOptions, TestQueryRuntime,
+			provide_query_client,
+		};
+
+		// Arrange
+		clear_global_auth_state();
+		let runtime = TestQueryRuntime::new();
+		let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+		let family = QueryFamily::<(), String, String>::new("auth.request-context");
+		let query = client.observe(
+			family.query((), || async { Ok("authenticated".to_owned()) }),
+			QueryOptions::default(),
+		);
+		runtime.run_until_stalled();
+		let _client_guard = provide_query_client(client);
+		let state = auth_state();
+		if authenticated {
+			state.login("1", "authenticated");
+		}
+		let context = server_fn_authentication_context();
+
+		// Act
+		observe_server_fn_status_for_request(401, context);
+
+		// Assert
+		assert_eq!(query.data().is_none(), expect_invalidation);
+		assert_eq!(
+			state.is_authenticated(),
+			authenticated && !expect_invalidation
+		);
+		clear_global_auth_state();
+	}
+
+	#[cfg(native)]
+	#[test]
+	fn authentication_invalidation_resets_coalescing_when_native_scheduler_is_unavailable() {
+		reinhardt_core::reactive::ReactiveScope::run(|| {
+			let router = reinhardt_urls::routers::ClientRouter::new()
+				.route("root", "/", || crate::Page::text("root"));
+			crate::app::__install_client_router_for_test(router);
+			AUTHENTICATION_INVALIDATION_SCHEDULED.with(|scheduled| scheduled.set(None));
+
+			invalidate_authentication();
+
+			assert_eq!(AUTHENTICATION_INVALIDATION_SCHEDULED.with(Cell::get), None);
+			crate::app::__clear_spa_router_for_test();
+		});
 	}
 
 	#[test]

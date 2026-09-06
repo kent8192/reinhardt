@@ -1,0 +1,13 @@
+error: #[navigation_guard] functions must return Result<NavigationDecision, NavigationGuardError>
+ --> tests/ui/navigation_guard/fail/wrong_result.rs:4:61
+  |
+4 | async fn require_authenticated(_context: NavigationContext) -> Result<bool, String> {
+  |                                                             ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `NavigationContext`
+ --> tests/ui/navigation_guard/fail/wrong_result.rs:1:23
+  |
+1 | use reinhardt_pages::{NavigationContext, navigation_guard};
+  |                       ^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

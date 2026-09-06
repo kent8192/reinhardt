@@ -57,6 +57,7 @@ thread_local! {
 	static RENDER_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 	static PERSISTENT_LAYOUT_RENDERER: RefCell<PersistentLayoutRenderer> =
 		RefCell::new(PersistentLayoutRenderer::new());
+	static ACTIVE_APP_ROOT: RefCell<Option<web_sys::Element>> = const { RefCell::new(None) };
 	static ROOT_CONTEXT_GUARDS: RefCell<Vec<Box<dyn Any>>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -117,8 +118,7 @@ impl PersistentLayoutRenderer {
 		router: &ClientRouter,
 		document_head_manager: &DocumentHeadManager,
 	) -> Result<bool, MountError> {
-		let path = router.current_path().get();
-		let Some(route_match) = router.match_tree(&path) else {
+		let Some(route_match) = router.__match_current_for_render() else {
 			self.reset();
 			return Ok(false);
 		};
@@ -224,13 +224,16 @@ impl PersistentLayoutRenderer {
 				with_loader_store(&loader_store, || {
 					scope.enter(|| {
 						with_reactive_node_store(&store, || {
-							let page = router
-								.__render_tree_layout(
+							// SAFETY: `route_match` was produced by the navigation
+							// coordinator for the committed route, after all guards allowed.
+							let page = unsafe {
+								router.__render_tree_layout(
 									route_match,
 									depth,
 									Outlet::placeholder(outlet_id),
 								)
-								.ok_or(MountError::CreateElementFailed)?;
+							}
+							.ok_or(MountError::CreateElementFailed)?;
 							page.mount(&parent_wrapper)
 						})
 					})
@@ -252,8 +255,9 @@ impl PersistentLayoutRenderer {
 			with_loader_store(&loader_store, || {
 				leaf_scope.enter(|| {
 					with_reactive_node_store(&leaf_store, || {
-						let leaf = router
-							.__render_tree_leaf(route_match)
+						// SAFETY: `route_match` was produced by the navigation
+						// coordinator for the committed route, after all guards allowed.
+						let leaf = unsafe { router.__render_tree_leaf(route_match) }
 							.ok_or(MountError::CreateElementFailed)?;
 						leaf.mount(&parent_wrapper)
 					})
@@ -283,6 +287,17 @@ impl PersistentLayoutRenderer {
 			.map_err(|_| MountError::CreateElementFailed)?
 			.ok_or(MountError::AppendChildFailed)
 	}
+}
+
+#[cfg(wasm)]
+pub(super) fn clear_mounted_route_for_authentication_change() {
+	PERSISTENT_LAYOUT_RENDERER.with(|renderer| renderer.borrow_mut().reset());
+	crate::component::cleanup_reactive_nodes();
+	ACTIVE_APP_ROOT.with(|root| {
+		if let Some(root) = root.borrow().as_ref() {
+			root.set_inner_html("");
+		}
+	});
 }
 
 #[cfg(wasm)]
@@ -1243,6 +1258,9 @@ impl ClientLauncher {
 					self.root_selector
 				))
 			})?;
+		ACTIVE_APP_ROOT.with(|root| {
+			root.borrow_mut().replace(root_el.clone());
+		});
 		with_document_head_manager(&document_head_manager, || {
 			PERSISTENT_LAYOUT_RENDERER.with(|renderer| renderer.borrow_mut().reset());
 		});

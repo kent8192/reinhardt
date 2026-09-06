@@ -309,6 +309,15 @@ pub mod model_form {
 		ForbiddenField { field: String },
 		InvalidValue { field: String, message: String },
 	}
+
+	/// Mirrors the upload metadata stored and cloned by generated cleaned payloads.
+	#[derive(Clone)]
+	pub struct ModelFormUpload {
+		pub name: &'static str,
+		pub filename: Option<String>,
+		pub content_type: Option<String>,
+		pub size: u64,
+	}
 }
 
 pub mod db {

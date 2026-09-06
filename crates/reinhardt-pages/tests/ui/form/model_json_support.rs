@@ -8,7 +8,7 @@ use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 
 struct Question;
 
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 struct QuestionResponse {
 	token: String,
 }

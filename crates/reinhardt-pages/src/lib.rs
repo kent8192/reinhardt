@@ -610,6 +610,98 @@
 //! }
 //! ```
 //!
+//! `use_form_action` remains the generic local async helper for validated form
+//! workflows. Use [`use_server_mutation`] when the work is a server mutation and
+//! you want one target-neutral status handle with invalidation and redirect
+//! hooks:
+//!
+//! ```rust,no_run
+//! use reinhardt_pages::prelude::*;
+//! use reinhardt_pages::server_fn::ServerFnError;
+//!
+//! async fn delete_cluster(cluster_id: String) -> Result<(), ServerFnError> {
+//!     let _ = cluster_id;
+//!     Ok(())
+//! }
+//!
+//! mod clusters {
+//!     use reinhardt_pages::prelude::*;
+//!     use reinhardt_pages::server_fn::ServerFnError;
+//!
+//!     pub fn family() -> QueryFamily<(), Vec<String>, ServerFnError> {
+//!         QueryFamily::new("docs.clusters.list.v1")
+//!     }
+//! }
+//!
+//! let query_client = QueryClient::new_ssr(QueryDefaults::default());
+//! let remove = use_server_mutation(delete_cluster)
+//!     .invalidate_family(query_client, clusters::family())
+//!     .redirect("/clusters")
+//!     .build();
+//! let outcome = remove.dispatch("cluster-1".to_owned());
+//! # let _ = outcome;
+//! ```
+//!
+//! Adapt multiple client arguments explicitly with a tuple closure:
+//!
+//! ```rust,no_run
+//! use reinhardt_pages::prelude::*;
+//! use reinhardt_pages::server_fn::ServerFnError;
+//!
+//! async fn delete_cluster(cluster_id: String, force: bool) -> Result<(), ServerFnError> {
+//!     let _ = (cluster_id, force);
+//!     Ok(())
+//! }
+//!
+//! let remove = use_server_mutation(|(cluster_id, force): (String, bool)| {
+//!     delete_cluster(cluster_id, force)
+//! })
+//! .build();
+//! # let _ = remove;
+//! ```
+//!
+//! Generated `function_name::mutation()` adapters keep injected or extractor
+//! parameters out of the client input shape:
+//!
+//! ```rust,no_run
+//! # mod docs {
+//! use async_trait::async_trait;
+//! use reinhardt_di::{DiResult, Injectable, InjectionContext};
+//! use reinhardt_pages::prelude::*;
+//! use reinhardt_pages::server_fn::{ServerFnError, server_fn};
+//!
+//! #[derive(Clone)]
+//! pub struct CurrentOrg;
+//!
+//! #[async_trait]
+//! impl Injectable for CurrentOrg {
+//!     async fn inject(_ctx: &InjectionContext) -> DiResult<Self> {
+//!         Ok(Self)
+//!     }
+//! }
+//!
+//! #[server_fn]
+//! pub async fn delete_cluster(
+//!     cluster_id: String,
+//!     #[inject] current_org: CurrentOrg,
+//! ) -> Result<(), ServerFnError> {
+//!     let _ = (cluster_id, current_org);
+//!     Ok(())
+//! }
+//!
+//! pub fn build_remove() -> ServerMutation<String, ()> {
+//!     use_server_mutation(delete_cluster::mutation()).build()
+//! }
+//! # }
+//! let remove = docs::build_remove();
+//! let outcome = remove.dispatch("cluster-1".to_owned());
+//! # let _ = outcome;
+//! ```
+//!
+//! Native dispatch returns [`MutationDispatchOutcome::UnsupportedTarget`] and
+//! does not validate, invoke the mutation closure, invalidate queries, reset
+//! generated forms, or navigate.
+//!
 //! Use [`ui::FormActionButton`] with [`FormAction::submit_handler`] to preserve
 //! native form submit semantics. [`ui::FormActionResultPanel`] renders
 //! validation and typed mutation errors separately, while
@@ -898,6 +990,7 @@ pub mod form;
 // API and communication
 pub mod api;
 pub mod server_fn;
+pub mod server_mutation;
 
 // Server-side rendering
 pub mod ssr;
@@ -1024,6 +1117,10 @@ pub use router::{NavigationGuardId, Path, Query, RouteLoaderId};
 pub use router::{NavigationType, navigate, navigate_named, navigate_or_reload};
 pub use server_fn::{
 	ServerFn, ServerFnError, ServerFnErrorKind, ServerFnErrorPayload, ServerFnFieldError,
+};
+pub use server_mutation::{
+	FormServerMutation, FormServerMutationBuilder, MutationDispatchOutcome, ServerMutation,
+	ServerMutationBuilder, use_server_mutation,
 };
 pub use ssr::SsrState;
 #[cfg(native)]

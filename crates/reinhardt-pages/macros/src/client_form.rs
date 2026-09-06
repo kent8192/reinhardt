@@ -608,6 +608,27 @@ fn generate_submit_method(
 		{
 		}
 
+		pub fn server_mutation<Deps>(
+			&self,
+			runtime: &#pages_crate::UseFormReturn<Self, Deps>,
+		) -> #pages_crate::FormServerMutationBuilder<
+			Self,
+			Deps,
+			#dto_ident,
+			<#server_fn::marker as #pages_crate::server_fn::ServerFnResponseMetadata>::Response,
+		>
+		where
+			Deps: ::core::clone::Clone + ::core::cmp::PartialEq + 'static,
+			<#server_fn::marker as #pages_crate::server_fn::ServerFnResponseMetadata>::Error:
+				::core::convert::Into<#pages_crate::ServerFnError>,
+		{
+			let _ = self;
+			#pages_crate::use_server_mutation(#server_fn::mutation())
+				.with_generated_form(runtime, |runtime| {
+					::core::result::Result::Ok(#form_ident::to_request(runtime))
+				})
+		}
+
 		pub async fn submit<Deps>(
 			&self,
 			runtime: &#pages_crate::UseFormReturn<Self, Deps>,
@@ -628,7 +649,13 @@ fn generate_submit_method(
 				runtime
 					.submit_server_fn(|| {
 						let request = #form_ident::to_request(runtime);
-						async move { #server_fn(request).await.map_err(::core::convert::Into::into) }
+						async move {
+							#pages_crate::server_mutation::execute_server_mutation_once(
+								request,
+								#server_fn::mutation(),
+							)
+							.await
+						}
 					})
 					.await
 			}

@@ -2118,12 +2118,15 @@ fn generate_server_handler(
 	// `reinhardt-web/msw`) so that `MockableServerFn` is in scope.
 	let msw_enabled = cfg!(feature = "msw");
 
-	let result_types = extract_result_types(return_type);
 	let emits_public_metadata = info.emits_typed_response_metadata();
 	let emits_msw_metadata = emits_public_metadata && !uses_multipart;
-	let emits_typed_response_metadata = emits_public_metadata && result_types.is_some();
-	let (metadata_response_type, metadata_error_type) =
-		result_types.unwrap_or_else(|| (quote! {}, quote! {}));
+	let emits_typed_response_metadata = emits_public_metadata;
+	let metadata_response_type = quote! {
+		<#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Response
+	};
+	let metadata_error_type = quote! {
+		<#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Error
+	};
 	let response_metadata_type_aliases = if emits_typed_response_metadata {
 		quote! {
 			#[doc(hidden)]
@@ -2205,7 +2208,28 @@ fn generate_server_handler(
 				}
 			})
 			.collect();
-		let model_form_argument_names = wire_params.iter().map(|parameter| &parameter.name);
+		let model_form_argument_validation: Vec<_> = wire_params
+			.iter()
+			.zip(regular_param_types.iter())
+			.map(|(parameter, parameter_type)| {
+				let field_name = wire_param_name(parameter);
+				match parameter.kind {
+					WireParamKind::Json => quote! {
+						let _: #parameter_type = state.json_argument(#field_name)?;
+					},
+					WireParamKind::File => quote! {
+						let _ = state.required_file_argument(#field_name)?;
+					},
+					WireParamKind::OptionalFile => quote! {
+						let _ = state.optional_file_argument(#field_name)?;
+					},
+				}
+			})
+			.collect();
+		let model_form_argument_names: Vec<_> = wire_params
+			.iter()
+			.map(|parameter| &parameter.name)
+			.collect();
 		let argument_count = wire_params.len();
 		quote! {
 			impl<__ReinhardtSelection, __ReinhardtSchema, __ReinhardtPolicy>
@@ -2233,6 +2257,27 @@ fn generate_server_handler(
 
 					type Response = <#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Response;
 					type Error = <#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Error;
+
+				fn validate_input(
+					state: &#pages_crate::form::ModelFormState<
+						__ReinhardtSchema,
+						__ReinhardtPolicy,
+					>,
+				) -> ::core::result::Result<
+					(),
+					#pages_crate::form::ModelFormPayloadError,
+				> {
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					{
+						#(#model_form_argument_validation)*
+						::core::result::Result::Ok(())
+					}
+					#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+					{
+						let _ = state;
+						::core::result::Result::Ok(())
+					}
+				}
 
 				fn submit(
 					state: &#pages_crate::form::ModelFormState<
@@ -2284,6 +2329,30 @@ fn generate_server_handler(
 						type Response = <#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Response;
 						type Error = #pages_crate::ServerFnError;
 
+					fn validate_input(
+						state: &#pages_crate::form::ModelFormState<
+							__ReinhardtSchema,
+							__ReinhardtPolicy,
+						>,
+					) -> ::core::result::Result<
+						(),
+						#pages_crate::form::ModelFormPayloadError,
+					> {
+						#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+						{
+							<__ReinhardtSelection as #pages_crate::form::ModelFormSelectionPayload<
+								__ReinhardtSchema,
+								__ReinhardtPolicy,
+							>>::build_payload(state)
+								.map(|_| ())
+						}
+						#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+						{
+							let _ = state;
+							::core::result::Result::Ok(())
+						}
+					}
+
 					fn submit(
 						state: &#pages_crate::form::ModelFormState<
 							__ReinhardtSchema,
@@ -2320,26 +2389,68 @@ fn generate_server_handler(
 	} else {
 		quote! {}
 	};
-	let request_metadata_type_aliases =
-		if !uses_multipart && emits_typed_response_metadata && regular_param_types.len() == 1 {
-			let request_type = regular_param_types[0];
-			quote! {
-				#[doc(hidden)]
-				#vis type #request_alias = #request_type;
-			}
-		} else {
-			quote! {}
+	let request_metadata_type_aliases = if !uses_multipart && emits_typed_response_metadata {
+		let request_type = match regular_param_types.as_slice() {
+			[] => quote! { () },
+			[request_type] => quote! { #request_type },
+			_ => quote! { (#(#regular_param_types),*) },
 		};
-	let request_metadata_impl =
-		if !uses_multipart && emits_typed_response_metadata && regular_param_types.len() == 1 {
-			quote! {
-				impl #pages_crate::server_fn::ServerFnRequestMetadata for marker {
-					type Request = super::#request_alias;
+		quote! {
+			#[doc(hidden)]
+			#vis type #request_alias = #request_type;
+		}
+	} else {
+		quote! {}
+	};
+	let request_metadata_impl = if !uses_multipart && emits_typed_response_metadata {
+		quote! {
+			impl #pages_crate::server_fn::ServerFnRequestMetadata for marker {
+				type Request = super::#request_alias;
+			}
+		}
+	} else {
+		quote! {}
+	};
+	let mutation_call = match regular_param_types.as_slice() {
+		[] => quote! {
+			let () = request;
+			super::#name().await
+		},
+		[_] => quote! {
+			super::#name(request).await
+		},
+		_ => quote! {
+			let (#(#regular_param_names),*) = request;
+			super::#name(#(#regular_param_names),*).await
+		},
+	};
+	let mutation_helper_tokens = if !uses_multipart && emits_typed_response_metadata {
+		quote! {
+			/// Returns a target-neutral mutation callable for this server function.
+			pub fn mutation() -> impl Fn(
+				<marker as #pages_crate::server_fn::ServerFnRequestMetadata>::Request,
+			) -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<
+				Output = ::std::result::Result<
+					<marker as #pages_crate::server_fn::ServerFnResponseMetadata>::Response,
+					<marker as #pages_crate::server_fn::ServerFnResponseMetadata>::Error,
+				>,
+			>>> {
+				|request| {
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					{
+						::std::boxed::Box::pin(async move { #mutation_call })
+					}
+					#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+					{
+						let _request = request;
+						::std::boxed::Box::pin(async move { ::core::unreachable!() })
+					}
 				}
 			}
-		} else {
-			quote! {}
-		};
+		}
+	} else {
+		quote! {}
+	};
 
 	// Convert inject param names to string literals for INJECTED_PARAMS const
 	let inject_param_name_strs: Vec<String> = inject_params
@@ -2797,6 +2908,7 @@ fn generate_server_handler(
 
 			#response_metadata_impl
 			#request_metadata_impl
+			#mutation_helper_tokens
 			#model_form_server_fn_impl
 			#query_helper_tokens
 
@@ -2953,6 +3065,7 @@ fn generate_server_handler(
 
 			#response_metadata_impl
 			#request_metadata_impl
+			#mutation_helper_tokens
 			#model_form_server_fn_impl
 
 			// Native-only handler entry point for explicit router registration.
@@ -2980,23 +3093,6 @@ fn generate_server_handler(
 		// optional MSW Args / MockableServerFn impl is gated inside.
 		#wasm_marker_tokens
 	}
-}
-
-/// Extracts both result types when the return type is a direct `Result<T, E>`.
-fn extract_result_types(
-	return_type: &syn::Type,
-) -> Option<(proc_macro2::TokenStream, proc_macro2::TokenStream)> {
-	if let syn::Type::Path(type_path) = return_type
-		&& let Some(segment) = type_path.path.segments.last()
-		&& segment.ident == "Result"
-		&& let syn::PathArguments::AngleBracketed(args) = &segment.arguments
-		&& let Some(syn::GenericArgument::Type(ok_type)) = args.args.first()
-		&& args.args.len() >= 2
-		&& let Some(syn::GenericArgument::Type(err_type)) = args.args.iter().nth(1)
-	{
-		return Some((quote! { #ok_type }, quote! { #err_type }));
-	}
-	None
 }
 
 #[cfg(test)]
@@ -3283,7 +3379,8 @@ mod tests {
 
 		let generated = generate_server_fn(&info).to_string();
 
-		assert_eq!(generated.matches("json_argument (\"type\")").count(), 2);
+		// Both target handlers validate and decode the same normalized wire name.
+		assert_eq!(generated.matches("json_argument (\"type\")").count(), 4);
 		assert_eq!(generated.matches("json_argument (\"r#type\")").count(), 0);
 	}
 

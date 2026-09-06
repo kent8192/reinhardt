@@ -7,8 +7,8 @@ use reinhardt_core::validators::{Validate, ValidationError, ValidationErrors};
 use reinhardt_pages::server_fn::ServerFnError;
 use reinhardt_pages::server_fn::server_fn;
 use reinhardt_pages::{
-	ClientForm, ClientFormChoiceSource, ClientFormChoices, FieldError, ResetOnDeps,
-	UseFormAsyncSubmitOutcome, use_form,
+	ClientForm, ClientFormChoiceSource, ClientFormChoices, FieldError, MutationDispatchOutcome,
+	ResetOnDeps, UseFormAsyncSubmitOutcome, use_form,
 };
 use serde::{Deserialize, Serialize};
 
@@ -483,6 +483,15 @@ pub struct SubmitProjectResponse {
 	name: String,
 }
 
+fn assert_submit_future<Fut>(value: Fut) -> Fut
+where
+	Fut: std::future::Future<
+			Output = Result<UseFormAsyncSubmitOutcome<SubmitProjectResponse>, ServerFnError>,
+		>,
+{
+	value
+}
+
 #[server_fn]
 async fn submit_project(
 	request: crate::SubmitProjectRequest,
@@ -510,6 +519,33 @@ async fn client_form_server_submit_blocks_validation_failure() {
 
 	assert_eq!(outcome, UseFormAsyncSubmitOutcome::ValidationFailed);
 	assert_eq!(SUBMIT_CALL_COUNT.with(Cell::get), 0);
+}
+
+#[test]
+fn client_form_server_mutation_is_unsupported_on_native() {
+	SUBMIT_CALL_COUNT.with(|count| count.set(0));
+	let scope = ReactiveScope::new();
+	scope.enter(|| {
+		let form = SubmitProjectRequestClientForm::new().with_defaults(SubmitProjectRequest {
+			name: "demo".to_string(),
+		});
+		let runtime = use_form(&form).build();
+		let mutation = form.server_mutation(&runtime).build();
+		let submit_future = assert_submit_future(form.submit(&runtime));
+
+		assert_eq!(
+			mutation.dispatch(),
+			MutationDispatchOutcome::UnsupportedTarget
+		);
+		assert_eq!(mutation.result(), None);
+		assert_eq!(mutation.error(), None);
+		assert!(!runtime.form_state().is_submitting.get());
+		assert!(!runtime.form_state().is_submit_successful.get());
+		assert_eq!(runtime.form_state().form_error.get(), None);
+		assert_eq!(SUBMIT_CALL_COUNT.with(Cell::get), 0);
+
+		drop(submit_future);
+	});
 }
 
 #[tokio::test]

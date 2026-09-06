@@ -412,21 +412,27 @@ async fn bulk_delete_hides_deleted_object_history(#[future] server_fn_context: S
 	)
 	.await
 	.expect("bulk delete must succeed");
-	let first_history = query_history_result(&context, &first_id, 1).await;
-	let second_history = query_history_result(&context, &second_id, 1).await;
-	let missing_history = query_history_result(&context, &missing_id, 1).await;
-	let first_actions = exact_history_actions(db, "TestModel", "test_models", &first_id).await;
-	let second_actions = exact_history_actions(db, "TestModel", "test_models", &second_id).await;
-	let missing_actions = exact_history_actions(db, "TestModel", "test_models", &missing_id).await;
+	let first_history_result = query_history_result(&context, &first_id, 1).await;
+	let second_history_result = query_history_result(&context, &second_id, 1).await;
+	let missing_history_result = query_history_result(&context, &missing_id, 1).await;
+	let first_history = exact_history_actions(db, "TestModel", "test_models", &first_id).await;
+	let second_history = exact_history_actions(db, "TestModel", "test_models", &second_id).await;
+	let missing_history = exact_history_actions(db, "TestModel", "test_models", &missing_id).await;
 
 	// Assert
 	assert_eq!(response.deleted, 2);
-	assert_object_not_found(first_history.expect_err("deleted object history must be scoped out"));
-	assert_object_not_found(second_history.expect_err("deleted object history must be scoped out"));
-	assert_object_not_found(missing_history.expect_err("missing object history must be rejected"));
-	assert_eq!(first_actions, ["BULK_DELETE"]);
-	assert_eq!(second_actions, ["BULK_DELETE"]);
-	assert!(missing_actions.is_empty());
+	assert_object_not_found(
+		first_history_result.expect_err("deleted object history must be scoped out"),
+	);
+	assert_object_not_found(
+		second_history_result.expect_err("deleted object history must be scoped out"),
+	);
+	assert_object_not_found(
+		missing_history_result.expect_err("missing object history must be rejected"),
+	);
+	assert_eq!(first_history, ["BULK_DELETE"]);
+	assert_eq!(second_history, ["BULK_DELETE"]);
+	assert!(missing_history.is_empty());
 }
 
 #[rstest]

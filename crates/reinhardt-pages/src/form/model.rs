@@ -154,6 +154,11 @@ where
 	/// Error returned by the server-function adapter before model-form mapping.
 	type Error;
 
+	/// Validates the current model-form state before dispatching the server function.
+	fn validate_input(_state: &ModelFormState<S, P>) -> Result<(), ModelFormPayloadError> {
+		Ok(())
+	}
+
 	/// Submits the current model-form state through the selected server function.
 	fn submit(
 		state: &ModelFormState<S, P>,
@@ -1189,13 +1194,32 @@ fn normalize_datetime_local(value: &str, aware: bool) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-	use super::{ModelFormState, any_value_to_json, is_date};
+	use super::{ModelFormServerFn, ModelFormState, any_value_to_json, is_date};
 	use reinhardt_core::model_form::{
 		AllEditableModelFields, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload,
 		ModelFormPayloadError, ModelFormSchema,
 	};
 
 	struct NullableBooleanSchema;
+	struct LegacyServerFn;
+
+	impl ModelFormServerFn<(), NullableBooleanSchema, AllEditableModelFields> for LegacyServerFn {
+		type Response = ();
+		type Error = ();
+
+		async fn submit(
+			_state: &ModelFormState<NullableBooleanSchema, AllEditableModelFields>,
+		) -> Result<Self::Response, Self::Error> {
+			Ok(())
+		}
+	}
+
+	#[test]
+	fn model_form_server_fn_validation_defaults_to_success() {
+		let state = ModelFormState::<NullableBooleanSchema, AllEditableModelFields>::new();
+
+		assert_eq!(LegacyServerFn::validate_input(&state), Ok(()));
+	}
 
 	#[test]
 	fn nullable_numeric_values_convert_to_json() {

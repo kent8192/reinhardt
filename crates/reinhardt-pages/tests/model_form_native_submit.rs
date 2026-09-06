@@ -112,6 +112,27 @@ fn native_submit_maps_payload_errors_to_validation() {
 }
 
 #[test]
+fn native_server_mutation_dispatch_is_inert_before_preflight() {
+	reinhardt_core::reactive::ReactiveScope::run(|| {
+		let form = form! {
+			name: QuestionMutationForm,
+			model: Question,
+			policy: QuestionPolicy,
+			fields: [title],
+			server_fn: save_question,
+		};
+		let runtime = use_form(&form).build();
+		let mutation = form.server_mutation(&runtime).build();
+		assert_eq!(
+			mutation.dispatch(),
+			reinhardt_pages::MutationDispatchOutcome::UnsupportedTarget
+		);
+		assert!(runtime.form_state().field_errors.get().is_empty());
+		assert!(!runtime.form_state().is_submitting.get());
+	});
+}
+
+#[test]
 fn model_form_routes_structured_server_errors_to_selected_fields() {
 	reinhardt_core::reactive::ReactiveScope::run(|| {
 		let form = form! {

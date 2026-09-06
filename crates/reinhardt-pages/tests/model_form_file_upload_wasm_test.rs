@@ -2,6 +2,9 @@
 
 include!("ui/form/model_multipart_support.rs");
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use gloo_timers::future::TimeoutFuture;
 use js_sys::{Function, Reflect};
 use reinhardt_macros::model;
@@ -9,7 +12,8 @@ use reinhardt_pages::component::{PageExt, cleanup_reactive_nodes};
 use reinhardt_pages::dom::Element;
 use reinhardt_pages::prelude::defer_yield;
 use reinhardt_pages::reactive::ReactiveScope;
-use reinhardt_pages::{form, use_form};
+use reinhardt_pages::{MutationDispatchOutcome, form, use_form};
+use rstest::rstest;
 use serial_test::serial;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::*;
@@ -532,4 +536,133 @@ async fn model_form_files_clear_only_after_success_or_reset() {
 	wait_for_files_to_clear(&root.0).await;
 	assert_eq!(file_count(&query_input(&root.0, "upload-form-document")), 0);
 	scope.dispose();
+}
+
+#[rstest]
+#[serial(model_form_file_upload_globals)]
+#[test_attr(wasm_bindgen_test)]
+async fn multipart_mutation_callbacks_continue_after_form_success_disposes_scope() {
+	let root = BodyRoot::new();
+	let document_file = browser_file("report.pdf");
+	let avatar_file = browser_file("avatar.png");
+	let fetch = MultipartFetchGuard::install(&document_file, &avatar_file);
+	fetch.set_status(200.0);
+	let scope = Rc::new(ReactiveScope::new());
+	let form_success_calls = Rc::new(Cell::new(0));
+	let mutation_success_calls = Rc::new(Cell::new(0));
+	let mutation = scope.enter(|| {
+		let form = form! {
+			name: UploadForm,
+			model: Upload,
+			policy: UploadPolicy,
+			fields: [title, document, avatar],
+			server_fn: upload,
+		};
+		form.clone()
+			.into_page()
+			.mount(&Element::new(root.0.clone()))
+			.expect("model form mounts");
+		let scope_for_success = Rc::clone(&scope);
+		let form_success_calls_for_callback = Rc::clone(&form_success_calls);
+		let runtime = use_form(&form)
+			.on_submit_success(move |_| {
+				form_success_calls_for_callback.set(form_success_calls_for_callback.get() + 1);
+				scope_for_success.dispose();
+			})
+			.build();
+		let mutation_success_calls_for_callback = Rc::clone(&mutation_success_calls);
+		form.server_mutation(&runtime)
+			.on_success(move |_| {
+				mutation_success_calls_for_callback
+					.set(mutation_success_calls_for_callback.get() + 1);
+			})
+			.build()
+	});
+
+	let title = query_input(&root.0, "upload-form-title");
+	title.set_value("Report");
+	title
+		.dispatch_event(&web_sys::Event::new("input").expect("input event"))
+		.expect("dispatch title input");
+	select_file(
+		&query_input(&root.0, "upload-form-document"),
+		&document_file,
+	);
+	select_file(&query_input(&root.0, "upload-form-avatar"), &avatar_file);
+	defer_yield().await;
+
+	assert_eq!(mutation.dispatch(), MutationDispatchOutcome::Dispatched);
+	wait_for_requests(&fetch, 1).await;
+	for _ in 0..100 {
+		if mutation_success_calls.get() == 1 {
+			break;
+		}
+		TimeoutFuture::new(10).await;
+	}
+
+	assert_eq!(form_success_calls.get(), 1);
+	assert_eq!(mutation_success_calls.get(), 1);
+}
+
+#[rstest]
+#[serial(model_form_file_upload_globals)]
+#[test_attr(wasm_bindgen_test)]
+async fn multipart_mutation_callbacks_continue_after_form_owner_disposal() {
+	let root = BodyRoot::new();
+	let document_file = browser_file("report.pdf");
+	let avatar_file = browser_file("avatar.png");
+	let fetch = MultipartFetchGuard::install(&document_file, &avatar_file);
+	fetch.set_status(200.0);
+	let form_scope = ReactiveScope::new();
+	let (form, runtime) = form_scope.enter(|| {
+		let form = form! {
+			name: UploadForm,
+			model: Upload,
+			policy: UploadPolicy,
+			fields: [title, document, avatar],
+			server_fn: upload,
+		};
+		form.clone()
+			.into_page()
+			.mount(&Element::new(root.0.clone()))
+			.expect("model form mounts");
+		let runtime = use_form(&form).build();
+		(form, runtime)
+	});
+	let mutation_scope = ReactiveScope::new();
+	let mutation_success_calls = Rc::new(Cell::new(0));
+	let mutation_success_calls_for_callback = Rc::clone(&mutation_success_calls);
+	let mutation = mutation_scope.enter(|| {
+		form.server_mutation(&runtime)
+			.on_success(move |_| {
+				mutation_success_calls_for_callback
+					.set(mutation_success_calls_for_callback.get() + 1);
+			})
+			.build()
+	});
+
+	let title = query_input(&root.0, "upload-form-title");
+	title.set_value("Report");
+	title
+		.dispatch_event(&web_sys::Event::new("input").expect("input event"))
+		.expect("dispatch title input");
+	select_file(
+		&query_input(&root.0, "upload-form-document"),
+		&document_file,
+	);
+	select_file(&query_input(&root.0, "upload-form-avatar"), &avatar_file);
+	defer_yield().await;
+
+	assert_eq!(mutation.dispatch(), MutationDispatchOutcome::Dispatched);
+	form_scope.dispose();
+	wait_for_requests(&fetch, 1).await;
+	for _ in 0..100 {
+		if mutation_success_calls.get() == 1 {
+			break;
+		}
+		TimeoutFuture::new(10).await;
+	}
+
+	assert_eq!(mutation_success_calls.get(), 1);
+	mutation_scope.dispose();
 }

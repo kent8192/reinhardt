@@ -89,3 +89,107 @@ note: required for `upload::marker` to implement `reinhardt_pages::form::ModelFo
    | #[server_fn]
    | ^^^^^^^^^^^^
    = note: this error originates in the attribute macro `server_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `reinhardt_pages::form::ModelFormPayloadSelection<UploadModelFormData<UploadPolicy>, UploadPolicy>: reinhardt_pages::form::ModelFormSelectionCount<3>` is not satisfied
+  --> tests/ui/form/fail/model_multipart_exclude.rs:19:14
+   |
+19 |       let _form = form! {
+   |  _________________^
+20 | |         name: UploadForm,
+21 | |         model: Upload,
+22 | |         policy: UploadPolicy,
+23 | |         exclude: [avatar],
+24 | |         server_fn: upload,
+25 | |     };
+   | |_____^ unsatisfied trait bound
+   |
+   = help: the trait `reinhardt_pages::form::ModelFormSelectionCount<3>` is not implemented for `reinhardt_pages::form::ModelFormPayloadSelection<UploadModelFormData<UploadPolicy>, UploadPolicy>`
+help: the trait `reinhardt_pages::form::ModelFormServerFn<__ReinhardtSelection, __ReinhardtSchema, __ReinhardtPolicy>` is implemented for `upload::marker`
+  --> tests/ui/form/fail/../model_multipart_support.rs
+   |
+   | #[server_fn]
+   | ^^^^^^^^^^^^
+note: required for `upload::marker` to implement `reinhardt_pages::form::ModelFormServerFn<reinhardt_pages::form::ModelFormPayloadSelection<UploadModelFormData<UploadPolicy>, UploadPolicy>, UploadFormSchema, UploadFormSelectionPolicy>`
+  --> tests/ui/form/fail/../model_multipart_support.rs
+   |
+   | #[server_fn]
+   | ^^^^^^^^^^^^
+   = note: this error originates in the macro `form` which comes from the expansion of the attribute macro `server_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `reinhardt_pages::form::ModelFormPayloadSelection<UploadModelFormData<UploadPolicy>, UploadPolicy>: reinhardt_pages::form::ModelFormSelectionArgument<0>` is not satisfied
+  --> tests/ui/form/fail/model_multipart_exclude.rs:19:14
+   |
+19 |       let _form = form! {
+   |  _________________^
+20 | |         name: UploadForm,
+21 | |         model: Upload,
+22 | |         policy: UploadPolicy,
+23 | |         exclude: [avatar],
+24 | |         server_fn: upload,
+25 | |     };
+   | |_____^ unsatisfied trait bound
+   |
+   = help: the trait `reinhardt_pages::form::ModelFormSelectionArgument<0>` is not implemented for `reinhardt_pages::form::ModelFormPayloadSelection<UploadModelFormData<UploadPolicy>, UploadPolicy>`
+help: the trait `reinhardt_pages::form::ModelFormServerFn<__ReinhardtSelection, __ReinhardtSchema, __ReinhardtPolicy>` is implemented for `upload::marker`
+  --> tests/ui/form/fail/../model_multipart_support.rs
+   |
+   | #[server_fn]
+   | ^^^^^^^^^^^^
+note: required for `upload::marker` to implement `reinhardt_pages::form::ModelFormServerFn<reinhardt_pages::form::ModelFormPayloadSelection<UploadModelFormData<UploadPolicy>, UploadPolicy>, UploadFormSchema, UploadFormSelectionPolicy>`
+  --> tests/ui/form/fail/../model_multipart_support.rs
+   |
+   | #[server_fn]
+   | ^^^^^^^^^^^^
+   = note: this error originates in the macro `form` which comes from the expansion of the attribute macro `server_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `reinhardt_pages::form::ModelFormPayloadSelection<UploadModelFormData<UploadPolicy>, UploadPolicy>: reinhardt_pages::form::ModelFormSelectionArgument<1>` is not satisfied
+  --> tests/ui/form/fail/model_multipart_exclude.rs:19:14
+   |
+19 |       let _form = form! {
+   |  _________________^
+20 | |         name: UploadForm,
+21 | |         model: Upload,
+22 | |         policy: UploadPolicy,
+23 | |         exclude: [avatar],
+24 | |         server_fn: upload,
+25 | |     };
+   | |_____^ unsatisfied trait bound
+   |
+   = help: the trait `reinhardt_pages::form::ModelFormSelectionArgument<1>` is not implemented for `reinhardt_pages::form::ModelFormPayloadSelection<UploadModelFormData<UploadPolicy>, UploadPolicy>`
+help: the trait `reinhardt_pages::form::ModelFormServerFn<__ReinhardtSelection, __ReinhardtSchema, __ReinhardtPolicy>` is implemented for `upload::marker`
+  --> tests/ui/form/fail/../model_multipart_support.rs
+   |
+   | #[server_fn]
+   | ^^^^^^^^^^^^
+note: required for `upload::marker` to implement `reinhardt_pages::form::ModelFormServerFn<reinhardt_pages::form::ModelFormPayloadSelection<UploadModelFormData<UploadPolicy>, UploadPolicy>, UploadFormSchema, UploadFormSelectionPolicy>`
+  --> tests/ui/form/fail/../model_multipart_support.rs
+   |
+   | #[server_fn]
+   | ^^^^^^^^^^^^
+   = note: this error originates in the macro `form` which comes from the expansion of the attribute macro `server_fn` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `reinhardt_pages::form::ModelFormPayloadSelection<UploadModelFormData<UploadPolicy>, UploadPolicy>: reinhardt_pages::form::ModelFormSelectionArgument<2>` is not satisfied
+  --> tests/ui/form/fail/model_multipart_exclude.rs:19:14
+   |
+19 |       let _form = form! {
+   |  _________________^
+20 | |         name: UploadForm,
+21 | |         model: Upload,
+22 | |         policy: UploadPolicy,
+23 | |         exclude: [avatar],
+24 | |         server_fn: upload,
+25 | |     };
+   | |_____^ unsatisfied trait bound
+   |
+   = help: the trait `reinhardt_pages::form::ModelFormSelectionArgument<2>` is not implemented for `reinhardt_pages::form::ModelFormPayloadSelection<UploadModelFormData<UploadPolicy>, UploadPolicy>`
+help: the trait `reinhardt_pages::form::ModelFormServerFn<__ReinhardtSelection, __ReinhardtSchema, __ReinhardtPolicy>` is implemented for `upload::marker`
+  --> tests/ui/form/fail/../model_multipart_support.rs
+   |
+   | #[server_fn]
+   | ^^^^^^^^^^^^
+note: required for `upload::marker` to implement `reinhardt_pages::form::ModelFormServerFn<reinhardt_pages::form::ModelFormPayloadSelection<UploadModelFormData<UploadPolicy>, UploadPolicy>, UploadFormSchema, UploadFormSelectionPolicy>`
+  --> tests/ui/form/fail/../model_multipart_support.rs
+   |
+   | #[server_fn]
+   | ^^^^^^^^^^^^
+   = note: this error originates in the macro `form` which comes from the expansion of the attribute macro `server_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

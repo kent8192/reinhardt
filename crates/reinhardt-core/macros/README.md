@@ -215,13 +215,14 @@ Provides compile-time code generation for common patterns.
   - Cleaner syntax without explicit `#[derive(Model)]`
   - Same attributes as `#[derive(Model)]`
   - Requires an explicit `app_label`
-  - Enables generated model-form schema and generic payload types only with the
-    explicit `form = true` opt-in
+  - `form = true` preserves the legacy generated model-form schema and generic
+    payload types
+  - `form(name = Contract, fields(field, ...))` generates one named,
+    target-neutral create-form contract from an explicit public field list
   - Defaults `table_name` to the app label plus struct name in snake_case without pluralization
   - Example: `#[model(app_label = "polls", form = true)]` generates
     `QuestionFormSchema`, `QuestionModelFormData<P>`, and
     `CleanedQuestionModelFormData<P>` for a `Question` model
-  - Models without `form = true` generate no model-form symbols
   - `#[form(validate = path)]` declares one synchronous validator over the
     generated cleaned payload
   - `#[form(trim)]` opts a generated text, email, or URL field into trimming;
@@ -231,9 +232,42 @@ Provides compile-time code generation for common patterns.
   - Native create code consumes raw payloads with `clean_and_validate()`, then
     uses cleaned `into_model(context)`; update code uses
     `clean_and_validate_for_update(&existing)` before `apply_to(existing)` so
-    synchronous cross-field validation observes the post-merge candidate
+    synchronous cross-field validation observes the post-merge candidate.
+    `apply_to` validates against its actual existing instance, preserving omitted
+    values even when the cleaned payload came from create validation.
+  - Create validation evaluates omitted model defaults once, then normalizes and
+    validates the resulting values before model construction. Cleaned payloads
+    retain these values across snapshots and persistence.
+  - Existing file references are read by Rust field name; model serde renaming
+    or skipped serialization does not change storage-reference validation
+  - Example: `#[model(app_label = "polls", form(name = QuestionCreateForm,
+    fields(text)))]` generates `QuestionCreateForm`,
+    `QuestionCreateFormData`, `QuestionCreateFormSchema`, and
+    `QuestionCreateFormField` on native and WASM; its hidden
+    `QuestionCreateFormPolicy` is an implementation detail
+  - Named forms accept selected `String`, numeric primitives, `bool`,
+    `rust_decimal::Decimal`, `uuid::Uuid`, `chrono::NaiveDate`,
+    `chrono::NaiveTime`, `chrono::NaiveDateTime`, `chrono::DateTime<chrono::Utc>`,
+    `serde_json::Value`, and one `Option<T>` layer. Relationships, generated
+    relationship identifiers, file/image fields, collections, and custom types
+    are rejected.
+  - Named payload JSON is strict: unknown or duplicate keys and incompatible
+    values fail deserialization. Only selected fields are serialized.
+  - Named data also implements `ModelFormValidatingPayload`: calling
+    `data.clean_and_validate()` on `QuestionCreateFormData` returns
+    `CleanedQuestionCreateFormData`. Declared defaults, opt-in trimming, field
+    constraints, and the synchronous validator share the same generated
+    pipeline on native and WASM. The callback receives
+    `&CleanedQuestionModelFormData<P>` on both targets; the cleaned named
+    payload exposes normalized getters and preserves default provenance when
+    converted back with `into_raw()`.
+  - Models without either form opt-in generate no model-form symbols
 
 - **`#[derive(Model)]`** - Derive macro for automatic Model implementation
+  - `#[model(...)]` forwards its configuration when paired with an explicit
+    `#[derive(Model)]`, including when the attribute appears first
+  - When the attribute appears first, use its fully qualified path to
+    disambiguate it from the derive helper attribute
   - Implements `Model` trait
   - Registers model with global ModelRegistry for migrations
   - Model attributes: `app_label`, `table_name`, `constraints`, `form`

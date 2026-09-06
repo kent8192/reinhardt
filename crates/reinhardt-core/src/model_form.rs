@@ -10,8 +10,9 @@ pub use policy::{
 	NativeModelFormPayload, normalize_native_model_form_value,
 };
 pub use schema::{
-	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPrimaryKey, ModelFormPrimaryKeyFields,
-	ModelFormSchema, ModelFormTableName,
+	ModelFormContract, ModelFormContractField, ModelFormContractSchema, ModelFormFieldDescriptor,
+	ModelFormFieldKind, ModelFormPrimaryKey, ModelFormPrimaryKeyFields, ModelFormSchema,
+	ModelFormTableName,
 };
 #[cfg(feature = "validators")]
 pub use validation::{

@@ -23,6 +23,8 @@ pub trait ModelFormCleanedPayload: Sized {
 ///
 /// This target-neutral P2 contract performs the same generated field and
 /// synchronous application validation on native and WASM targets.
+/// Omitted model defaults are evaluated before validation, and the cleaned
+/// payload retains the exact normalized values used by model construction.
 pub trait ModelFormValidatingPayload: Sized {
 	/// The normalized payload produced after successful validation.
 	///

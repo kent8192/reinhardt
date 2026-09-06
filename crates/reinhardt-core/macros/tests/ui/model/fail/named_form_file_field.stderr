@@ -1,0 +1,5 @@
+error: named model form field `attachment` has unsupported file or image type `FileField`
+ --> tests/ui/model/fail/named_form_file_field.rs:7:41
+  |
+7 |     form(name = DocumentCreateForm, fields(attachment))
+  |                                            ^^^^^^^^^^

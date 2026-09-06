@@ -876,13 +876,13 @@ mod tests {
 		}
 		if payload
 			.content()
-			.is_some_and(|content| content == "valid child")
-			&& payload.parent_id().is_some()
+			.is_some_and(|content| content == "blocked parent child")
+			&& payload.parent_id() == Some(&1)
 		{
 			errors.add(
 				"_all",
 				ValidationError::Custom(
-					"generated validation reran after parent key injection".to_owned(),
+					"generated child validation rejected the parent key".to_owned(),
 				),
 			);
 		}
@@ -906,8 +906,28 @@ mod tests {
 		id: Option<i64>,
 		#[rel(foreign_key, related_name = "required_child_models")]
 		parent: ForeignKeyField<TestModel>,
+		#[field(max_length = 100, editable = false)]
+		tenant_key: String,
 		#[field(max_length = 1_000)]
 		#[form(trim)]
+		content: String,
+	}
+
+	#[model(
+		app_label = "forms",
+		table_name = "advanced_formset_named_required_child_models",
+		form(name = RequiredChildCreateForm, fields(content)),
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
+	struct NamedRequiredChildModel {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		#[rel(foreign_key, related_name = "named_required_child_models")]
+		parent: ForeignKeyField<TestModel>,
+		#[field(max_length = 100, editable = false)]
+		tenant_key: String,
+		#[field(max_length = 1_000)]
 		content: String,
 	}
 
@@ -1072,6 +1092,15 @@ mod tests {
 		row
 	}
 
+	fn required_child_model_row(id: i64, parent_id: i64, content: &str) -> Row {
+		let mut row = child_model_row(id, parent_id, content);
+		row.insert(
+			"tenant_key".to_owned(),
+			QueryValue::String("tenant-a".to_owned()),
+		);
+		row
+	}
+
 	fn uuid_parent_row(id: uuid::Uuid, name: &str) -> Row {
 		let mut row = Row::new();
 		row.insert("id".to_owned(), QueryValue::Uuid(id));
@@ -1141,7 +1170,7 @@ mod tests {
 		let mut formset =
 			InlineFormSet::<TestModel, ChildModel>::new(parent, "parent_id".to_owned());
 		let mut data = ChildModelModelFormData::<AllEditableModelFields>::empty();
-		data.set_content("Child content".to_owned());
+		data.set_content("Child content".to_owned()).unwrap();
 		formset.add_child_form(ModelForm::from_payload(data));
 		let mut executor = FormsetExecutor::new([
 			Ok(test_model_row(1, "parent")),
@@ -1162,7 +1191,7 @@ mod tests {
 		let mut formset =
 			InlineFormSet::<TestModel, ChildModel>::for_create(parent, "parent_id".to_owned());
 		let mut data = ChildModelModelFormData::<AllEditableModelFields>::empty();
-		data.set_content("Child content".to_owned());
+		data.set_content("Child content".to_owned()).unwrap();
 		formset.add_child_form(ModelForm::from_payload(data));
 		let mut executor = FormsetExecutor::new([Ok(child_model_row(2, 1, "Child content"))]);
 
@@ -1187,7 +1216,7 @@ mod tests {
 		let mut formset =
 			InlineFormSet::<TestModel, ChildModel>::for_update(parent, "parent_id".to_owned());
 		let mut data = ChildModelModelFormData::<AllEditableModelFields>::empty();
-		data.set_content("Child content".to_owned());
+		data.set_content("Child content".to_owned()).unwrap();
 		formset.add_child_form(ModelForm::from_payload(data));
 
 		let children = formset.prepare_child_instances().unwrap();
@@ -1216,20 +1245,23 @@ mod tests {
 		);
 		let mut data = RequiredChildModelModelFormData::<AllEditableModelFields>::empty();
 		data.set_content(" prevalidated child ".to_owned()).unwrap();
-		formset.add_child_form(
-			ModelForm::<RequiredChildModel>::from_payload(data).with_model_validator(move |_| {
+		let mut child_form = ModelForm::<RequiredChildModel>::from_payload(data)
+			.with_model_validator(move |_| {
 				if validator_calls_for_candidate.fetch_add(1, Ordering::SeqCst) == 0 {
 					Ok(())
 				} else {
 					Err(vec!["child validation ran more than once".to_owned()])
 				}
-			}),
-		);
+			});
+		child_form
+			.set_trusted_field_value("tenant_key", json!("tenant-a"))
+			.unwrap();
+		formset.add_child_form(child_form);
 		let mut rows = Vec::new();
 		if save_parent {
 			rows.push(Ok(test_model_row(1, "parent")));
 		}
-		rows.push(Ok(child_model_row(2, 1, "prevalidated child")));
+		rows.push(Ok(required_child_model_row(2, 1, "prevalidated child")));
 		let mut executor = FormsetExecutor::new(rows);
 
 		// Act
@@ -1270,18 +1302,27 @@ mod tests {
 		let mut data = RequiredChildModelModelFormData::<AllEditableModelFields>::empty();
 		data.set_content(" valid child ".to_owned())
 			.expect("child content should be accepted");
-		formset.add_child_form(
-			ModelForm::<RequiredChildModel>::from_payload(data).with_model_validator(
-				move |candidate| {
-					validator_calls_for_candidate.fetch_add(1, Ordering::SeqCst);
-					if candidate.parent_id == 1 {
-						Ok(())
-					} else {
-						Err(vec!["parent key must be assigned".to_owned()])
-					}
-				},
-			),
-		);
+		let mut child_form = ModelForm::<RequiredChildModel>::from_payload(data)
+			.with_model_validator(move |candidate| {
+				validator_calls_for_candidate.fetch_add(1, Ordering::SeqCst);
+				if candidate.parent_id == 1 {
+					Ok(())
+				} else {
+					Err(vec!["parent key must be assigned".to_owned()])
+				}
+			});
+		child_form
+			.set_trusted_field_value("tenant_key", json!("tenant-a"))
+			.unwrap();
+		let cleaner_calls = Arc::new(AtomicUsize::new(0));
+		let cleaner_calls_for_field = Arc::clone(&cleaner_calls);
+		child_form
+			.form_mut()
+			.add_field_clean_function("content", move |value| {
+				cleaner_calls_for_field.fetch_add(1, Ordering::SeqCst);
+				Ok(json!(format!("{}-cleaned", value.as_str().unwrap())))
+			});
+		formset.add_child_form(child_form);
 		let structurally_valid = formset.is_valid();
 		assert_eq!(
 			formset.child_forms()[0].form().errors(),
@@ -1290,7 +1331,7 @@ mod tests {
 		assert_eq!(structurally_valid, true);
 		let mut executor = FormsetExecutor::new([
 			Ok(test_model_row(1, "parent")),
-			Ok(child_model_row(2, 1, "valid child")),
+			Ok(required_child_model_row(2, 1, "valid child-cleaned")),
 		]);
 
 		tokio_test::block_on(formset.save(&mut executor))
@@ -1299,13 +1340,14 @@ mod tests {
 		assert_eq!(formset.child_forms()[0].instance().unwrap().parent_id, 1);
 		assert_eq!(
 			formset.child_forms()[0].instance().unwrap().content,
-			"valid child"
+			"valid child-cleaned"
 		);
 		assert_eq!(validator_calls.load(Ordering::SeqCst), 1);
 		assert_eq!(
 			REQUIRED_CHILD_GENERATED_VALIDATOR_CALLS.load(Ordering::SeqCst),
-			1
+			2
 		);
+		assert_eq!(cleaner_calls.load(Ordering::SeqCst), 1);
 		assert_eq!(executor.fetch_one_calls, 2);
 	}
 
@@ -1329,12 +1371,15 @@ mod tests {
 		let mut data = RequiredChildModelModelFormData::<AllEditableModelFields>::empty();
 		data.set_content(" blocked child ".to_owned())
 			.expect("child content should be accepted");
-		formset.add_child_form(
-			ModelForm::<RequiredChildModel>::from_payload(data).with_model_validator(move |_| {
+		let mut child_form = ModelForm::<RequiredChildModel>::from_payload(data)
+			.with_model_validator(move |_| {
 				model_validator_calls_for_candidate.fetch_add(1, Ordering::SeqCst);
 				Ok(())
-			}),
-		);
+			});
+		child_form
+			.set_trusted_field_value("tenant_key", json!("tenant-a"))
+			.unwrap();
+		formset.add_child_form(child_form);
 		let mut executor = FormsetExecutor::new([Ok(test_model_row(1, "parent"))]);
 
 		// Act
@@ -1362,6 +1407,88 @@ mod tests {
 		);
 		assert_eq!(executor.fetch_one_calls, 0);
 		assert_eq!(executor.queries, Vec::<String>::new());
+	}
+
+	#[rstest]
+	#[serial(inline_generated_validator)]
+	fn test_inline_formset_generated_validator_rejects_assigned_parent_before_child_persistence() {
+		// Arrange
+		let _generated_validator_calls_reset =
+			AtomicUsizeResetGuard::new(&REQUIRED_CHILD_GENERATED_VALIDATOR_CALLS);
+		let mut formset = InlineFormSet::<TestModel, RequiredChildModel>::for_create(
+			TestModel {
+				id: None,
+				name: "parent".to_owned(),
+				email: "parent@example.com".to_owned(),
+			},
+			"parent_id".to_owned(),
+		);
+		let mut data = RequiredChildModelModelFormData::<AllEditableModelFields>::empty();
+		data.set_content(" blocked parent child ".to_owned())
+			.unwrap();
+		let mut child_form = ModelForm::<RequiredChildModel>::from_payload(data);
+		child_form
+			.set_trusted_field_value("tenant_key", json!("tenant-a"))
+			.unwrap();
+		formset.add_child_form(child_form);
+		let mut executor = FormsetExecutor::new([Ok(test_model_row(1, "parent"))]);
+
+		// Act
+		let error = tokio_test::block_on(formset.save(&mut executor))
+			.expect_err("generated validation must see the assigned parent key");
+
+		// Assert
+		assert_eq!(
+			error,
+			ModelFormError::FieldValidation {
+				errors: std::collections::HashMap::from([(
+					"_all".to_owned(),
+					vec!["generated child validation rejected the parent key".to_owned()],
+				)]),
+			}
+		);
+		assert_eq!(
+			REQUIRED_CHILD_GENERATED_VALIDATOR_CALLS.load(Ordering::SeqCst),
+			2
+		);
+		assert_eq!(
+			formset.child_forms()[0].form().errors().get("_all"),
+			Some(&vec![
+				"generated child validation rejected the parent key".to_owned()
+			]),
+		);
+		assert_eq!(executor.fetch_one_calls, 1);
+		assert_eq!(executor.queries.len(), 1);
+		assert_eq!(formset.child_forms()[0].instance().is_none(), true);
+	}
+
+	#[test]
+	fn test_inline_formset_preflight_rejects_invalid_trusted_child_value() {
+		let parent = TestModel {
+			id: None,
+			name: "parent".to_owned(),
+			email: "parent@example.com".to_owned(),
+		};
+		let mut formset = InlineFormSet::<TestModel, NamedRequiredChildModel>::for_create(
+			parent,
+			"parent_id".to_owned(),
+		);
+		let mut data = NamedRequiredChildModelModelFormData::<AllEditableModelFields>::empty();
+		data.set_content("child".to_owned())
+			.expect("child content should be accepted");
+		let mut child_form = ModelForm::<NamedRequiredChildModel>::from_payload(data);
+		child_form
+			.set_trusted_field_value("tenant_key", json!(7))
+			.expect("trusted values are decoded during candidate construction");
+		formset.add_child_form(child_form);
+
+		assert!(!formset.is_valid());
+		assert_eq!(
+			formset.child_forms()[0].form().errors().get("tenant_key"),
+			Some(&vec![
+				"invalid type: integer `7`, expected a string".to_owned()
+			])
+		);
 	}
 
 	#[rstest]
@@ -1428,7 +1555,7 @@ mod tests {
 		let mut formset =
 			InlineFormSet::<TestModel, UuidChild>::for_create(parent, "parent_id".to_owned());
 		let mut data = UuidChildModelFormData::<AllEditableModelFields>::empty();
-		data.set_content("child".to_owned());
+		data.set_content("child".to_owned()).unwrap();
 		formset.add_child_form(ModelForm::from_payload(data));
 		let mut executor = FormsetExecutor::new(Vec::<Result<Row, Error>>::new());
 
@@ -1453,7 +1580,7 @@ mod tests {
 		let mut formset =
 			InlineFormSet::<UuidParent, UuidChild>::for_create(parent, "parent_id".to_owned());
 		let mut data = UuidChildModelFormData::<AllEditableModelFields>::empty();
-		data.set_content("created child".to_owned());
+		data.set_content("created child".to_owned()).unwrap();
 		formset.add_child_form(ModelForm::from_payload(data));
 		let mut executor = FormsetExecutor::new([
 			Ok(uuid_parent_row(parent_id, "assigned")),
@@ -1607,8 +1734,8 @@ mod tests {
 	#[test]
 	fn test_model_formset_submitted_extra_is_persisted() {
 		let mut data = TestModelModelFormData::<AllEditableModelFields>::empty();
-		data.set_name("submitted".to_owned());
-		data.set_email("submitted@example.com".to_owned());
+		data.set_name("submitted".to_owned()).unwrap();
+		data.set_email("submitted@example.com".to_owned()).unwrap();
 		let mut formset = ModelFormSet::<TestModel>::new("test".to_owned());
 		formset.add_form(ModelForm::from_payload(data)).unwrap();
 		let mut executor = FormsetExecutor::new([Ok(test_model_row(7, "submitted"))]);
@@ -1646,8 +1773,8 @@ mod tests {
 	#[test]
 	fn test_model_formset_save_reuses_preflight_candidate() {
 		let mut data = TestModelModelFormData::<AllEditableModelFields>::empty();
-		data.set_name("candidate".to_owned());
-		data.set_email("candidate@example.com".to_owned());
+		data.set_name("candidate".to_owned()).unwrap();
+		data.set_email("candidate@example.com".to_owned()).unwrap();
 		let cleaner_calls = Arc::new(AtomicUsize::new(0));
 		let cleaner_calls_for_field = Arc::clone(&cleaner_calls);
 		let mut form = ModelForm::<TestModel>::from_payload(data);

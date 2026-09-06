@@ -1,6 +1,14 @@
 #![deny(unexpected_cfgs)]
 
+mod named_validation;
+mod validation_regressions;
+
+use decimal as rust_decimal;
+use identifier as uuid;
+use json as serde_json;
 use reinhardt::model;
+use time as chrono;
+
 use reinhardt_core::model_form::{
 	AllEditableModelFields, ModelFormFieldKind, ModelFormPayload, ModelFormSchema,
 	ModelFormUpdatingPayload, ModelFormValidatingPayload,
@@ -9,6 +17,10 @@ use reinhardt_core::validators::{ValidationError, ValidationErrors};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+use reinhardt::db::orm::{FileField, ImageField};
+
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FileField {
 	path: String,
@@ -16,6 +28,7 @@ pub struct FileField {
 	storage_alias: String,
 }
 
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ImageField {
 	path: String,
@@ -47,7 +60,7 @@ pub struct Job {
 }
 
 #[model(app_label = "forms", table_name = "forms", form = true, info = false)]
-#[derive(Default, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[form(validate = validate_form_project)]
 pub struct FormProject {
 	#[field(primary_key = true)]
@@ -147,10 +160,7 @@ fn validate_form_project<P: reinhardt_core::model_form::ModelFormPolicy>(
 			"_all",
 			ValidationError::Custom("Blocked project".to_owned()),
 		);
-		errors.add(
-			"title",
-			ValidationError::Custom("Blocked title".to_owned()),
-		);
+		errors.add("title", ValidationError::Custom("Blocked title".to_owned()));
 		Err(errors)
 	} else {
 		Ok(())
@@ -158,7 +168,7 @@ fn validate_form_project<P: reinhardt_core::model_form::ModelFormPolicy>(
 }
 
 fn validate_cluster<P: reinhardt_core::model_form::ModelFormPolicy>(
-	payload: &CleanedClusterModelFormData<P>,
+	payload: &CleanedValidationClusterModelFormData<P>,
 ) -> Result<(), ValidationErrors> {
 	if payload.name().is_none() || payload.api_url().is_none() {
 		MISSING_CLUSTER_VALIDATOR_CALLS.fetch_add(1, Ordering::SeqCst);
@@ -177,10 +187,15 @@ fn validate_cluster<P: reinhardt_core::model_form::ModelFormPolicy>(
 	}
 }
 
-#[model(app_label = "clusters", table_name = "clusters", form = true, info = false)]
+#[model(
+	app_label = "clusters",
+	table_name = "clusters",
+	form = true,
+	info = false
+)]
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[form(validate = validate_cluster)]
-struct Cluster {
+struct ValidationCluster {
 	#[field(primary_key = true)]
 	id: Option<i64>,
 	#[field(editable = false)]
@@ -195,9 +210,7 @@ struct Cluster {
 	notes: String,
 }
 
-fn reject_required_scalar_candidate<
-	P: reinhardt_core::model_form::ModelFormPolicy,
->(
+fn reject_required_scalar_candidate<P: reinhardt_core::model_form::ModelFormPolicy>(
 	_payload: &CleanedRequiredScalarRecordModelFormData<P>,
 ) -> Result<(), ValidationErrors> {
 	let mut errors = ValidationErrors::new();
@@ -309,9 +322,81 @@ pub fn model_form_datetime_payload_round_trips() -> bool {
 	)
 }
 
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+use reinhardt::db::associations::ForeignKeyField;
+
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+#[model(
+	app_label = "organizations",
+	table_name = "organizations",
+	info = false
+)]
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct Organization {
+	#[field(primary_key = true)]
+	pub id: i64,
+}
+
+#[model(
+	app_label = "clusters",
+	table_name = "clusters",
+	form(name = ClusterCreateForm, fields(name, api_url)),
+	info = false
+)]
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct Cluster {
+	#[field(primary_key = true)]
+	pub id: i64,
+
+	#[field(editable = false)]
+	#[rel(foreign_key, related_name = "clusters")]
+	pub organization: ForeignKeyField<Organization>,
+
+	#[field(min_length = 1, max_length = 63)]
+	pub name: String,
+
+	#[field(url = true, max_length = 2048, null = true)]
+	pub api_url: Option<String>,
+
+	pub tags: Vec<String>,
+}
+
+#[model(
+	app_label = "keywords",
+	table_name = "keyword_documents",
+	form(name = RawIdentifierCreateForm, fields(r#type)),
+	info = false
+)]
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct RawIdentifierDocument {
+	#[field(primary_key = true)]
+	pub id: i64,
+	#[field(max_length = 32)]
+	pub r#type: String,
+}
+
+#[model(
+	app_label = "scalar_documents",
+	table_name = "scalar_documents",
+	form(name = ScalarCreateForm, fields(price, external_id, day, metadata)),
+	info = false
+)]
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ScalarDocument {
+	#[field(primary_key = true)]
+	pub id: i64,
+	pub price: rust_decimal::Decimal,
+	pub external_id: uuid::Uuid,
+	pub day: chrono::NaiveDate,
+	pub metadata: serde_json::Value,
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use reinhardt_core::model_form::{
+		ModelFormContract, ModelFormContractField, ModelFormContractSchema,
+	};
 	use rstest::rstest;
 	use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -321,13 +406,9 @@ mod tests {
 			"Ensure this value is greater than or equal to 1",
 		),
 		("ratio", "Ensure this value is less than or equal to 10"),
-		(
-			"amount",
-			"Ensure this value is greater than or equal to 1",
-		),
+		("amount", "Ensure this value is greater than or equal to 1"),
 	];
-	const PARITY_EMAIL_ERRORS: &[(&str, &str)] =
-		&[("email", "Enter a valid email address")];
+	const PARITY_EMAIL_ERRORS: &[(&str, &str)] = &[("email", "Enter a valid email address")];
 	const PARITY_URL_ERRORS: &[(&str, &str)] = &[("api_url", "Enter a valid URL")];
 	const PARITY_JSON_DEPTH_ERRORS: &[(&str, &str)] =
 		&[("config", "JSON structure is too deeply nested.")];
@@ -343,12 +424,9 @@ mod tests {
 		"avatar",
 		"Stored file references must come from the existing instance",
 	)];
-	const PARITY_FORBIDDEN_ERRORS: &[(&str, &str)] =
-		&[("email", "This field is not allowed.")];
-	const PARITY_CROSS_FIELD_ERRORS: &[(&str, &str)] = &[
-		("title", "Blocked title"),
-		("_all", "Blocked project"),
-	];
+	const PARITY_FORBIDDEN_ERRORS: &[(&str, &str)] = &[("email", "This field is not allowed.")];
+	const PARITY_CROSS_FIELD_ERRORS: &[(&str, &str)] =
+		&[("title", "Blocked title"), ("_all", "Blocked project")];
 
 	fn expected_errors(expected: &[(&str, &str)]) -> Vec<(String, String)> {
 		expected
@@ -361,21 +439,19 @@ mod tests {
 		errors
 			.ordered_field_errors()
 			.flat_map(|(field, errors)| {
-				errors
-					.iter()
-					.map(move |error| {
-						let message = match error {
-							ValidationError::Custom(message) => message.clone(),
-							_ => error.to_string(),
-						};
-						(field.to_owned(), message)
-					})
+				errors.iter().map(move |error| {
+					let message = match error {
+						ValidationError::Custom(message) => message.clone(),
+						_ => error.to_string(),
+					};
+					(field.to_owned(), message)
+				})
 			})
 			.collect()
 	}
 
-	fn cluster_payload(name: &str, api_url: &str) -> ClusterModelFormData<ClusterPolicy> {
-		let mut payload = ClusterModelFormData::<ClusterPolicy>::empty();
+	fn cluster_payload(name: &str, api_url: &str) -> ValidationClusterModelFormData<ClusterPolicy> {
+		let mut payload = ValidationClusterModelFormData::<ClusterPolicy>::empty();
 		payload
 			.set_name(name.to_owned())
 			.expect("cluster name should be editable");
@@ -389,7 +465,7 @@ mod tests {
 	}
 
 	fn cluster_validation_errors<P: reinhardt_core::model_form::ModelFormPolicy>(
-		payload: ClusterModelFormData<P>,
+		payload: ValidationClusterModelFormData<P>,
 	) -> ValidationErrors {
 		match payload.clean_and_validate() {
 			Ok(_) => panic!("cluster payload should fail validation"),
@@ -422,8 +498,14 @@ mod tests {
 				.and_hms_opt(12, 30, 0)
 				.unwrap(),
 			token: uuid::Uuid::nil(),
-			document: FileField::default(),
-			avatar: ImageField::default(),
+			document: serde_json::from_value(
+				serde_json::json!({"path": "documents/baseline.pdf", "storage": "default"}),
+			)
+			.unwrap(),
+			avatar: serde_json::from_value(
+				serde_json::json!({"path": "images/baseline.png", "storage": "default"}),
+			)
+			.unwrap(),
 		}
 	}
 
@@ -600,13 +682,13 @@ mod tests {
 		assert_eq!(cleaned.email(), Some(&"person@example.com".to_owned()));
 		assert_eq!(cleaned.quantity(), Some(&5));
 		assert_eq!(cleaned.ratio(), Some(&5.5));
-		assert_eq!(
-			cleaned.amount(),
-			Some(&rust_decimal::Decimal::new(55, 1))
-		);
+		assert_eq!(cleaned.amount(), Some(&rust_decimal::Decimal::new(55, 1)));
 		assert_eq!(cleaned.nullable_note(), None);
 		assert_eq!(cleaned.nullable_flag(), None);
-		assert_eq!(cleaned.config(), Some(&serde_json::json!({"nested": [true]})));
+		assert_eq!(
+			cleaned.config(),
+			Some(&serde_json::json!({"nested": [true]}))
+		);
 		assert_eq!(cleaned.published(), Some(&false));
 		assert_eq!(
 			cleaned.event_date(),
@@ -673,9 +755,7 @@ mod tests {
 		}
 
 		let mut multiple = FormProjectModelFormData::<AllEditableModelFields>::empty();
-		multiple
-			.set_title("ab".to_owned())
-			.expect("editable title");
+		multiple.set_title("ab".to_owned()).expect("editable title");
 		multiple
 			.set_api_url("not a URL".to_owned())
 			.expect("editable URL");
@@ -691,8 +771,7 @@ mod tests {
 			["title", "api_url"]
 		);
 
-		let mut explicit_null =
-			FormProjectModelFormData::<AllEditableModelFields>::empty();
+		let mut explicit_null = FormProjectModelFormData::<AllEditableModelFields>::empty();
 		explicit_null
 			.set_json("nullable_note", serde_json::Value::Null)
 			.expect("nullable value should accept an explicit clear");
@@ -745,11 +824,7 @@ mod tests {
 
 		for (field, value, expected) in [
 			("email", "person@localhost", PARITY_EMAIL_ERRORS),
-			(
-				"api_url",
-				"https://example.com:123456/",
-				PARITY_URL_ERRORS,
-			),
+			("api_url", "https://example.com:123456/", PARITY_URL_ERRORS),
 		] {
 			let mut payload = FormProjectModelFormData::<AllEditableModelFields>::empty();
 			payload
@@ -767,7 +842,9 @@ mod tests {
 			deep = serde_json::Value::Array(vec![deep]);
 		}
 		let mut json_depth = FormProjectModelFormData::<AllEditableModelFields>::empty();
-		json_depth.set_config(deep).expect("JSON should be editable");
+		json_depth
+			.set_config(deep)
+			.expect("JSON should be editable");
 		let errors = match json_depth.clean_and_validate_for_update(&existing) {
 			Ok(_) => panic!("deep JSON should match native rejection"),
 			Err(errors) => errors,
@@ -805,10 +882,10 @@ mod tests {
 		);
 
 		let mut existing_with_document = existing.clone();
-		existing_with_document.document = FileField {
-			path: "documents/existing.pdf".to_owned(),
-			storage_alias: "default".to_owned(),
-		};
+		existing_with_document.document = serde_json::from_value::<FileField>(
+			serde_json::json!({"path": "documents/existing.pdf", "storage": "default"}),
+		)
+		.expect("valid stored reference");
 		let mut existing_document = FormProjectModelFormData::<AllEditableModelFields>::empty();
 		existing_document
 			.set_document(existing_with_document.document.clone())
@@ -816,17 +893,16 @@ mod tests {
 		let cleaned = existing_document
 			.clean_and_validate_for_update(&existing_with_document)
 			.expect("the existing stored file reference should be trusted");
-		assert_eq!(
-			cleaned.document(),
-			Some(&existing_with_document.document)
-		);
+		assert_eq!(cleaned.document(), Some(&existing_with_document.document));
 
 		let mut document = FormProjectModelFormData::<AllEditableModelFields>::empty();
 		document
-			.set_document(FileField {
-				path: "documents/report.pdf".to_owned(),
-				storage_alias: "default".to_owned(),
-			})
+			.set_document(
+				serde_json::from_value::<FileField>(
+					serde_json::json!({"path": "documents/report.pdf", "storage": "default"}),
+				)
+				.expect("valid stored reference"),
+			)
 			.expect("stored reference should be editable");
 		let errors = match document.clean_and_validate_for_update(&existing) {
 			Ok(_) => panic!("untrusted file reference should match native rejection"),
@@ -836,10 +912,12 @@ mod tests {
 
 		let mut avatar = FormProjectModelFormData::<AllEditableModelFields>::empty();
 		avatar
-			.set_avatar(ImageField {
-				path: "images/avatar.png".to_owned(),
-				storage_alias: "default".to_owned(),
-			})
+			.set_avatar(
+				serde_json::from_value::<ImageField>(
+					serde_json::json!({"path": "images/avatar.png", "storage": "default"}),
+				)
+				.expect("valid stored reference"),
+			)
 			.expect("stored image reference should be editable");
 		let errors = match avatar.clean_and_validate_for_update(&existing) {
 			Ok(_) => panic!("untrusted image reference should match native rejection"),
@@ -863,8 +941,7 @@ mod tests {
 			expected_errors(PARITY_CROSS_FIELD_ERRORS)
 		);
 
-		let mut field_before_cross =
-			FormProjectModelFormData::<AllEditableModelFields>::empty();
+		let mut field_before_cross = FormProjectModelFormData::<AllEditableModelFields>::empty();
 		field_before_cross
 			.set_title("blocked".to_owned())
 			.expect("editable title");
@@ -889,13 +966,12 @@ mod tests {
 				field == "title"
 			}
 		}
-		let forbidden: FormProjectModelFormData<TitleOnly> = serde_json::from_value(
-			serde_json::json!({
+		let forbidden: FormProjectModelFormData<TitleOnly> =
+			serde_json::from_value(serde_json::json!({
 				"title": "blocked",
 				"email": "person@example.com",
-			}),
-		)
-		.expect("known forbidden field should be recorded");
+			}))
+			.expect("known forbidden field should be recorded");
 		let errors = match forbidden.clean_and_validate() {
 			Ok(_) => panic!("forbidden field should reject before the callback"),
 			Err(errors) => errors,
@@ -938,7 +1014,7 @@ mod tests {
 	#[wasm_bindgen_test]
 	fn generated_create_and_update_semantics_match_the_server_boundary_in_wasm_runtime() {
 		MISSING_CLUSTER_VALIDATOR_CALLS.store(0, Ordering::SeqCst);
-		let mut create = ClusterModelFormData::<ClusterPolicy>::empty();
+		let mut create = ValidationClusterModelFormData::<ClusterPolicy>::empty();
 		create
 			.set_api_url("https://example.com".to_owned())
 			.expect("cluster API URL should be editable");
@@ -956,14 +1032,14 @@ mod tests {
 		);
 		assert_eq!(MISSING_CLUSTER_VALIDATOR_CALLS.load(Ordering::SeqCst), 0);
 
-		let existing = Cluster {
+		let existing = ValidationCluster {
 			id: Some(42),
 			organization_id: 19,
 			name: "original".to_owned(),
 			api_url: "https://same.example.com".to_owned(),
 			notes: "preserve me".to_owned(),
 		};
-		let mut update = ClusterModelFormData::<ClusterPolicy>::empty();
+		let mut update = ValidationClusterModelFormData::<ClusterPolicy>::empty();
 		update
 			.set_name("https://same.example.com".to_owned())
 			.expect("cluster name should be editable");
@@ -973,18 +1049,14 @@ mod tests {
 		};
 		assert_eq!(
 			error_tuples(&update_errors),
-			vec![(
-				"_all".to_owned(),
-				"Name and API URL must differ".to_owned(),
-			)]
+			vec![("_all".to_owned(), "Name and API URL must differ".to_owned(),)]
 		);
 	}
 
 	#[rstest]
 	#[wasm_bindgen_test]
 	fn generated_required_scalars_use_canonical_create_errors_in_wasm_runtime() {
-		let payload =
-			RequiredScalarRecordModelFormData::<AllEditableModelFields>::empty();
+		let payload = RequiredScalarRecordModelFormData::<AllEditableModelFields>::empty();
 		let errors = match payload.clean_and_validate() {
 			Ok(_) => panic!("omitted required scalars must fail before the callback"),
 			Err(errors) => errors,
@@ -1009,7 +1081,10 @@ mod tests {
 		.clean_and_validate()
 		.expect("normalized cluster boundary values should validate");
 		assert_eq!(cleaned.name(), Some(&"n".repeat(63)));
-		assert_eq!(cleaned.api_url(), Some(&"https://example.com/api".to_owned()));
+		assert_eq!(
+			cleaned.api_url(),
+			Some(&"https://example.com/api".to_owned())
+		);
 		assert_eq!(cleaned.notes(), Some(&"  preserve whitespace  ".to_owned()));
 
 		for (name, api_url, expected) in [
@@ -1040,19 +1115,15 @@ mod tests {
 		));
 		assert_eq!(
 			error_tuples(&errors),
-			vec![(
-				"_all".to_owned(),
-				"Name and API URL must differ".to_owned(),
-			)]
+			vec![("_all".to_owned(), "Name and API URL must differ".to_owned(),)]
 		);
 
-		let forbidden: ClusterModelFormData<ClusterNameOnlyPolicy> = serde_json::from_value(
-			serde_json::json!({
+		let forbidden: ValidationClusterModelFormData<ClusterNameOnlyPolicy> =
+			serde_json::from_value(serde_json::json!({
 				"name": "https://example.com",
 				"api_url": "https://example.com",
-			}),
-		)
-		.expect("known forbidden field should retain rejection evidence");
+			}))
+			.expect("known forbidden field should retain rejection evidence");
 		let errors = cluster_validation_errors(forbidden);
 		assert_eq!(
 			error_tuples(&errors),
@@ -1070,7 +1141,9 @@ mod tests {
 				.expect("cluster payload should be an object")
 				.insert(rejected_field.to_owned(), serde_json::json!(true));
 
-			let error = match serde_json::from_value::<ClusterModelFormData<ClusterPolicy>>(value) {
+			let error = match serde_json::from_value::<ValidationClusterModelFormData<ClusterPolicy>>(
+				value,
+			) {
 				Ok(_) => panic!("untrusted field should be rejected"),
 				Err(error) => error,
 			};
@@ -1081,5 +1154,60 @@ mod tests {
 				)
 			);
 		}
+	}
+	#[wasm_bindgen_test]
+	fn generated_named_contract_executes_in_wasm_runtime() {
+		assert_eq!(
+			<ClusterCreateFormSchema as ModelFormContractSchema>::contract_fields()
+				.iter()
+				.map(|field| field.name)
+				.collect::<Vec<_>>(),
+			["name", "api_url"],
+		);
+		assert_eq!(
+			<ClusterCreateForm as ModelFormContract>::fields(),
+			[ClusterCreateFormField::Name, ClusterCreateFormField::ApiUrl],
+		);
+		assert_eq!(ClusterCreateFormField::Name.name(), "name");
+
+		let mut payload = ClusterCreateFormData::default();
+		payload.set_name("cluster-a".to_owned());
+		payload.set_api_url(None);
+		assert_eq!(payload.supplied_fields(), ["name", "api_url"]);
+		assert_eq!(
+			serde_json::to_value(&payload).expect("named contract should serialize in WASM"),
+			serde_json::json!({ "name": "cluster-a", "api_url": null }),
+		);
+		assert_eq!(
+			<RawIdentifierCreateFormSchema as ModelFormContractSchema>::contract_fields()
+				.iter()
+				.map(|field| field.name)
+				.collect::<Vec<_>>(),
+			["type"],
+		);
+		assert_eq!(RawIdentifierCreateFormField::Type.name(), "type");
+		assert_eq!(RawIdentifierCreateForm::r#type().name, "type");
+		let mut raw_payload = RawIdentifierCreateFormData::default();
+		raw_payload.set_type("json".to_owned());
+		assert_eq!(raw_payload.supplied_fields(), ["type"]);
+		assert_eq!(
+			serde_json::to_value(raw_payload).expect("raw identifier payload should serialize"),
+			serde_json::json!({ "type": "json" }),
+		);
+		assert_eq!(
+			<ScalarCreateFormSchema as ModelFormContractSchema>::contract_fields()
+				.iter()
+				.map(|field| field.kind)
+				.collect::<Vec<_>>(),
+			[
+				ModelFormFieldKind::Decimal {
+					min: None,
+					max: None,
+				},
+				ModelFormFieldKind::Uuid,
+				ModelFormFieldKind::Date,
+				ModelFormFieldKind::Json,
+			],
+		);
 	}
 }

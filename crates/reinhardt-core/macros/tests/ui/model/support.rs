@@ -143,6 +143,48 @@ pub mod model_form {
 		}
 	}
 
+	pub trait ModelFormContractSchema {
+		fn contract_fields() -> &'static [ModelFormFieldDescriptor];
+		fn contract_default_boolean_is_true(_field: &str) -> bool {
+			false
+		}
+		fn contract_relation_target_matches<T: 'static>(_field: &str) -> bool {
+			false
+		}
+	}
+
+	impl<S: ModelFormSchema> ModelFormContractSchema for S {
+		fn contract_fields() -> &'static [ModelFormFieldDescriptor] {
+			<S as ModelFormSchema>::fields()
+		}
+
+		fn contract_default_boolean_is_true(field: &str) -> bool {
+			<S as ModelFormSchema>::default_boolean_is_true(field)
+		}
+
+		fn contract_relation_target_matches<T: 'static>(field: &str) -> bool {
+			<S as ModelFormSchema>::relation_target_matches::<T>(field)
+		}
+	}
+
+	pub trait ModelFormContractField:
+		Copy + Eq + core::hash::Hash + core::fmt::Debug + 'static
+	{
+		fn name(self) -> &'static str;
+	}
+
+	pub trait ModelFormContract: 'static {
+		type Data: Default
+			+ ModelFormPayload<Self::Policy>
+			+ serde::Serialize
+			+ serde::de::DeserializeOwned;
+		type Schema: ModelFormContractSchema;
+		type Field: ModelFormContractField;
+		type Policy: ModelFormPolicy;
+
+		fn fields() -> &'static [Self::Field];
+	}
+
 	pub trait ModelFormTableName {
 		fn table_name() -> &'static str;
 	}
@@ -156,6 +198,22 @@ pub mod model_form {
 			field: &str,
 			value: serde_json::Value,
 		) -> Result<(), ModelFormPayloadError>;
+		fn clear_json(&mut self, field: &str) -> Result<(), ModelFormPayloadError> {
+			Err(ModelFormPayloadError::UnknownField {
+				field: field.to_owned(),
+			})
+		}
+		fn apply_defaults(&mut self) {}
+		fn is_defaulted(&self, _field: &str) -> bool {
+			false
+		}
+		fn set_normalized_json(
+			&mut self,
+			field: &str,
+			value: serde_json::Value,
+		) -> Result<(), ModelFormPayloadError> {
+			self.set_json(field, value)
+		}
 	}
 
 	pub trait NativeModelFormPayload: Sized {
@@ -167,11 +225,11 @@ pub mod model_form {
 		mut value: serde_json::Value,
 	) -> Result<serde_json::Value, serde_json::Error>
 	where
-		S: ModelFormSchema,
+		S: ModelFormContractSchema,
 		P: ModelFormPolicy,
 	{
 		if let serde_json::Value::Object(values) = &mut value {
-			for descriptor in S::fields() {
+			for descriptor in S::contract_fields() {
 				if descriptor.editable
 					&& P::allows(descriptor.name)
 					&& matches!(descriptor.kind, ModelFormFieldKind::Boolean)
@@ -193,9 +251,11 @@ pub mod model_form {
 			multiline: bool,
 		},
 		Email {
+			min_length: Option<usize>,
 			max_length: Option<usize>,
 		},
 		Url {
+			min_length: Option<usize>,
 			max_length: Option<usize>,
 		},
 		Integer {
@@ -206,7 +266,10 @@ pub mod model_form {
 			min: Option<f64>,
 			max: Option<f64>,
 		},
-		Decimal,
+		Decimal {
+			min: Option<&'static str>,
+			max: Option<&'static str>,
+		},
 		Boolean,
 		Date,
 		Time,
@@ -1162,12 +1225,23 @@ pub mod db {
 			};
 		}
 
+		#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+		pub struct Decimal(pub i64);
+
 		scalar_codec!(bool, Bool);
 		scalar_codec!(i32, I32);
 		scalar_codec!(i64, I64);
+		scalar_codec!(f32, F32);
+		scalar_codec!(f64, F64);
 		scalar_codec!(String, String);
+		scalar_codec!(Decimal, Decimal);
+		scalar_codec!(rust_decimal::Decimal, Decimal);
+		scalar_codec!(uuid::Uuid, Uuid);
+		scalar_codec!(chrono::NaiveDate, Date);
+		scalar_codec!(chrono::NaiveTime, Time);
 		scalar_codec!(chrono::DateTime<chrono::Utc>, DateTime);
 		scalar_codec!(chrono::NaiveDateTime, DateTime);
+		scalar_codec!(serde_json::Value, Json);
 
 		impl<S: DatabaseScalar> DatabaseScalar for Option<S> {
 			const STORAGE_KIND: DatabaseStorageKind = S::STORAGE_KIND;

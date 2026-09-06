@@ -61,9 +61,9 @@
 //! | `pagination` | disabled | Pagination strategies |
 //! | `negotiation` | disabled | HTTP content negotiation |
 //! | `messages` | disabled | Flash message storage |
-//! | `page` | disabled | Server-side page rendering types (enables `security`) |
+//! | `page` | disabled | Page rendering types and URL-attribute safety checks; enables `security` |
 //! | `reactive` | disabled | Reactive state management |
-//! | `serde` | disabled | Serde serialization support |
+//! | `serde` | compatibility | Serde is an unconditional dependency; this feature gates only legacy module exports and derives |
 //! | `json` | disabled | JSON serialization support |
 //! | `xml` | disabled | XML serialization support |
 //! | `yaml` | disabled | YAML serialization support |

@@ -30,12 +30,12 @@ the database contract requires a different name.
 
 ### MU-1 (SHOULD): Do Not Combine with `#[derive(Model)]`
 
-The `#[model(...)]` attribute macro automatically applies `#[derive(Model)]` internally. If `#[derive(Model)]` is *also* written on the same struct, the attribute macro detects this and returns the input unchanged (the existing derive then handles the macro logic). Compilation succeeds today, but the explicit `Model` derive becomes redundant noise that obscures intent.
+The `#[model(...)]` attribute macro automatically applies `#[derive(Model)]` internally. If `#[derive(Model)]` is *also* written on the same struct, the attribute macro preserves the existing derive and forwards its configuration through a helper attribute. Compilation succeeds today, but the explicit `Model` derive becomes redundant noise that obscures intent.
 
 **Rule:**
 - When using `#[model(...)]`, **prefer not** to also write `#[derive(Model)]` on the same struct — the attribute applies it for you.
 - Add other derives that `#[model(...)]` does not provide via a separate `#[derive(...)]` (e.g., `Debug`, `Clone`, `serde::Serialize`).
-- Existing code that combines both is supported and does not need an immediate fix; new code should follow the canonical form.
+- Existing code that combines both is supported and does not need an immediate fix; use a fully qualified path for the active attribute when retaining the explicit derive, and follow the canonical form in new code.
 
 **Examples:**
 
@@ -48,8 +48,8 @@ pub struct Person {
     pub name: String,
 }
 
-// ⚠️ Redundant but supported — Model derive duplicates what #[model(...)] applies
-#[model(app_label = "people", table_name = "people")]
+// ⚠️ Redundant but supported — qualify the active attribute macro
+#[reinhardt::model(app_label = "people", table_name = "people")]
 #[derive(Debug, Clone, Model)]
 pub struct Person {
     pub id: i64,

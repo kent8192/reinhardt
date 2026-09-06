@@ -700,6 +700,12 @@ where
 {
 	let cache_id = loader_cache_id_with_optional_queries(id, context, specs, optional_query_inputs)
 		.map_err(|error| RouteLoaderError::with_status(error.to_string(), 400))?;
+	if client.hydration_is_blocked() {
+		return Err(RouteLoaderError::with_status(
+			"route loader hydration is blocked after an authentication change",
+			409,
+		));
+	}
 	let query_state = hydration.get_resource_state(&cache_id).ok_or_else(|| {
 		RouteLoaderError::with_status(
 			format!(

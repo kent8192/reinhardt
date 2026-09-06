@@ -125,6 +125,13 @@ use reinhardt::forms::{Form, Field, CharField, IntegerField};
   - Database-free, cached `build_instance()` candidate construction
   - Caller-owned asynchronous `save(executor)` persistence
   - Structured `ModelFormError`, including retained database errors
+- **Named target-neutral contracts**: `#[model(form(name = Contract,
+  fields(field, ...)))]` emits a concrete selected-field payload and schema on
+  native and WASM, plus a native-only `Contract::model_form(data)` adapter to
+  `ModelForm<T, ContractPolicy>`. Selected fields are limited to `String`,
+  `bool`, `i32`, `i64`, `f32`, `f64`, `rust_decimal::Decimal`, `uuid::Uuid`,
+  the supported `chrono` date/time types, `serde_json::Value`, and one
+  `Option<T>` layer.
 
 Public JSON fields denied by the active policy are recorded during
 deserialization and rejected by native candidate construction. Hiding a field
@@ -165,6 +172,8 @@ setter to supply an excluded editable value from a trusted source.
     and persistence; supplied or forbidden input marks an extra as submitted
   - Inline parent persistence uses explicit `InlineFormSet::for_create` or
     `InlineFormSet::for_update` intent
+  - Child preflight defers the generated parent key while decoding and applying
+    every trusted server-owned field already registered on the child form
 
 ### Advanced Features
 
@@ -407,8 +416,15 @@ were supplied. Explicit nullable `null` values remain clears rather than being
 replaced from the existing model.
 
 Generated string-like fields preserve surrounding whitespace unless their
-model field has `#[form(trim)]`. This does not change the defaults of manually
-constructed `CharField`, `EmailField`, or `URLField` values.
+model field has `#[form(trim)]`. Whitespace-only optional input then follows the
+same empty-control rules: nullable fields are cleared, while defaulted fields
+use their declared default on create and preserve omission on update. This does
+not change the defaults of manually constructed `CharField`, `EmailField`, or
+`URLField` values.
+
+Declared model defaults may provide trusted storage references. Submitted
+File/Image references must match the existing Rust model field, independent
+of model serialization attributes.
 
 `build_instance()` is the equivalent of Django's `commit=False`: it validates
 and caches a model candidate without database access. Repeated calls and a
@@ -417,6 +433,10 @@ Retrying model validation replaces earlier errors without rerunning field
 cleaners for an unchanged payload.
 Inline formsets also retain prevalidated child candidates when the trusted
 parent key is unchanged, so saving the parent does not rerun child validation.
+When a generated key becomes available, public relationship values are installed
+in the cleaned child payload and generated validation runs again before the
+child is persisted. Custom field cleaners retain their normalized snapshot.
+Other trusted child values are type-checked before the parent is persisted.
 Mutations made directly to the returned clone after `build_instance()` are the
 caller's validation responsibility.
 
@@ -428,6 +448,47 @@ write failed, while `ModelFormError::PersistenceAfterCreate` means the insert
 succeeded but hydration failed. Do not retry the latter as another create;
 reload the persisted record before updating it. `database_error()` returns the
 structured `DatabaseError` from either variant.
+
+### Named target-neutral ModelForm contract
+
+Use a nested `form(...)` declaration when a browser and native server should
+share one selected create payload without compiling the ORM model on WASM:
+
+```rust,ignore
+#[model(
+    app_label = "polls",
+    form(name = QuestionCreateForm, fields(text))
+)]
+struct Question {
+    #[field(primary_key = true)]
+    id: Option<i64>,
+    #[field(max_length = 200)]
+    text: String,
+    #[rel(foreign_key, related_name = "questions")]
+    owner: ForeignKeyField<User>,
+}
+
+let mut data = QuestionCreateFormData::default();
+data.set_text("Which framework should we use?".to_owned());
+
+let mut form = QuestionCreateForm::model_form(data);
+form.set_trusted_field_value("owner_id", serde_json::json!(owner_id))?;
+let candidate = form.build_instance()?;
+```
+
+The macro emits `QuestionCreateForm`, `QuestionCreateFormData`,
+`QuestionCreateFormSchema`, and `QuestionCreateFormField` on both targets.
+The data type has infallible typed setters and serializes only selected fields;
+its JSON deserializer rejects unknown keys, duplicate keys, and wrong value
+types. For a nullable selected field, an explicit JSON `null` is preserved
+separately from an omitted field.
+
+`model_form(data)` and `ModelForm::set_trusted_field_value` are native-only
+bridges. Use them only after server-side authentication or authorization has
+selected a tenant, relationship identifier, or other server-owned value. The
+trusted bridge does not add a field to the public payload, and it cannot change
+a primary key when updating an existing instance. `form = true` and the legacy
+generic `ModelForm` API remain supported.
 
 ### Custom Validation
 

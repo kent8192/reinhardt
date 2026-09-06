@@ -903,6 +903,13 @@ fn add_native_mock_probe(
 	regular_params: &[&syn::PatType],
 	pages_crate_info: &CratePathInfo,
 ) -> Result<ItemFn, proc_macro2::TokenStream> {
+	// Restricted functions intentionally do not emit the public MSW `Args`
+	// metadata. Keep the native function free of the matching probe as well;
+	// otherwise the probe would reference an `Args` type that was not emitted.
+	if !info.emits_typed_response_metadata() {
+		return Ok(clean_func.clone());
+	}
+
 	let mut param_idents = Vec::new();
 	for param in regular_params {
 		let syn::Pat::Ident(pat_ident) = &*param.pat else {
@@ -1245,6 +1252,8 @@ fn generate_client_stub(
 				let __form_data = #pages_crate::__private::web_sys::FormData::new()
 					.map_err(|error| #pages_crate::server_fn::ServerFnError::network(format!("{error:?}")))?;
 				#(#multipart_append_code)*
+				let __authentication_context =
+					#pages_crate::auth::server_fn_authentication_context();
 
 				let __response = #pages_crate::server_fn::request_multipart(
 					#endpoint,
@@ -1255,6 +1264,10 @@ fn generate_client_stub(
 
 				if !__response.is_success() {
 					let __status = __response.status();
+					#pages_crate::auth::observe_server_fn_status_for_request(
+						__status,
+						__authentication_context,
+					);
 					let __message = __response.into_text();
 					#error_decode_code
 				}
@@ -1339,6 +1352,8 @@ fn generate_client_stub(
 
 			let mut __headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)> =
 				::std::vec![("Content-Type".to_string(), #content_type.to_string())];
+			let __authentication_context =
+				#pages_crate::auth::server_fn_authentication_context();
 
 			#csrf_injection_code
 			#auth_injection_code
@@ -1357,6 +1372,10 @@ fn generate_client_stub(
 			// Check HTTP status
 			if !__response.is_success() {
 				let __status = __response.status();
+				#pages_crate::auth::observe_server_fn_status_for_request(
+					__status,
+					__authentication_context,
+				);
 				let __message = __response.into_text();
 				#error_decode_code
 			}
@@ -2165,7 +2184,7 @@ fn generate_server_handler(
 			.zip(regular_param_types.iter())
 			.map(|(parameter, parameter_type)| {
 				let parameter_name = &parameter.name;
-				let field_name = parameter.name.to_string();
+				let field_name = wire_param_name(parameter);
 				match parameter.kind {
 					WireParamKind::Json => quote! {
 						let #parameter_name: #parameter_type = state
@@ -2195,7 +2214,7 @@ fn generate_server_handler(
 					__ReinhardtPolicy,
 				> for marker
 			where
-				__ReinhardtSchema: #pages_crate::form::ModelFormSchema,
+				__ReinhardtSchema: #pages_crate::form::ModelFormContractSchema,
 				__ReinhardtPolicy: #pages_crate::form::ModelFormPolicy,
 				__ReinhardtSelection:
 					#pages_crate::form::ModelFormSelectionCount<#argument_count>
@@ -2250,7 +2269,7 @@ fn generate_server_handler(
 						__ReinhardtPolicy,
 					> for marker
 				where
-					__ReinhardtSchema: #pages_crate::form::ModelFormSchema,
+					__ReinhardtSchema: #pages_crate::form::ModelFormContractSchema,
 					__ReinhardtPolicy: #pages_crate::form::ModelFormPolicy,
 					__ReinhardtSelection: #pages_crate::form::ModelFormSelectionPayload<
 						__ReinhardtSchema,
@@ -2982,6 +3001,7 @@ fn extract_result_types(
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	#[test]
 	fn test_marker_struct_visibility_rewrites_relative_restrictions_for_marker_module() {
@@ -3234,6 +3254,39 @@ mod tests {
 	}
 
 	#[test]
+	fn multipart_model_form_uses_wire_name_for_raw_identifier_lookup() {
+		use syn::parse_quote;
+
+		let func: ItemFn = parse_quote! {
+			async fn upload(
+				r#type: String,
+				attachment: UploadedFile,
+			) -> Result<(), ServerFnError> {
+				Ok(())
+			}
+		};
+		let info = ServerFnInfo {
+			func,
+			options: ServerFnOptions {
+				model_form: true,
+				..ServerFnOptions::default()
+			},
+			codec_explicit: false,
+			metadata_name: None,
+			endpoint_tokens: None,
+			metadata_name_tokens: None,
+			detail: false,
+			transactional: false,
+			structured_error: false,
+		};
+
+		let generated = generate_server_fn(&info).to_string();
+
+		assert_eq!(generated.matches("json_argument (\"type\")").count(), 2);
+		assert_eq!(generated.matches("json_argument (\"r#type\")").count(), 0);
+	}
+
+	#[test]
 	fn test_validate_endpoint_valid_path() {
 		assert!(validate_endpoint_path("/api/users").is_ok());
 		assert!(validate_endpoint_path("/api/server_fn/create_user").is_ok());
@@ -3389,6 +3442,102 @@ mod tests {
 		assert!(
 			generated.contains("from_http_response"),
 			"generic client stubs must decode structured error envelopes: {generated}"
+		);
+	}
+
+	#[rstest]
+	#[case(false)]
+	#[case(true)]
+	fn generated_json_client_stub_scopes_401_to_the_request_auth_context(
+		#[case] structured_error: bool,
+	) {
+		use syn::parse_quote;
+
+		let func: syn::ItemFn = parse_quote! {
+			async fn load() -> Result<(), ServerFnError> { Ok(()) }
+		};
+		let info = ServerFnInfo {
+			func,
+			options: ServerFnOptions::default(),
+			codec_explicit: false,
+			metadata_name: None,
+			endpoint_tokens: None,
+			metadata_name_tokens: None,
+			detail: false,
+			transactional: false,
+			structured_error,
+		};
+
+		let generated = generate_server_fn(&info).to_string();
+		let context = generated
+			.find("auth :: server_fn_authentication_context")
+			.expect("JSON client stub captures request authentication");
+		let request = generated
+			.find("fetch :: request_with_credentials")
+			.expect("JSON client stub dispatches a request");
+		let status = generated
+			.find("let __status")
+			.expect("JSON client stub has a status binding");
+		let hook = generated
+			.find("auth :: observe_server_fn_status_for_request")
+			.expect("JSON client stub observes the response status in context");
+		let decode = generated
+			.find("let __message")
+			.expect("JSON client stub decodes the error body after observing status");
+		assert!(context < request && request < status && status < hook && hook < decode);
+		assert_eq!(
+			generated
+				.matches("auth :: observe_server_fn_status_for_request")
+				.count(),
+			1
+		);
+	}
+
+	#[rstest]
+	#[case(false)]
+	#[case(true)]
+	fn generated_multipart_client_stub_scopes_401_to_the_request_auth_context(
+		#[case] structured_error: bool,
+	) {
+		use syn::parse_quote;
+
+		let func: syn::ItemFn = parse_quote! {
+			async fn upload(file: UploadedFile) -> Result<(), ServerFnError> { Ok(()) }
+		};
+		let info = ServerFnInfo {
+			func,
+			options: ServerFnOptions::default(),
+			codec_explicit: false,
+			metadata_name: None,
+			endpoint_tokens: None,
+			metadata_name_tokens: None,
+			detail: false,
+			transactional: false,
+			structured_error,
+		};
+
+		let generated = generate_server_fn(&info).to_string();
+		let context = generated
+			.find("auth :: server_fn_authentication_context")
+			.expect("multipart client stub captures request authentication");
+		let request = generated
+			.find("server_fn :: request_multipart")
+			.expect("multipart client stub dispatches a request");
+		let status = generated
+			.find("let __status")
+			.expect("multipart client stub has a status binding");
+		let hook = generated
+			.find("auth :: observe_server_fn_status_for_request")
+			.expect("multipart client stub observes the response status in context");
+		let decode = generated
+			.find("let __message")
+			.expect("multipart client stub decodes the error body after observing status");
+		assert!(context < request && request < status && status < hook && hook < decode);
+		assert_eq!(
+			generated
+				.matches("auth :: observe_server_fn_status_for_request")
+				.count(),
+			1
 		);
 	}
 

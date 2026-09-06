@@ -1,7 +1,110 @@
 # Model-backed Pages forms
 
 Pages can derive a rendered form and one typed submission payload from model
-metadata. Model support is explicit: add `form = true` to `#[model]`.
+metadata. Use `form = true` for a legacy-only model-form declaration. A nested
+named `form(...)` declaration generates its target-neutral contract and the
+native legacy schema and generic payload needed by its adapter.
+
+## Named target-neutral contracts
+
+For new browser create forms, prefer one named contract on the real model:
+
+```rust,ignore
+#[model(
+    app_label = "clusters",
+    table_name = "clusters",
+    form(name = ClusterCreateForm, fields(name, api_url))
+)]
+pub struct Cluster {
+    #[field(primary_key = true)]
+    id: Option<i64>,
+    #[field(editable = false)]
+    #[rel(foreign_key, related_name = "clusters")]
+    organization: ForeignKeyField<Organization>,
+    #[field(max_length = 63)]
+    name: String,
+    #[field(url = true, max_length = 2048)]
+    api_url: String,
+}
+```
+
+The nested declaration accepts exactly `name = Ident` and a non-empty,
+source-ordered `fields(field, ...)` list. It generates these public names on
+native and WASM: `ClusterCreateForm`, `ClusterCreateFormData`,
+`ClusterCreateFormSchema`, and `ClusterCreateFormField`. The generated
+`ClusterCreateFormPolicy` is public only because it is an associated type and
+is hidden from documentation. The ORM model, legacy generic model-form types,
+and the persistence adapter remain native-only.
+
+Use that marker directly from `form!`; do not repeat `model`, `policy`, or a
+field list:
+
+```rust,ignore
+let form = form! {
+    name: CreateClusterForm,
+    model_form: ClusterCreateForm,
+    server_fn: create_cluster_for_current_org,
+    overrides: {
+        name: { label: "Name" },
+        api_url: { label: "API URL" },
+    },
+};
+```
+
+`model_form:` cannot be combined with legacy `model`, `policy`, bracketed
+`fields`, `exclude`, or braced manual `fields`. `overrides` remains valid and
+is checked against the selected contract fields. The generated data type is a
+strict JSON boundary: it serializes selected supplied fields only and rejects
+unknown keys, duplicate keys, and incompatible values on deserialization. A
+nullable selected value distinguishes omission from an explicit JSON `null`.
+
+Selected fields may use `String`, `bool`, and the native ORM-supported numeric
+primitives `i32`, `i64`, `f32`, and `f64`,
+`rust_decimal::Decimal`, `uuid::Uuid`, `chrono::NaiveDate`,
+`chrono::NaiveTime`, `chrono::NaiveDateTime`, `chrono::DateTime<chrono::Utc>`,
+`serde_json::Value`, or one `Option<T>` layer. Relationships, generated
+relationship identifiers, file/image fields, collections, and custom types
+are intentionally unsupported.
+
+`use_form(&form).build().set_value(field, value)` accepts UUID and chrono
+values, including `Option<T>`, on native and WASM without enabling the Pages
+`uuid` or `chrono` compatibility features. UTC datetimes use the `Z` suffix
+and retain their fractional-second precision in the submission payload.
+
+On native targets, construct the existing `ModelForm` from the concrete
+payload and inject server-owned values only after authorization:
+
+```rust,ignore
+let mut payload = ClusterCreateFormData::default();
+payload.set_name("Production".to_owned());
+payload.set_api_url("https://api.example.com".to_owned());
+
+let mut native_form = ClusterCreateForm::model_form(payload);
+native_form.set_trusted_field_value("organization_id", serde_json::json!(organization_id))?;
+let cluster = native_form.build_instance()?;
+```
+
+`model_form()` and `set_trusted_field_value()` are native-only trusted bridges;
+they do not make server-owned values part of browser JSON. The named contract
+replaces a WASM shadow model: compile the declaration module for both targets,
+but keep relation imports and other ORM-only surrounding items explicitly
+native-gated. WASM then needs only the contract types, not `Cluster`, its
+relationship graph, or a database driver.
+
+The native legacy schema retains target metadata for generated relationship
+identifiers outside the public allowlist. This lets `InlineFormSet` validate a
+server-owned relationship without exposing it in the named payload.
+
+The additive [`ModelFormContractSchema`](https://docs.rs/reinhardt-core/latest/reinhardt_core/model_form/trait.ModelFormContractSchema.html)
+bridge uses `contract_fields()` and `contract_default_boolean_is_true()` so
+legacy `ModelFormSchema::fields()` calls remain unambiguous for glob imports.
+Existing legacy schemas are adapted automatically and keep their original
+associated methods.
+
+`form = true`, `QuestionFormSchema`, `QuestionModelFormData<P>`, and the
+legacy `form! { model, policy, fields | exclude, ... }` form remain supported.
+Use the legacy path when its generic policy behavior is required; do not mix it
+with a named contract.
 
 ```rust
 use reinhardt::model;
@@ -29,9 +132,15 @@ pub struct Question {
 }
 ```
 
-This opt-in generates the target-neutral `QuestionFormSchema` and the generic
-`QuestionModelFormData<P>` payload. A model without `form = true` has neither
-symbol. Each endpoint must name the concrete policy it enforces:
+This legacy opt-in generates the ORM-coupled `QuestionFormSchema` and generic
+`QuestionModelFormData<P>` payload. `QuestionFormSchema` implements
+`ModelFormSchema` and therefore has an associated ORM `Model` type; it is not
+the ORM-free target-neutral schema generated by a nested named declaration.
+Use `QuestionCreateFormSchema` from
+`form(name = QuestionCreateForm, fields(...))` when the schema must compile on
+WASM without the model graph. A model with neither `form = true` nor
+`form(...)` has no legacy model-form symbols. Each endpoint must name the
+concrete policy it enforces:
 
 ```rust
 use reinhardt::core::model_form::ModelFormPolicy;
@@ -139,6 +248,9 @@ contract requires `fields: [...]`; `exclude: [...]` and
 supported in model-backed forms. Obtain request-scoped values through normal
 server-side request handling or injection instead. Ordinary forms may still
 use `ambient_arguments` for non-field values.
+
+Raw Rust identifiers use their unraw wire name throughout selection and
+submission, so `r#type` is encoded and looked up as the multipart part `type`.
 
 The selected model descriptor must match the typed server-function argument:
 scalar descriptors use JSON arguments, required file/image descriptors use
@@ -435,3 +547,11 @@ with an assigned UUID, and `InlineFormSet::for_update(parent, fk_field)` for an
 existing parent. The legacy `InlineFormSet::new` uses primary-key presence and
 the numeric zero sentinel; it cannot distinguish an assigned primary key from
 an existing row and therefore must not be used for assigned-key creation.
+
+## Scope boundaries
+
+Named contracts remove schema and payload duplication only. Shared action
+lifecycle work is tracked by #6220, mounted control binding and reset behavior
+by #6221, and generated server-side validation execution by #6223. The current
+form submit engine, control ownership, and server validation behavior are
+unchanged.

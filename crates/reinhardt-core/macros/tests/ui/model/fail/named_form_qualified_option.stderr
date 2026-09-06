@@ -1,0 +1,5 @@
+error: named model form field `maybe` has unsupported Rust type `custom :: Option < String >`
+  --> tests/ui/model/fail/named_form_qualified_option.rs:11:41
+   |
+11 |     form(name = DocumentCreateForm, fields(maybe))
+   |                                            ^^^^^

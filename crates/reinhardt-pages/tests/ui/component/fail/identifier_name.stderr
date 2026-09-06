@@ -1,4 +1,4 @@
-error: expected route name argument `name = "..."`
+error: expected route option `name = "..."`, `loader = path`, or `navigation_guard = path`
  --> tests/ui/component/fail/identifier_name.rs:5:29
   |
 5 | #[component("/users/{id}/", user_detail)]

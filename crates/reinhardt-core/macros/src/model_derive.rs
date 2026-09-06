@@ -29,15 +29,50 @@ use std::collections::{HashMap, HashSet};
 use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, quote};
 use syn::Token;
+use syn::ext::IdentExt;
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
-use syn::{Data, DeriveInput, Fields, GenericArgument, PathArguments, Result, Type, parse_quote};
+use syn::{
+	Data, DeriveInput, Fields, GenericArgument, ItemStruct, PathArguments, Result, Type,
+	parse_quote,
+};
 use syn::{Ident, LitBool, LitStr, bracketed, parenthesized};
 
+/// Return an identifier's source-level name without Rust's raw-identifier marker.
+///
+/// Generated Rust identifiers should keep the original `Ident` so names such as
+/// `r#type` remain valid field and method references.  Strings emitted into
+/// metadata, descriptors, diagnostics, and serialized payloads are wire names,
+/// so they must use the unraw spelling instead.
+fn ident_to_wire_name(ident: &Ident) -> String {
+	ident.unraw().to_string()
+}
+
+const MODEL_FORM_CSRF_FIELD_NAME: &str = "csrfmiddlewaretoken";
+const MODEL_FORM_RESERVED_CONTROL_PREFIXES: &[&str] = &[
+	"__reinhardt_checkbox_",
+	"__reinhardt_color_",
+	"__reinhardt_range_",
+	"__reinhardt_defaulted_",
+];
+
+/// Returns whether a field name is consumed by model-form HTML controls.
+fn is_model_form_reserved_control_name(field_name: &str) -> bool {
+	is_model_form_csrf_field_name(field_name)
+		|| MODEL_FORM_RESERVED_CONTROL_PREFIXES
+			.iter()
+			.any(|prefix| field_name.starts_with(prefix))
+}
+
+/// Returns whether a field name is reserved for the generated CSRF control.
+fn is_model_form_csrf_field_name(field_name: &str) -> bool {
+	field_name == MODEL_FORM_CSRF_FIELD_NAME
+}
+
 use crate::crate_paths::{
-	get_linkme_crate, get_reinhardt_apps_crate, get_reinhardt_core_crate, get_reinhardt_crate,
-	get_reinhardt_db_crate, get_reinhardt_forms_crate, get_reinhardt_migrations_crate,
-	get_reinhardt_orm_crate, get_serde_crate, get_serde_json_crate,
+	get_dependency_crate, get_linkme_crate, get_reinhardt_apps_crate, get_reinhardt_core_crate,
+	get_reinhardt_crate, get_reinhardt_db_crate, get_reinhardt_forms_crate,
+	get_reinhardt_migrations_crate, get_reinhardt_orm_crate, get_serde_crate, get_serde_json_crate,
 };
 use crate::identifier_case::to_snake_case;
 use crate::rel::RelAttribute;
@@ -61,7 +96,7 @@ struct UniqueConstraintMetadata {
 }
 
 /// Parsed model attributes (intermediate representation)
-struct ModelAttributesParsed {
+pub(crate) struct ModelAttributesParsed {
 	app_label: Option<String>,
 	table_name: Option<String>,
 	get_latest_by: Option<Vec<String>>,
@@ -75,12 +110,21 @@ struct ModelAttributesParsed {
 	/// Whether this model is only available on the native/server side.
 	server_only: bool,
 	/// Whether to generate target-neutral model-form schema and payload types.
-	form: bool,
+	pub(crate) form: bool,
+	pub(crate) named_form: Option<NamedModelFormConfig>,
 	/// Whether the original model has `#[derive(serde::Serialize)]`.
 	/// Passed from the attribute macro since derive macros cannot see `#[derive()]`.
 	serde_serialize: bool,
 	/// Whether the original model has `#[derive(serde::Deserialize)]`.
 	serde_deserialize: bool,
+}
+
+#[derive(Debug, Clone)]
+// The parsed declaration is retained for target-neutral output generation.
+#[allow(dead_code)]
+pub(crate) struct NamedModelFormConfig {
+	pub(crate) name: Ident,
+	pub(crate) fields: Vec<Ident>,
 }
 
 /// Validate a raw SQL expression to reject dangerous patterns.
@@ -430,6 +474,10 @@ struct ModelConfig {
 	server_only: bool,
 	/// Whether to generate target-neutral model-form schema and payload types.
 	form: bool,
+	/// Named target-neutral model-form contract configuration.
+	///
+	/// Retained separately because named output uses the declared type and ordered fields.
+	named_form: Option<NamedModelFormConfig>,
 	/// Whether the original model derives `serde::Serialize`.
 	serde_serialize: bool,
 	/// Whether the original model derives `serde::Deserialize`.
@@ -478,6 +526,7 @@ impl ModelConfig {
 		let mut info: Option<bool> = None;
 		let mut server_only = false;
 		let mut form = false;
+		let mut named_form = None;
 		let mut serde_serialize = false;
 		let mut serde_deserialize = false;
 
@@ -489,9 +538,7 @@ impl ModelConfig {
 
 			// Use custom parser for all model attributes
 			let model_attr = attr
-				.parse_args_with(|input: syn::parse::ParseStream| {
-					Self::parse_model_attributes(input)
-				})
+				.parse_args_with(|input: syn::parse::ParseStream| parse_model_attributes(input))
 				.map_err(|e| {
 					syn::Error::new_spanned(attr, format!("parse_args_with failed: {}", e))
 				})?;
@@ -532,7 +579,28 @@ impl ModelConfig {
 				server_only = true;
 			}
 			if model_attr.form {
+				if named_form.is_some() {
+					return Err(syn::Error::new_spanned(
+						struct_name,
+						"`form = true` cannot be combined with `form(...)`",
+					));
+				}
 				form = true;
+			}
+			if let Some(model_named_form) = model_attr.named_form {
+				if form {
+					return Err(syn::Error::new_spanned(
+						struct_name,
+						"`form = true` cannot be combined with `form(...)`",
+					));
+				}
+				if named_form.is_some() {
+					return Err(syn::Error::new_spanned(
+						struct_name,
+						"named model form is specified more than once",
+					));
+				}
+				named_form = Some(model_named_form);
 			}
 			if model_attr.serde_serialize {
 				serde_serialize = true;
@@ -560,58 +628,79 @@ impl ModelConfig {
 			manager,
 			info: info.unwrap_or(true),
 			server_only,
-			form,
+			form: form || named_form.is_some(),
+			named_form,
 			serde_serialize,
 			serde_deserialize,
 		})
 	}
+}
 
-	/// Parse all model attributes using custom parser
-	fn parse_model_attributes(input: syn::parse::ParseStream) -> Result<ModelAttributesParsed> {
-		use syn::Token;
+pub(crate) fn parse_model_attributes(
+	input: syn::parse::ParseStream,
+) -> Result<ModelAttributesParsed> {
+	use syn::Token;
 
-		let mut app_label = None;
-		let mut table_name = None;
-		let mut get_latest_by = None;
-		let mut constraints = None;
-		let mut unique_together = Vec::new();
-		let mut manager: Option<syn::Path> = None;
-		let mut info: Option<bool> = None;
-		let mut server_only = false;
-		let mut form = false;
-		let mut serde_serialize = false;
-		let mut serde_deserialize = false;
+	let mut app_label = None;
+	let mut table_name = None;
+	let mut get_latest_by = None;
+	let mut constraints = None;
+	let mut unique_together = Vec::new();
+	let mut manager: Option<syn::Path> = None;
+	let mut info: Option<bool> = None;
+	let mut server_only = false;
+	let mut form = false;
+	let mut named_form = None;
+	let mut serde_serialize = false;
+	let mut serde_deserialize = false;
 
-		while !input.is_empty() {
-			let ident: Ident = input.parse()?;
+	while !input.is_empty() {
+		let ident: Ident = input.parse()?;
 
-			// Bare flags (no `= value`)
-			if ident == "serde_serialize" {
-				serde_serialize = true;
-				if input.peek(Token![,]) {
-					input.parse::<Token![,]>()?;
-				} else {
-					break;
-				}
-				continue;
-			} else if ident == "serde_deserialize" {
-				serde_deserialize = true;
-				if input.peek(Token![,]) {
-					input.parse::<Token![,]>()?;
-				} else {
-					break;
-				}
-				continue;
-			} else if ident == "server_only" {
-				server_only = true;
-				if input.peek(Token![,]) {
-					input.parse::<Token![,]>()?;
-				} else {
-					break;
-				}
-				continue;
+		// Bare flags (no `= value`)
+		if ident == "serde_serialize" {
+			serde_serialize = true;
+			if input.peek(Token![,]) {
+				input.parse::<Token![,]>()?;
+			} else {
+				break;
 			}
+			continue;
+		} else if ident == "serde_deserialize" {
+			serde_deserialize = true;
+			if input.peek(Token![,]) {
+				input.parse::<Token![,]>()?;
+			} else {
+				break;
+			}
+			continue;
+		} else if ident == "server_only" {
+			server_only = true;
+			if input.peek(Token![,]) {
+				input.parse::<Token![,]>()?;
+			} else {
+				break;
+			}
+			continue;
+		}
 
+		if ident == "form" && input.peek(syn::token::Paren) {
+			if named_form.is_some() {
+				return Err(syn::Error::new_spanned(
+					ident,
+					"named model form is specified more than once",
+				));
+			}
+			if form {
+				return Err(syn::Error::new_spanned(
+					ident,
+					"`form = true` cannot be combined with `form(...)`",
+				));
+			}
+			let content;
+			parenthesized!(content in input);
+			named_form = Some(parse_named_model_form(&content)?);
+		} else {
 			input.parse::<Token![=]>()?;
 
 			if ident == "app_label" {
@@ -635,6 +724,12 @@ impl ModelConfig {
 				info = Some(value.value());
 			} else if ident == "form" {
 				let value: LitBool = input.parse()?;
+				if value.value() && named_form.is_some() {
+					return Err(syn::Error::new_spanned(
+						ident,
+						"`form = true` cannot be combined with `form(...)`",
+					));
+				}
 				form = value.value();
 			} else if ident == "unique_together" {
 				// Tuple syntax: unique_together = ("field1", "field2")
@@ -651,7 +746,7 @@ impl ModelConfig {
 
 				let mut specs = Vec::new();
 				while !array_content.is_empty() {
-					specs.push(Self::parse_constraint(&array_content)?);
+					specs.push(ModelConfig::parse_constraint(&array_content)?);
 
 					if array_content.peek(Token![,]) {
 						array_content.parse::<Token![,]>()?;
@@ -666,30 +761,101 @@ impl ModelConfig {
 					format!("Unknown model attribute: {}", ident),
 				));
 			}
-
-			// Parse optional comma
-			if input.peek(Token![,]) {
-				input.parse::<Token![,]>()?;
-			} else {
-				break;
-			}
 		}
 
-		Ok(ModelAttributesParsed {
-			app_label,
-			table_name,
-			get_latest_by,
-			constraints,
-			unique_together,
-			manager,
-			info,
-			server_only,
-			form,
-			serde_serialize,
-			serde_deserialize,
-		})
+		// Parse optional comma
+		if input.peek(Token![,]) {
+			input.parse::<Token![,]>()?;
+		} else {
+			break;
+		}
 	}
 
+	Ok(ModelAttributesParsed {
+		app_label,
+		table_name,
+		get_latest_by,
+		constraints,
+		unique_together,
+		manager,
+		info,
+		server_only,
+		form,
+		named_form,
+		serde_serialize,
+		serde_deserialize,
+	})
+}
+
+fn parse_named_model_form(input: syn::parse::ParseStream) -> Result<NamedModelFormConfig> {
+	if input.is_empty() {
+		return Err(syn::Error::new(
+			input.span(),
+			"named model form requires `name = Ident`",
+		));
+	}
+	let name_ident: Ident = input.parse()?;
+	if name_ident != "name" {
+		return Err(syn::Error::new_spanned(
+			name_ident,
+			"named model form requires `name = Ident`",
+		));
+	}
+	input.parse::<Token![=]>()?;
+	if !input.peek(Ident) {
+		return Err(syn::Error::new(
+			input.span(),
+			"named model form requires `name = Ident`",
+		));
+	}
+	let name = input.parse()?;
+	if !input.peek(Token![,]) {
+		return Err(syn::Error::new(
+			input.span(),
+			"named model form requires `fields(field, ...)`",
+		));
+	}
+	input.parse::<Token![,]>()?;
+	let fields_ident: Ident = input.parse()?;
+	if fields_ident != "fields" || !input.peek(syn::token::Paren) {
+		return Err(syn::Error::new_spanned(
+			fields_ident,
+			"named model form requires `fields(field, ...)`",
+		));
+	}
+	let content;
+	parenthesized!(content in input);
+	let fields: Punctuated<Ident, Token![,]> =
+		content.parse_terminated(|input| input.parse(), Token![,])?;
+	if fields.is_empty() {
+		return Err(syn::Error::new(
+			content.span(),
+			"named model form requires at least one field",
+		));
+	}
+	let mut names = HashSet::new();
+	for field in &fields {
+		let field_name = ident_to_wire_name(field);
+		if !names.insert(field_name.clone()) {
+			return Err(syn::Error::new_spanned(
+				field,
+				format!("named model form field `{field_name}` is specified more than once"),
+			));
+		}
+	}
+	if !input.is_empty() {
+		return Err(syn::Error::new(
+			input.span(),
+			"named model form accepts only `name` and `fields`",
+		));
+	}
+	Ok(NamedModelFormConfig {
+		name,
+		fields: fields.into_iter().collect(),
+	})
+}
+
+impl ModelConfig {
 	/// Parse constraint specification: unique(fields = [...], name = "...", condition = "...")
 	fn parse_constraint(input: syn::parse::ParseStream) -> Result<ConstraintSpec> {
 		use syn::Token;
@@ -1783,6 +1949,76 @@ impl FieldFormConfig {
 	}
 }
 
+struct LoweredModelFields {
+	field_infos: Vec<FieldInfo>,
+	rel_fields: Vec<(Ident, RelAttribute)>,
+	fk_id_field_names: Vec<Ident>,
+}
+
+fn lower_model_fields(fields: &Punctuated<syn::Field, Token![,]>) -> Result<LoweredModelFields> {
+	let mut field_infos = Vec::new();
+	let mut rel_fields = Vec::new();
+	let mut fk_id_field_names = Vec::new();
+
+	for field in fields {
+		let is_fk_id_field = field.ident.as_ref().is_some_and(|field_name| {
+			let name = ident_to_wire_name(field_name);
+			let ty = field.ty.to_token_stream().to_string();
+			name.ends_with("_id")
+				&& (ty.contains("InfoModel") || ty.contains("Model"))
+				&& ty.contains("PrimaryKey")
+		});
+		if is_fk_id_field {
+			fk_id_field_names.extend(field.ident.iter().cloned());
+		}
+
+		let name = field
+			.ident
+			.clone()
+			.ok_or_else(|| syn::Error::new_spanned(field, "Field must have a name"))?;
+		let ty = field.ty.clone();
+		let config = FieldConfig::from_attrs(&field.attrs)?;
+		config.validate_for_field_type(&ty)?;
+		let form = FieldFormConfig::from_attrs(&field.attrs)?;
+		let injected_relation_serde_skip = field.attrs.iter().any(|attr| {
+			attr.path()
+				.is_ident("reinhardt_internal_relation_serde_skip")
+		});
+		let serde_attrs = field
+			.attrs
+			.iter()
+			.filter(|attr| attr.path().is_ident("serde"))
+			.cloned()
+			.collect();
+		let rel = field
+			.attrs
+			.iter()
+			.find(|attr| attr.path().is_ident("rel"))
+			.map(RelAttribute::from_attribute)
+			.transpose()?;
+		if let Some(rel_attr) = &rel {
+			rel_fields.push((name.clone(), rel_attr.clone()));
+		}
+
+		field_infos.push(FieldInfo {
+			name,
+			ty,
+			config,
+			form,
+			serde_attrs,
+			injected_relation_serde_skip,
+			rel,
+			is_fk_id_field,
+		});
+	}
+
+	Ok(LoweredModelFields {
+		field_infos,
+		rel_fields,
+		fk_id_field_names,
+	})
+}
+
 /// Foreign key / One-to-one field information for automatic ID field generation
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // Fields will be used for accessor generation in future
@@ -2426,12 +2662,35 @@ fn parse_base_type_string(
 	Ok(field_type)
 }
 
-/// Extract `Option<T>` and return (is_option, inner_type)
+/// Return whether a path names one of the canonical `Option` spellings.
+///
+/// A last-segment check would incorrectly treat application types such as
+/// `custom::Option<T>` as the standard wrapper and would let them cross the
+/// target-neutral payload boundary.
+fn is_canonical_option_path(path: &syn::Path) -> bool {
+	let is_bare_option = path.segments.len() == 1
+		&& path
+			.segments
+			.first()
+			.is_some_and(|segment| segment.ident == "Option");
+	let is_qualified_option = |root: &str| {
+		path.segments.len() == 3
+			&& path.segments[0].ident == root
+			&& path.segments[1].ident == "option"
+			&& path.segments[2].ident == "Option"
+			&& matches!(path.segments[0].arguments, PathArguments::None)
+			&& matches!(path.segments[1].arguments, PathArguments::None)
+	};
+	is_bare_option || is_qualified_option("core") || is_qualified_option("std")
+}
+
+/// Extract canonical `Option<T>` and return `(is_option, inner_type)`.
 fn extract_option_type(ty: &Type) -> (bool, &Type) {
 	if let Type::Path(type_path) = ty
+		&& is_canonical_option_path(&type_path.path)
 		&& let Some(last_segment) = type_path.path.segments.last()
-		&& last_segment.ident == "Option"
 		&& let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments
+		&& args.args.len() == 1
 		&& let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first()
 	{
 		return (true, inner_ty);
@@ -2767,7 +3026,7 @@ fn is_model_form_editable(field: &FieldInfo, field_infos: &[FieldInfo]) -> bool 
 	}
 
 	if field.is_fk_id_field {
-		let relation_name = field.name.to_string();
+		let relation_name = ident_to_wire_name(&field.name);
 		return relation_name
 			.strip_suffix("_id")
 			.and_then(|name| field_infos.iter().find(|candidate| candidate.name == name))
@@ -2795,7 +3054,7 @@ fn model_form_kind(field: &FieldInfo) -> Result<TokenStream> {
 			&field.name,
 			format!(
 				"editable model field `{}` has no supported model-form mapping; set editable = false or use an explicit non-model form",
-				field.name
+				ident_to_wire_name(&field.name)
 			),
 		))
 	};
@@ -2959,7 +3218,7 @@ fn model_form_relation_id_target_type<'a>(
 	field: &FieldInfo,
 	field_infos: &'a [FieldInfo],
 ) -> Result<&'a Type> {
-	let field_name = field.name.to_string();
+	let field_name = ident_to_wire_name(&field.name);
 	let relation_name = field_name.strip_suffix("_id").ok_or_else(|| {
 		syn::Error::new_spanned(
 			&field.name,
@@ -2983,7 +3242,7 @@ fn model_form_relation_id_is_nullable(field: &FieldInfo, field_infos: &[FieldInf
 		return false;
 	}
 
-	let field_name = field.name.to_string();
+	let field_name = ident_to_wire_name(&field.name);
 	let Some(relation_name) = field_name.strip_suffix("_id") else {
 		return false;
 	};
@@ -3025,6 +3284,7 @@ fn generate_model_form_support(
 	struct_vis: &syn::Visibility,
 	field_infos: &[FieldInfo],
 	form_config: &ModelFormConfig,
+	selected_fields: Option<&[Ident]>,
 ) -> Result<TokenStream> {
 	let core_crate = get_reinhardt_core_crate();
 	let forms_crate = get_reinhardt_forms_crate();
@@ -3052,17 +3312,31 @@ fn generate_model_form_support(
 		&format!("{}_FORM_FIELDS", struct_name.to_string().to_uppercase()),
 		struct_name.span(),
 	);
+	let selected_field_names = selected_fields.map(|fields| {
+		fields
+			.iter()
+			.map(ident_to_wire_name)
+			.collect::<HashSet<_>>()
+	});
+	let is_selected_editable = |field: &FieldInfo| {
+		is_model_form_editable(field, field_infos)
+			&& selected_field_names
+				.as_ref()
+				.is_none_or(|fields| fields.contains(&ident_to_wire_name(&field.name)))
+	};
 	let editable_fields: Vec<_> = field_infos
 		.iter()
-		.filter(|field| is_model_form_editable(field, field_infos))
+		.filter(|field| is_selected_editable(field))
 		.collect();
 	if let Some(field) = editable_fields
 		.iter()
-		.find(|field| field.name == "csrfmiddlewaretoken")
+		.find(|field| is_model_form_csrf_field_name(&ident_to_wire_name(&field.name)))
 	{
 		return Err(syn::Error::new_spanned(
 			&field.name,
-			"model-backed forms reserve `csrfmiddlewaretoken` for the CSRF control",
+			format!(
+				"model-backed forms reserve `{MODEL_FORM_CSRF_FIELD_NAME}` for the CSRF control"
+			),
 		));
 	}
 	let field_count = editable_fields.len();
@@ -3079,10 +3353,14 @@ fn generate_model_form_support(
 	let field_names: Vec<_> = editable_fields.iter().map(|field| &field.name).collect();
 	let mut generated_method_names = HashSet::new();
 	for field in &editable_fields {
-		let field_name = field.name.to_string();
+		let field_name = ident_to_wire_name(&field.name);
 		let setter_name = format!("set_{field_name}");
 		let trusted_setter_name = format!("set_trusted_{field_name}");
 		let collides_with_reserved_api = [
+			"apply_defaults",
+			"clear_json",
+			"is_defaulted",
+			"set_normalized_json",
 			"clean_and_validate",
 			"clean_and_validate_for_update",
 			"clone",
@@ -3101,10 +3379,7 @@ fn generate_model_form_support(
 			"_policy",
 		]
 		.contains(&field_name.as_str())
-			|| field_name.starts_with("__reinhardt_checkbox_")
-			|| field_name.starts_with("__reinhardt_color_")
-			|| field_name.starts_with("__reinhardt_range_")
-			|| field_name.starts_with("__reinhardt_defaulted_")
+			|| is_model_form_reserved_control_name(&field_name)
 			|| [
 				"empty",
 				"forbidden_fields",
@@ -3129,7 +3404,7 @@ fn generate_model_form_support(
 		.iter()
 		.filter(|field| field.is_fk_id_field)
 		.map(|field| {
-			let name = LitStr::new(&field.name.to_string(), field.name.span());
+			let name = LitStr::new(&ident_to_wire_name(&field.name), field.name.span());
 			let kind = if field.is_fk_id_field {
 				model_form_relation_id_kind(field, field_infos)
 			} else {
@@ -3142,7 +3417,7 @@ fn generate_model_form_support(
 		.iter()
 		.filter(|field| field.is_fk_id_field)
 		.map(|field| {
-			let name = LitStr::new(&field.name.to_string(), field.name.span());
+			let name = LitStr::new(&ident_to_wire_name(&field.name), field.name.span());
 			let (is_optional, _) = extract_option_type(&field.ty);
 			let nullable = field
 				.config
@@ -3153,8 +3428,8 @@ fn generate_model_form_support(
 			quote!(#name => #required)
 		});
 	let trusted_field_assignments = field_infos.iter().map(|field| {
-		let name = LitStr::new(&field.name.to_string(), field.name.span());
-		let ident = Ident::new(&field.name.to_string(), field.name.span());
+		let name = LitStr::new(&ident_to_wire_name(&field.name), field.name.span());
+		let ident = &field.name;
 		let ty = &field.ty;
 		quote! {
 			#name => {
@@ -3170,10 +3445,63 @@ fn generate_model_form_support(
 			}
 		}
 	});
+	let trusted_field_names = field_infos
+		.iter()
+		.map(|field| LitStr::new(&ident_to_wire_name(&field.name), field.name.span()))
+		.collect::<Vec<_>>();
 	let field_literals: Vec<_> = editable_fields
 		.iter()
-		.map(|field| LitStr::new(&field.name.to_string(), field.name.span()))
+		.map(|field| LitStr::new(&ident_to_wire_name(&field.name), field.name.span()))
 		.collect();
+	let instance_field_json_arms = field_names
+		.iter()
+		.zip(&field_literals)
+		.map(|(name, literal)| quote!(#literal => #serde_json_crate::to_value(&self.#name).ok(),));
+	let trusted_file_entries = editable_fields
+		.iter()
+		.filter(|field| storage_field_kind(&field.ty).is_some())
+		.map(|field| {
+			let name = &field.name;
+			let literal = LitStr::new(&ident_to_wire_name(name), name.span());
+			quote! {
+				(#literal.to_owned(), #serde_json_crate::to_value(&existing.#name).map_err(|error| {
+					let mut errors = #core_crate::validators::ValidationErrors::new();
+					errors.add(#literal, #core_crate::validators::ValidationError::Custom(error.to_string()));
+					errors
+				})?)
+			}
+		})
+		.collect::<Vec<_>>();
+	let trusted_file_values = quote! {
+		let instance_values = #serde_json_crate::Value::Object(
+			#serde_json_crate::Map::from_iter([#(#trusted_file_entries),*]),
+		);
+	};
+	let default_assignments = editable_fields
+		.iter()
+		.filter_map(|field| {
+			let default = model_form_declared_default(field)?;
+			let name = &field.name;
+			let literal = LitStr::new(&ident_to_wire_name(name), name.span());
+			Some(quote! {
+				if self.#name.is_none() {
+					self.#name = ::core::option::Option::Some(#default);
+					self.__reinhardt_defaulted_fields.push(#literal);
+				}
+			})
+		})
+		.collect::<Vec<_>>();
+	let clear_implicit_defaults = field_names
+		.iter()
+		.zip(&field_literals)
+		.map(|(name, literal)| {
+			quote! {
+				if raw.__reinhardt_defaulted_fields.contains(&#literal) {
+					raw.#name = ::core::option::Option::None;
+				}
+			}
+		})
+		.collect::<Vec<_>>();
 	let primary_key_literals: Vec<_> = field_infos
 		.iter()
 		.filter(|field| field.config.primary_key)
@@ -3183,6 +3511,7 @@ fn generate_model_form_support(
 		quote! {}
 	} else {
 		quote! {
+			let supplied_fields = <Self as #core_crate::model_form::ModelFormPayload<P>>::supplied_fields(&self);
 			if let Some(field) = supplied_fields.iter().copied().find(|field| {
 				[#(#primary_key_literals),*]
 					.iter()
@@ -3203,7 +3532,7 @@ fn generate_model_form_support(
 		.iter()
 		.zip(&field_kinds)
 		.map(|(field, kind)| {
-			let name = LitStr::new(&field.name.to_string(), field.name.span());
+			let name = LitStr::new(&ident_to_wire_name(&field.name), field.name.span());
 			let (is_optional, _) = extract_option_type(&field.ty);
 			let relation_is_nullable = model_form_relation_id_is_nullable(field, field_infos);
 			let nullable = field
@@ -3235,7 +3564,7 @@ fn generate_model_form_support(
 			value_type.to_token_stream().to_string() == "bool" && field.config.default.is_some()
 		})
 		.map(|field| {
-			let name = LitStr::new(&field.name.to_string(), field.name.span());
+			let name = LitStr::new(&ident_to_wire_name(&field.name), field.name.span());
 			let default = field
 				.config
 				.default
@@ -3253,7 +3582,7 @@ fn generate_model_form_support(
 		.iter()
 		.filter(|field| field.is_fk_id_field)
 		.map(|field| {
-			let name = LitStr::new(&field.name.to_string(), field.name.span());
+			let name = LitStr::new(&ident_to_wire_name(&field.name), field.name.span());
 			let target = model_form_relation_id_target_type(field, field_infos)?;
 			Ok(
 				quote!(#name => ::core::any::TypeId::of::<T>() == ::core::any::TypeId::of::<#target>()),
@@ -3283,8 +3612,11 @@ fn generate_model_form_support(
 		.iter()
 		.zip(&field_types)
 		.map(|(field_name, field_ty)| {
-			let setter_name = Ident::new(&format!("set_{}", field_name), field_name.span());
-			let field_literal = LitStr::new(&field_name.to_string(), field_name.span());
+			let setter_name = Ident::new(
+				&format!("set_{}", ident_to_wire_name(field_name)),
+				field_name.span(),
+			);
+			let field_literal = LitStr::new(&ident_to_wire_name(field_name), field_name.span());
 			quote! {
 				pub fn #setter_name(
 					&mut self,
@@ -3298,6 +3630,7 @@ fn generate_model_form_support(
 						);
 					}
 					self.#field_name = ::core::option::Option::Some(value);
+					self.__reinhardt_defaulted_fields.retain(|field| *field != #field_literal);
 					::core::result::Result::Ok(())
 				}
 			}
@@ -3306,10 +3639,15 @@ fn generate_model_form_support(
 		.iter()
 		.zip(&field_types)
 		.map(|(field_name, field_ty)| {
-			let setter_name = Ident::new(&format!("set_trusted_{field_name}"), field_name.span());
+			let setter_name = Ident::new(
+				&format!("set_trusted_{}", ident_to_wire_name(field_name)),
+				field_name.span(),
+			);
+			let field_literal = LitStr::new(&ident_to_wire_name(field_name), field_name.span());
 			quote! {
 				pub fn #setter_name(&mut self, value: #field_ty) {
 					self.#field_name = ::core::option::Option::Some(value);
+					self.__reinhardt_defaulted_fields.retain(|field| *field != #field_literal);
 				}
 			}
 		});
@@ -3348,11 +3686,37 @@ fn generate_model_form_support(
 						}
 					})?;
 					self.#field_name = ::core::option::Option::Some(parsed);
+					self.__reinhardt_defaulted_fields.retain(|field| *field != #field_literal);
 					::core::result::Result::Ok(())
 				}
 			}
 		},
 	);
+	let normalized_json_arms = field_names.iter().zip(&field_literals).zip(&field_types).map(|((name, literal), ty)| {
+		quote! {
+			#literal => {
+				if !P::allows(#literal) && !self.__reinhardt_defaulted_fields.contains(&#literal) {
+					return ::core::result::Result::Err(#core_crate::model_form::ModelFormPayloadError::ForbiddenField { field: #literal.to_owned() });
+				}
+				self.#name = ::core::option::Option::Some(#serde_json_crate::from_value::<#ty>(value).map_err(|error| {
+					#core_crate::model_form::ModelFormPayloadError::InvalidValue { field: #literal.to_owned(), message: error.to_string() }
+				})?);
+				::core::result::Result::Ok(())
+			}
+		}
+	});
+	let clear_json_arms = field_names.iter().zip(&field_literals).map(|(name, literal)| {
+		quote! {
+			#literal => {
+				if !P::allows(#literal) {
+					return ::core::result::Result::Err(#core_crate::model_form::ModelFormPayloadError::ForbiddenField { field: #literal.to_owned() });
+				}
+				self.#name = ::core::option::Option::None;
+				self.__reinhardt_defaulted_fields.retain(|field| *field != #literal);
+				::core::result::Result::Ok(())
+			}
+		}
+	});
 	let serialize_entries =
 		field_names
 			.iter()
@@ -3404,7 +3768,7 @@ fn generate_model_form_support(
 	let server_context_fields: Vec<_> = field_infos
 		.iter()
 		.filter(|field| {
-			if is_model_form_editable(field, field_infos)
+			if is_selected_editable(field)
 				|| field.config.skip
 				|| field.config.include_in_new == Some(false)
 				|| is_relationship_field_type(&field.ty)
@@ -3439,8 +3803,21 @@ fn generate_model_form_support(
 		.iter()
 		.map(|field| {
 			let field_name = &field.name;
-			let field_literal = LitStr::new(&field.name.to_string(), field.name.span());
-			if is_model_form_editable(field, field_infos) {
+			let field_literal = LitStr::new(&ident_to_wire_name(field_name), field.name.span());
+			let missing_value = if field.is_fk_id_field {
+				quote! {
+					if deferred_field == #field_literal {
+						::core::default::Default::default()
+					} else {
+						return ::core::result::Result::Err(#forms_crate::model_form::ModelFormError::MissingModelField { field: #field_literal });
+					}
+				}
+			} else {
+				quote! {
+					return ::core::result::Result::Err(#forms_crate::model_form::ModelFormError::MissingModelField { field: #field_literal })
+				}
+			};
+			if is_selected_editable(field) {
 				let field_ty = &field.ty;
 				let (is_optional, _) = extract_option_type(&field.ty);
 				let relation_is_nullable = model_form_relation_id_is_nullable(field, field_infos);
@@ -3450,18 +3827,16 @@ fn generate_model_form_support(
 					.unwrap_or(is_optional || relation_is_nullable);
 				let required =
 					!nullable && field.config.blank != Some(true) && field.config.default.is_none();
-				let unresolved = if let Some(default) = model_form_declared_default(field) {
-					default
+				let unresolved = if model_form_declared_default(field).is_some() {
+					quote! {
+						return ::core::result::Result::Err(
+							#forms_crate::model_form::ModelFormError::MissingModelField { field: #field_literal },
+						)
+					}
 				} else if is_auto_generated_field(field) && !field.is_fk_id_field {
 					get_auto_field_default_value(field)
 				} else if required || (!nullable && field.config.blank == Some(true)) {
-					quote! {
-						return ::core::result::Result::Err(
-							#forms_crate::model_form::ModelFormError::MissingModelField {
-								field: #field_literal,
-							},
-						)
-					}
+					missing_value.clone()
 				} else {
 					quote!(::std::default::Default::default())
 				};
@@ -3485,9 +3860,7 @@ fn generate_model_form_support(
 							.map_err(|error| #forms_crate::model_form::ModelFormError::FieldValidation {
 								errors: ::std::collections::HashMap::from([(#field_literal.to_owned(), vec![error.to_string()])]),
 							})?,
-						::core::option::Option::None => return ::core::result::Result::Err(
-							#forms_crate::model_form::ModelFormError::MissingModelField { field: #field_literal },
-						),
+						::core::option::Option::None => { #missing_value },
 					}
 				}
 			} else {
@@ -3531,7 +3904,7 @@ fn generate_model_form_support(
 		.zip(&field_types)
 		.map(|(field_name, field_ty)| {
 			quote! {
-				#[doc = "Returns the normalized value when this field was supplied."]
+				#[doc = "Returns the normalized supplied value or evaluated model default."]
 				#[doc = "This P2 cleaned-value accessor has equivalent semantics on native and WASM targets."]
 				pub fn #field_name(&self) -> ::core::option::Option<&#field_ty> {
 					self.#field_name.as_ref()
@@ -3542,9 +3915,7 @@ fn generate_model_form_support(
 		.iter()
 		.map(|field_name| {
 			quote! {
-				if merged.#field_name.is_none()
-					&& !supplied_fields.contains(&::core::stringify!(#field_name))
-				{
+				if merged.#field_name.is_none() {
 					merged.#field_name = ::core::option::Option::Some(existing.#field_name.clone());
 				}
 			}
@@ -3660,8 +4031,8 @@ fn generate_model_form_support(
 		.iter()
 		.map(|field| {
 			let field_name = &field.name;
-			let field_literal = LitStr::new(&field.name.to_string(), field.name.span());
-			if is_model_form_editable(field, field_infos) {
+			let field_literal = LitStr::new(&ident_to_wire_name(field_name), field.name.span());
+			if is_selected_editable(field) {
 				let (is_optional, _) = extract_option_type(&field.ty);
 				let relation_is_nullable = model_form_relation_id_is_nullable(field, field_infos);
 				let nullable = field
@@ -3670,8 +4041,12 @@ fn generate_model_form_support(
 					.unwrap_or(is_optional || relation_is_nullable);
 				let required =
 					!nullable && field.config.blank != Some(true) && field.config.default.is_none();
-				let unresolved = if let Some(default) = model_form_declared_default(field) {
-					default
+				let unresolved = if model_form_declared_default(field).is_some() {
+					quote! {
+						return ::core::result::Result::Err(
+							#forms_crate::model_form::ModelFormError::MissingModelField { field: #field_literal },
+						)
+					}
 				} else if is_auto_generated_field(field) && !field.is_fk_id_field {
 					get_auto_field_default_value(field)
 				} else if required || (!nullable && field.config.blank == Some(true)) {
@@ -3705,6 +4080,15 @@ fn generate_model_form_support(
 			}
 		})
 		.collect();
+	let apply_to_body = quote! {
+		let mut raw = self.into_raw();
+		#(#clear_implicit_defaults)*
+		raw.__reinhardt_defaulted_fields.clear();
+		let cleaned = <#payload_name<P> as #core_crate::model_form::ModelFormUpdatingPayload>::clean_and_validate_for_update(raw, &existing)
+			.map_err(#forms_crate::model_form::model_form_error_from_validation_errors)?;
+		<#struct_name as #forms_crate::model_form::FormModel>::apply_cleaned(&mut existing, &cleaned)?;
+		::core::result::Result::Ok(existing)
+	};
 	let cleaned_construction_output = if server_context_fields.is_empty() {
 		quote! {
 			#native_form_cfg
@@ -3721,8 +4105,7 @@ fn generate_model_form_support(
 				#[doc = "Applies supplied cleaned values to an existing model while preserving omissions."]
 				#[doc = "This is a P0 native-only API because ORM model mutation is unavailable on WASM clients."]
 				pub fn apply_to(self, mut existing: #struct_name) -> ::core::result::Result<#struct_name, #forms_crate::model_form::ModelFormError> {
-					<#struct_name as #forms_crate::model_form::FormModel>::apply_cleaned(&mut existing, &self)?;
-					::core::result::Result::Ok(existing)
+					#apply_to_body
 				}
 			}
 		}
@@ -3785,8 +4168,7 @@ fn generate_model_form_support(
 				#[doc = "Applies supplied cleaned values to an existing model while preserving omissions."]
 				#[doc = "This is a P0 native-only API because ORM model mutation is unavailable on WASM clients."]
 				pub fn apply_to(self, mut existing: #struct_name) -> ::core::result::Result<#struct_name, #forms_crate::model_form::ModelFormError> {
-					<#struct_name as #forms_crate::model_form::FormModel>::apply_cleaned(&mut existing, &self)?;
-					::core::result::Result::Ok(existing)
+					#apply_to_body
 				}
 			}
 		}
@@ -3834,7 +4216,7 @@ fn generate_model_form_support(
 			{
 				return None;
 			}
-			let field_literal = LitStr::new(&field.name.to_string(), field.name.span());
+			let field_literal = LitStr::new(&ident_to_wire_name(&field.name), field.name.span());
 			let max_check = field.config.max_value.map(|max| {
 				let max_literal = LitStr::new(&max.to_string(), field.name.span());
 				quote! {
@@ -3884,6 +4266,7 @@ fn generate_model_form_support(
 		#struct_vis struct #cleaned_payload_name<P: #core_crate::model_form::ModelFormPolicy> {
 			#(#field_names: ::core::option::Option<#field_types>,)*
 			forbidden_fields: ::std::vec::Vec<&'static str>,
+			__reinhardt_defaulted_fields: ::std::vec::Vec<&'static str>,
 			_policy: ::core::marker::PhantomData<P>,
 		}
 
@@ -3892,6 +4275,7 @@ fn generate_model_form_support(
 				Self {
 					#(#field_names: data.#field_names,)*
 					forbidden_fields: data.forbidden_fields,
+					__reinhardt_defaulted_fields: data.__reinhardt_defaulted_fields,
 					_policy: ::core::marker::PhantomData,
 				}
 			}
@@ -3902,6 +4286,7 @@ fn generate_model_form_support(
 				#payload_name {
 					#(#field_names: self.#field_names,)*
 					forbidden_fields: self.forbidden_fields,
+					__reinhardt_defaulted_fields: self.__reinhardt_defaulted_fields,
 					_policy: ::core::marker::PhantomData,
 				}
 			}
@@ -3918,6 +4303,7 @@ fn generate_model_form_support(
 				Self {
 					#(#clone_fields,)*
 					forbidden_fields: self.forbidden_fields.clone(),
+					__reinhardt_defaulted_fields: self.__reinhardt_defaulted_fields.clone(),
 					_policy: ::core::marker::PhantomData,
 				}
 			}
@@ -4012,13 +4398,11 @@ fn generate_model_form_support(
 					Self::Cleaned,
 					#core_crate::validators::ValidationErrors,
 				> {
-					let supplied_fields =
-						<Self as #core_crate::model_form::ModelFormPayload<P>>::supplied_fields(&self);
 					#reject_supplied_primary_keys
-					let instance_values = #serde_json_crate::to_value(existing).ok();
+					#trusted_file_values
 					#forms_crate::model_form::clean_generated_partial_payload_with_trusted_values::<#schema_name, P, _>(
 						&mut self,
-						instance_values.as_ref(),
+						::core::option::Option::Some(&instance_values),
 					)?;
 				let cleaned = #cleaned_payload_name::from_validated_raw(self);
 				let mut merged = cleaned.clone();
@@ -4099,9 +4483,30 @@ fn generate_model_form_support(
 						return ::core::result::Result::Err(errors);
 					}
 
+					for descriptor in <#schema_name as #core_crate::model_form::ModelFormSchema>::fields() {
+						if descriptor.trim && !descriptor.required && (descriptor.nullable || descriptor.has_default)
+							&& P::allows(descriptor.name)
+							&& !<Self as #core_crate::model_form::ModelFormPayload<P>>::is_defaulted(&self, descriptor.name)
+							&& <Self as #core_crate::model_form::ModelFormPayload<P>>::get_json(&self, descriptor.name)
+								.is_some_and(|value| value.as_str().is_some_and(|value| value.trim().is_empty())) {
+							let result = if descriptor.has_default {
+								<Self as #core_crate::model_form::ModelFormPayload<P>>::clear_json(&mut self, descriptor.name)
+							} else {
+								<Self as #core_crate::model_form::ModelFormPayload<P>>::set_json(&mut self, descriptor.name, #serde_json_crate::Value::Null)
+							};
+							if let Err(error) = result {
+								errors.add(descriptor.name, #core_crate::validators::ValidationError::Custom(error.to_string()));
+								return ::core::result::Result::Err(errors);
+							}
+						}
+					}
+					if require_all {
+						<Self as #core_crate::model_form::ModelFormPayload<P>>::apply_defaults(&mut self);
+					}
+
 					let mut normalized = ::std::vec::Vec::new();
 					for descriptor in <#schema_name as #core_crate::model_form::ModelFormSchema>::fields() {
-						if !descriptor.editable || !P::allows(descriptor.name) {
+						if !descriptor.editable || !(P::allows(descriptor.name) || <Self as #core_crate::model_form::ModelFormPayload<P>>::is_defaulted(&self, descriptor.name)) {
 							continue;
 						}
 						let ::core::option::Option::Some(value) =
@@ -4380,9 +4785,10 @@ fn generate_model_form_support(
 											.is_some_and(|storage| !storage.is_empty())
 								});
 								if valid_reference
-									&& trusted_values
-										.and_then(|values| values.get(descriptor.name))
-										.is_some_and(|trusted_value| trusted_value == &value)
+									&& (<Self as #core_crate::model_form::ModelFormPayload<P>>::is_defaulted(&self, descriptor.name)
+										|| trusted_values
+											.and_then(|values| values.get(descriptor.name))
+											.is_some_and(|trusted_value| trusted_value == &value))
 								{
 									continue;
 								}
@@ -4404,7 +4810,7 @@ fn generate_model_form_support(
 
 					for (field, value) in normalized {
 						if let ::core::result::Result::Err(error) =
-							<Self as #core_crate::model_form::ModelFormPayload<P>>::set_json(
+							<Self as #core_crate::model_form::ModelFormPayload<P>>::set_normalized_json(
 								&mut self,
 								field,
 								value,
@@ -4493,15 +4899,13 @@ fn generate_model_form_support(
 				Self::Cleaned,
 				#core_crate::validators::ValidationErrors,
 				> {
-					let supplied_fields =
-						<Self as #core_crate::model_form::ModelFormPayload<P>>::supplied_fields(&self);
 					#reject_supplied_primary_keys
-					let instance_values = #serde_json_crate::to_value(existing).ok();
+					#trusted_file_values
 					let cleaned = self.__reinhardt_clean_and_validate(
 						false,
 						false,
 						&[],
-						instance_values.as_ref(),
+						::core::option::Option::Some(&instance_values),
 					)?;
 				let mut merged = cleaned.clone();
 				#(#merge_existing_into_cleaned)*
@@ -4544,6 +4948,7 @@ fn generate_model_form_support(
 		#struct_vis struct #payload_name<P: #core_crate::model_form::ModelFormPolicy> {
 			#(#field_names: ::core::option::Option<#field_types>,)*
 			forbidden_fields: ::std::vec::Vec<&'static str>,
+			__reinhardt_defaulted_fields: ::std::vec::Vec<&'static str>,
 			_policy: ::core::marker::PhantomData<P>,
 		}
 
@@ -4556,6 +4961,7 @@ fn generate_model_form_support(
 				Self {
 					#(#clone_fields,)*
 					forbidden_fields: self.forbidden_fields.clone(),
+					__reinhardt_defaulted_fields: self.__reinhardt_defaulted_fields.clone(),
 					_policy: ::core::marker::PhantomData,
 				}
 			}
@@ -4566,6 +4972,7 @@ fn generate_model_form_support(
 				Self {
 					#(#empty_fields,)*
 					forbidden_fields: ::std::vec::Vec::new(),
+					__reinhardt_defaulted_fields: ::std::vec::Vec::new(),
 					_policy: ::core::marker::PhantomData,
 				}
 			}
@@ -4586,6 +4993,28 @@ fn generate_model_form_support(
 			P: #core_crate::model_form::ModelFormPolicy,
 			#(#payload_bounds,)*
 		{
+			fn apply_defaults(&mut self) {
+				#(#default_assignments)*
+			}
+
+			fn is_defaulted(&self, field: &str) -> bool {
+				self.__reinhardt_defaulted_fields.contains(&field)
+			}
+
+			fn clear_json(&mut self, field: &str) -> ::core::result::Result<(), #core_crate::model_form::ModelFormPayloadError> {
+				match field {
+					#(#clear_json_arms,)*
+					_ => ::core::result::Result::Err(#core_crate::model_form::ModelFormPayloadError::UnknownField { field: field.to_owned() }),
+				}
+			}
+
+			fn set_normalized_json(&mut self, field: &str, value: #serde_json_crate::Value) -> ::core::result::Result<(), #core_crate::model_form::ModelFormPayloadError> {
+				match field {
+					#(#normalized_json_arms,)*
+					_ => ::core::result::Result::Err(#core_crate::model_form::ModelFormPayloadError::UnknownField { field: field.to_owned() }),
+				}
+			}
+
 			fn supplied_fields(&self) -> ::std::vec::Vec<&'static str> {
 				let mut fields = ::std::vec::Vec::new();
 				#(#supplied_fields)*
@@ -4673,6 +5102,7 @@ fn generate_model_form_support(
 				::core::result::Result::Ok(#payload_name {
 					#(#field_names,)*
 					forbidden_fields,
+					__reinhardt_defaulted_fields: ::std::vec::Vec::new(),
 					_policy: ::core::marker::PhantomData,
 				})
 			}
@@ -4722,7 +5152,29 @@ fn generate_model_form_support(
 				data: &Self::CleanedData<P>,
 				server_values: &::std::collections::HashMap<::std::string::String, #serde_json_crate::Value>,
 			) -> ::core::result::Result<Self, #forms_crate::model_form::ModelFormError> {
+				Self::build_from_cleaned_with_deferred_required_field(data, server_values, "")
+			}
+
+			fn build_from_cleaned_with_deferred_required_field<P: #core_crate::model_form::ModelFormPolicy>(
+				data: &Self::CleanedData<P>,
+				server_values: &::std::collections::HashMap<::std::string::String, #serde_json_crate::Value>,
+				deferred_field: &str,
+			) -> ::core::result::Result<Self, #forms_crate::model_form::ModelFormError> {
+				if !deferred_field.is_empty() && !Self::trusted_relation_field_is_required(deferred_field) {
+					return ::core::result::Result::Err(#forms_crate::model_form::ModelFormError::FieldValidation {
+						errors: ::std::collections::HashMap::from([(
+							deferred_field.to_owned(), vec!["only required relationship fields may be deferred".to_owned()],
+						)]),
+					});
+				}
 				#build_from_cleaned_body
+			}
+
+			fn field_json(&self, field: &str) -> ::core::option::Option<#serde_json_crate::Value> {
+				match field {
+					#(#instance_field_json_arms)*
+					_ => ::core::option::Option::None,
+				}
 			}
 
 			fn apply_cleaned<P: #core_crate::model_form::ModelFormPolicy>(
@@ -4744,6 +5196,10 @@ fn generate_model_form_support(
 						errors: ::std::collections::HashMap::from([(field.to_owned(), vec!["unknown trusted model field".to_owned()])]),
 					}),
 				}
+			}
+
+			fn accepts_trusted_field(field: &str) -> bool {
+				matches!(field, #(#trusted_field_names)|*)
 			}
 
 			fn trusted_relation_field_kind(
@@ -4823,6 +5279,959 @@ fn generate_model_form_support(
 						}
 					}
 				}
+			}
+		}
+	})
+}
+
+fn path_has_exact_segments(path: &syn::Path, expected: &[&str]) -> bool {
+	path.segments.len() == expected.len()
+		&& path
+			.segments
+			.iter()
+			.zip(expected)
+			.all(|(segment, expected)| {
+				segment.ident == *expected && matches!(segment.arguments, PathArguments::None)
+			})
+}
+
+fn is_canonical_chrono_datetime_utc(path: &syn::Path) -> bool {
+	let mut segments = path.segments.iter();
+	let (Some(chrono), Some(datetime), None) = (segments.next(), segments.next(), segments.next())
+	else {
+		return false;
+	};
+	if chrono.ident != "chrono"
+		|| !matches!(chrono.arguments, PathArguments::None)
+		|| datetime.ident != "DateTime"
+	{
+		return false;
+	}
+	let PathArguments::AngleBracketed(arguments) = &datetime.arguments else {
+		return false;
+	};
+	if arguments.args.len() != 1 {
+		return false;
+	}
+	matches!(
+		arguments.args.first(),
+		Some(GenericArgument::Type(Type::Path(utc)))
+			if path_has_exact_segments(&utc.path, &["chrono", "Utc"])
+	)
+}
+
+fn is_canonical_string_path(path: &syn::Path) -> bool {
+	path.is_ident("String") || path_has_exact_segments(path, &["std", "string", "String"])
+}
+
+fn canonical_primitive_name(path: &syn::Path) -> Option<&'static str> {
+	let segments: Vec<_> = path.segments.iter().collect();
+	let primitive = match segments.as_slice() {
+		[segment] if matches!(segment.arguments, PathArguments::None) => &segment.ident,
+		[first, second, segment]
+			if matches!(first.arguments, PathArguments::None)
+				&& matches!(second.arguments, PathArguments::None)
+				&& matches!(segment.arguments, PathArguments::None)
+				&& (first.ident == "core" || first.ident == "std")
+				&& second.ident == "primitive" =>
+		{
+			&segment.ident
+		}
+		_ => return None,
+	};
+	match primitive.to_string().as_str() {
+		"i8" => Some("i8"),
+		"i16" => Some("i16"),
+		"i32" => Some("i32"),
+		"i64" => Some("i64"),
+		"isize" => Some("isize"),
+		"u8" => Some("u8"),
+		"u16" => Some("u16"),
+		"u32" => Some("u32"),
+		"u64" => Some("u64"),
+		"usize" => Some("usize"),
+		"f32" => Some("f32"),
+		"f64" => Some("f64"),
+		"bool" => Some("bool"),
+		_ => None,
+	}
+}
+
+/// Return the canonical target-neutral scalar type for a supported source path.
+///
+/// The generated assertion below compares the source type after Rust name
+/// resolution with this absolute type. This keeps a local type named `String`
+/// (or a shadowed primitive) from crossing the payload boundary merely because
+/// its syntax resembles a supported scalar.
+fn named_model_form_canonical_scalar_type(path: &syn::Path) -> Option<TokenStream> {
+	if is_canonical_string_path(path) {
+		return Some(quote!(::std::string::String));
+	}
+	if let Some(name) = named_model_form_canonical_primitive_name(path) {
+		let name = Ident::new(name, path.segments.last()?.ident.span());
+		return Some(quote!(::core::primitive::#name));
+	}
+
+	if path_has_exact_segments(path, &["rust_decimal", "Decimal"]) {
+		let rust_decimal_crate = get_dependency_crate("rust_decimal");
+		Some(quote!(#rust_decimal_crate::Decimal))
+	} else if path_has_exact_segments(path, &["uuid", "Uuid"]) {
+		let uuid_crate = get_dependency_crate("uuid");
+		Some(quote!(#uuid_crate::Uuid))
+	} else if path_has_exact_segments(path, &["chrono", "NaiveDate"]) {
+		let chrono_crate = get_dependency_crate("chrono");
+		Some(quote!(#chrono_crate::NaiveDate))
+	} else if path_has_exact_segments(path, &["chrono", "NaiveTime"]) {
+		let chrono_crate = get_dependency_crate("chrono");
+		Some(quote!(#chrono_crate::NaiveTime))
+	} else if path_has_exact_segments(path, &["chrono", "NaiveDateTime"]) {
+		let chrono_crate = get_dependency_crate("chrono");
+		Some(quote!(#chrono_crate::NaiveDateTime))
+	} else if is_canonical_chrono_datetime_utc(path) {
+		let chrono_crate = get_dependency_crate("chrono");
+		Some(quote!(#chrono_crate::DateTime<#chrono_crate::Utc>))
+	} else if path_has_exact_segments(path, &["serde_json", "Value"]) {
+		let serde_json_crate = get_dependency_crate("serde_json");
+		Some(quote!(#serde_json_crate::Value))
+	} else {
+		None
+	}
+}
+
+/// Return the canonical primitive types supported by the native ORM adapter.
+///
+/// The model-form contract is target-neutral, but a named contract also emits
+/// a native adapter into the ORM-backed form. Keeping this list in sync with
+/// `DatabaseField` prevents a contract from accepting a scalar that cannot be
+/// persisted by that adapter.
+fn named_model_form_canonical_primitive_name(path: &syn::Path) -> Option<&'static str> {
+	match canonical_primitive_name(path) {
+		Some("bool") => Some("bool"),
+		Some("i32") => Some("i32"),
+		Some("i64") => Some("i64"),
+		Some("f32") => Some("f32"),
+		Some("f64") => Some("f64"),
+		_ => None,
+	}
+}
+
+/// Return the canonical wire type for a supported field declaration.
+fn named_model_form_canonical_type(ty: &Type) -> Option<TokenStream> {
+	let (optional, inner) = extract_option_type(ty);
+	let Type::Path(type_path) = inner else {
+		return None;
+	};
+	let scalar = named_model_form_canonical_scalar_type(&type_path.path)?;
+	Some(if optional {
+		quote!(::core::option::Option<#scalar>)
+	} else {
+		scalar
+	})
+}
+
+fn named_model_form_type_is_supported(ty: &Type) -> bool {
+	let (optional, inner) = extract_option_type(ty);
+	if optional && extract_option_type(inner).0 {
+		return false;
+	}
+	let Type::Path(type_path) = inner else {
+		return false;
+	};
+	named_model_form_canonical_scalar_type(&type_path.path).is_some()
+}
+
+/// Return whether a named model-form field has the canonical boolean type.
+fn named_model_form_type_is_boolean(ty: &Type) -> bool {
+	let (_, inner) = extract_option_type(ty);
+	let Type::Path(type_path) = inner else {
+		return false;
+	};
+	canonical_primitive_name(&type_path.path) == Some("bool")
+}
+
+fn named_model_form_variant(field: &Ident) -> Result<Ident> {
+	let name = named_model_form_wire_name(field);
+	let variant = crate::pascal_case::to_pascal_case_with_suffix(&name, "");
+	if variant.is_empty() {
+		return Err(syn::Error::new_spanned(
+			field,
+			"named model form field name must contain an alphanumeric character",
+		));
+	}
+	if variant == "Self" {
+		return Err(syn::Error::new_spanned(
+			field,
+			"named model form field name must not generate the reserved `Self` variant",
+		));
+	}
+	Ok(Ident::new(&variant, field.span()))
+}
+
+/// Return the source field's identifier without Rust's raw-identifier marker.
+///
+/// Rust identifiers are used for generated struct access, while descriptor,
+/// policy, serde, and diagnostic names are wire names. Keeping this conversion
+/// in one place prevents `r#type` from leaking into the target-neutral contract
+/// surface.
+fn named_model_form_wire_name(field: &Ident) -> String {
+	ident_to_wire_name(field)
+}
+
+/// Generate the target-neutral output for a nested `form(...)` declaration.
+pub(crate) fn generate_named_model_form_contract(
+	input: &ItemStruct,
+	config: &NamedModelFormConfig,
+) -> Result<TokenStream> {
+	let fields = match &input.fields {
+		Fields::Named(fields) => &fields.named,
+		_ => {
+			return Err(syn::Error::new_spanned(
+				&input.ident,
+				"Model can only be derived for structs with named fields",
+			));
+		}
+	};
+	let lowered = lower_model_fields(fields)?;
+	let model_name = &input.ident;
+	let visibility = &input.vis;
+	let contract_name = &config.name;
+	let contract_stem = ident_to_wire_name(contract_name);
+	let data_name = Ident::new(&format!("{contract_stem}Data"), contract_name.span());
+	let cleaned_data_name =
+		Ident::new(&format!("Cleaned{contract_stem}Data"), contract_name.span());
+	let schema_name = Ident::new(&format!("{contract_stem}Schema"), contract_name.span());
+	let field_name = Ident::new(&format!("{contract_stem}Field"), contract_name.span());
+	let policy_name = Ident::new(&format!("{contract_stem}Policy"), contract_name.span());
+	let visitor_name = Ident::new(
+		&format!("__Reinhardt{contract_stem}DataVisitor"),
+		contract_name.span(),
+	);
+	let legacy_schema_name = Ident::new(&format!("{model_name}FormSchema"), model_name.span());
+	let legacy_data_name = Ident::new(&format!("{model_name}ModelFormData"), model_name.span());
+	let legacy_cleaned_name = Ident::new(
+		&format!("Cleaned{model_name}ModelFormData"),
+		model_name.span(),
+	);
+	let generated_names = [
+		contract_stem.clone(),
+		data_name.to_string(),
+		cleaned_data_name.to_string(),
+		schema_name.to_string(),
+		field_name.to_string(),
+		policy_name.to_string(),
+	];
+	for occupied in [
+		model_name.to_string(),
+		legacy_schema_name.to_string(),
+		legacy_data_name.to_string(),
+		legacy_cleaned_name.to_string(),
+	] {
+		if generated_names.contains(&occupied) {
+			return Err(syn::Error::new_spanned(
+				contract_name,
+				format!(
+					"named model form generated type `{occupied}` collides with model-generated API"
+				),
+			));
+		}
+	}
+
+	let mut generated_methods = HashSet::new();
+	let mut generated_variants = HashMap::new();
+	let mut selected = Vec::with_capacity(config.fields.len());
+	for selected_name in &config.fields {
+		let selected_string = named_model_form_wire_name(selected_name);
+		let relation_name = selected_string.strip_suffix("_id").and_then(|name| {
+			lowered.field_infos.iter().find(|field| {
+				field.name == name
+					&& (is_relationship_field_type(&field.ty)
+						|| is_many_to_many_field_type(&field.ty))
+			})
+		});
+		let declared_reserved_control = is_model_form_reserved_control_name(&selected_string)
+			&& lowered
+				.field_infos
+				.iter()
+				.any(|field| field.name == *selected_name);
+		if declared_reserved_control {
+			let message = if is_model_form_csrf_field_name(&selected_string) {
+				format!(
+					"named model form field `{selected_string}` is reserved for the CSRF control"
+				)
+			} else {
+				format!(
+					"named model form field `{selected_string}` collides with generated model-form API"
+				)
+			};
+			return Err(syn::Error::new_spanned(selected_name, message));
+		}
+		if relation_name.is_some() {
+			return Err(syn::Error::new_spanned(
+				selected_name,
+				format!(
+					"named model form field `{selected_string}` is a generated relationship identifier and is not supported"
+				),
+			));
+		}
+		let matches: Vec<_> = lowered
+			.field_infos
+			.iter()
+			.filter(|field| field.name == *selected_name)
+			.collect();
+		let [field] = matches.as_slice() else {
+			return Err(syn::Error::new_spanned(
+				selected_name,
+				if matches.is_empty() {
+					format!(
+						"named model form field `{selected_string}` does not exist on `{model_name}`"
+					)
+				} else {
+					format!("named model form field `{selected_string}` is declared more than once")
+				},
+			));
+		};
+		if is_relationship_field_type(&field.ty) || is_many_to_many_field_type(&field.ty) {
+			return Err(syn::Error::new_spanned(
+				selected_name,
+				format!(
+					"named model form field `{selected_string}` has unsupported relationship type `{}`",
+					field.ty.to_token_stream()
+				),
+			));
+		}
+		if storage_field_kind(&field.ty).is_some() {
+			return Err(syn::Error::new_spanned(
+				selected_name,
+				format!(
+					"named model form field `{selected_string}` has unsupported file or image type `{}`",
+					field.ty.to_token_stream()
+				),
+			));
+		}
+		if !is_model_form_editable(field, &lowered.field_infos) {
+			return Err(syn::Error::new_spanned(
+				selected_name,
+				format!("named model form field `{selected_string}` is not editable"),
+			));
+		}
+		if !named_model_form_type_is_supported(&field.ty) {
+			return Err(syn::Error::new_spanned(
+				selected_name,
+				format!(
+					"named model form field `{selected_string}` has unsupported Rust type `{}`",
+					field.ty.to_token_stream()
+				),
+			));
+		}
+		model_form_kind(field)?;
+		if named_model_form_type_is_boolean(&field.ty)
+			&& let Some(default) = field.config.default.as_ref()
+			&& !matches!(
+				default,
+				syn::Expr::Lit(syn::ExprLit {
+					lit: syn::Lit::Bool(_),
+					..
+				})
+			) {
+			return Err(syn::Error::new_spanned(
+				default,
+				"named model form boolean defaults must be `true` or `false` literals",
+			));
+		}
+
+		let getter = selected_string.clone();
+		let setter = format!("set_{getter}");
+		let reserved = [
+			"apply_defaults",
+			"clear_json",
+			"clean_and_validate",
+			"clean_and_validate_with_deferred_required_fields",
+			"into_raw",
+			"is_defaulted",
+			"set_normalized_json",
+			"fields",
+			"model_form",
+			"clone",
+			"clone_from",
+			"contract_default_boolean_is_true",
+			"contract_fields",
+			"contract_relation_target_matches",
+			"default",
+			"deserialize",
+			"eq",
+			"fmt",
+			"ne",
+			"serialize",
+			"supplied_fields",
+			"forbidden_fields",
+			"get_json",
+			"set_json",
+			"from_native_form_value",
+		];
+		if reserved.contains(&getter.as_str())
+			|| !generated_methods.insert(getter)
+			|| !generated_methods.insert(setter)
+		{
+			return Err(syn::Error::new_spanned(
+				selected_name,
+				"named model form field name collides with generated contract API",
+			));
+		}
+		let variant = named_model_form_variant(&field.name)?.to_string();
+		if let Some(existing) = generated_variants.insert(variant.clone(), selected_string.clone())
+		{
+			return Err(syn::Error::new_spanned(
+				selected_name,
+				format!(
+					"named model form fields `{existing}` and `{selected_string}` both generate field variant `{variant}`"
+				),
+			));
+		}
+		selected.push(*field);
+	}
+
+	let core_crate = get_reinhardt_core_crate();
+	let serde_crate = get_serde_crate();
+	let serde_json_crate = get_serde_json_crate();
+	let forms_crate = get_reinhardt_forms_crate();
+	let validation_cfg = if forms_crate.is_some() {
+		quote! {}
+	} else {
+		quote!(#[cfg(all(target_family = "wasm", target_os = "unknown"))])
+	};
+	let field_count = selected.len();
+	let field_idents: Vec<_> = selected.iter().map(|field| &field.name).collect();
+	let field_types: Vec<_> = selected.iter().map(|field| &field.ty).collect();
+	let wire_type_assertions = field_types.iter().filter_map(|source_type| {
+		let canonical_type = named_model_form_canonical_type(source_type)?;
+		Some(quote! {
+			const _: fn(#source_type) = |_: #canonical_type| {};
+		})
+	});
+	let field_literals: Vec<_> = selected
+		.iter()
+		.map(|field| LitStr::new(&named_model_form_wire_name(&field.name), field.name.span()))
+		.collect();
+	let variants: Vec<_> = selected
+		.iter()
+		.map(|field| named_model_form_variant(&field.name))
+		.collect::<Result<_>>()?;
+	let variant_docs: Vec<_> = selected
+		.iter()
+		.zip(&variants)
+		.map(|(field, variant)| {
+			let field_name =
+				LitStr::new(&named_model_form_wire_name(&field.name), field.name.span());
+			quote! {
+				#[doc = concat!("Field token for `", #field_name, "`. Parity: P2.")]
+				#variant,
+			}
+		})
+		.collect();
+	let kinds = selected
+		.iter()
+		.map(|field| model_form_kind(field))
+		.collect::<Result<Vec<_>>>()?;
+	let descriptors = selected.iter().zip(&kinds).map(|(field, kind)| {
+		let name = LitStr::new(&named_model_form_wire_name(&field.name), field.name.span());
+		let (is_optional, _) = extract_option_type(&field.ty);
+		let nullable = field.config.null.unwrap_or(is_optional);
+		let required =
+			!nullable && field.config.blank != Some(true) && field.config.default.is_none();
+		let has_default = field.config.default.is_some();
+		let trim = field.form.trim;
+		quote! {
+			#core_crate::model_form::ModelFormFieldDescriptor {
+				name: #name,
+				kind: #kind,
+				required: #required,
+				has_default: #has_default,
+				nullable: #nullable,
+				editable: true,
+				generated_relation_id: false,
+				trim: #trim,
+			}
+		}
+	});
+	let descriptor_const = Ident::new(
+		&format!("__{}_FIELDS", contract_stem.to_uppercase()),
+		contract_name.span(),
+	);
+	let descriptor_accessors = field_idents.iter().enumerate().map(|(index, name)| {
+		let field_name = LitStr::new(&named_model_form_wire_name(name), name.span());
+		quote! {
+			#[doc = concat!("Returns the descriptor for `", #field_name, "`. Parity: P2.")]
+			pub const fn #name() -> &'static #core_crate::model_form::ModelFormFieldDescriptor {
+				&#descriptor_const[#index]
+			}
+		}
+	});
+	let marker_accessors = field_idents.iter().map(|name| {
+		let field_name = LitStr::new(&named_model_form_wire_name(name), name.span());
+		quote! {
+			#[doc = concat!("Returns the descriptor for `", #field_name, "`. Parity: P2.")]
+			pub const fn #name() -> &'static #core_crate::model_form::ModelFormFieldDescriptor {
+				#schema_name::#name()
+			}
+		}
+	});
+	let getters = field_idents.iter().zip(&field_types).map(|(name, ty)| {
+		let field_name = LitStr::new(&named_model_form_wire_name(name), name.span());
+		quote! {
+			#[doc = concat!("Returns the supplied value for `", #field_name, "`. Parity: P2.")]
+			pub fn #name(&self) -> ::core::option::Option<&#ty> {
+				self.#name.as_ref()
+			}
+		}
+	});
+	let setters = field_idents.iter().zip(&field_types).map(|(name, ty)| {
+		let setter = Ident::new(
+			&format!("set_{}", named_model_form_wire_name(name)),
+			name.span(),
+		);
+		let field_name = LitStr::new(&named_model_form_wire_name(name), name.span());
+		quote! {
+			#[doc = concat!("Sets the supplied value for `", #field_name, "`. Parity: P2.")]
+			pub fn #setter(&mut self, value: #ty) {
+				self.#name = ::core::option::Option::Some(value);
+				self.__reinhardt_defaulted_fields.retain(|field| *field != #field_name);
+			}
+		}
+	});
+	let supplied_fields = field_idents
+		.iter()
+		.zip(&field_literals)
+		.map(|(name, literal)| {
+			quote! {
+				if self.#name.is_some() {
+					fields.push(#literal);
+				}
+			}
+		});
+	let get_json_arms = field_idents
+		.iter()
+		.zip(&field_literals)
+		.map(|(name, literal)| {
+			quote! {
+				#literal => self.#name.as_ref().and_then(|value| #serde_json_crate::to_value(value).ok()),
+			}
+		});
+	let set_json_arms = field_idents
+		.iter()
+		.zip(&field_literals)
+		.zip(&field_types)
+		.map(|((name, literal), ty)| {
+			quote! {
+				#literal => {
+					let parsed = #serde_json_crate::from_value::<#ty>(value).map_err(|error| {
+						#core_crate::model_form::ModelFormPayloadError::InvalidValue {
+							field: #literal.to_owned(),
+							message: error.to_string(),
+						}
+					})?;
+					self.#name = ::core::option::Option::Some(parsed);
+					self.__reinhardt_defaulted_fields.retain(|field| *field != #literal);
+					::core::result::Result::Ok(())
+				}
+			}
+		});
+	let serialize_entries = field_idents
+		.iter()
+		.zip(&field_literals)
+		.map(|(name, literal)| {
+			quote! {
+				if let ::core::option::Option::Some(value) = &self.#name {
+					#serde_crate::ser::SerializeMap::serialize_entry(&mut map, #literal, value)?;
+				}
+			}
+		});
+	let deserialize_initializers = field_idents
+		.iter()
+		.map(|name| quote!(let mut #name = ::core::option::Option::None;));
+	let deserialize_arms = field_idents
+		.iter()
+		.zip(&field_literals)
+		.map(|(name, literal)| {
+			quote! {
+				#literal => {
+					if #name.is_some() {
+						return ::core::result::Result::Err(
+							<A::Error as #serde_crate::de::Error>::duplicate_field(#literal),
+						);
+					}
+					#name = ::core::option::Option::Some(map.next_value()?);
+				}
+			}
+		});
+	let default_true_boolean_arms = selected
+		.iter()
+		.filter_map(|field| {
+			if !named_model_form_type_is_boolean(&field.ty) {
+				return None;
+			}
+			let syn::Expr::Lit(syn::ExprLit {
+				lit: syn::Lit::Bool(default),
+				..
+			}) = field.config.default.as_ref()?
+			else {
+				return None;
+			};
+			let name = LitStr::new(&named_model_form_wire_name(&field.name), field.name.span());
+			Some(quote!(#name => #default))
+		})
+		.collect::<Vec<_>>();
+	let default_true_boolean_body = if default_true_boolean_arms.is_empty() {
+		quote!(false)
+	} else {
+		quote!(match field { #(#default_true_boolean_arms,)* _ => false })
+	};
+	let policy_arms = field_literals
+		.iter()
+		.map(|literal| quote!(#literal => true));
+	let field_name_arms = variants
+		.iter()
+		.zip(&field_literals)
+		.map(|(variant, literal)| quote!(Self::#variant => #literal));
+	let ordered_variants = variants.iter().map(|variant| quote!(#field_name::#variant));
+	let into_legacy_assignments = field_idents
+		.iter()
+		.map(|field| {
+			let setter = Ident::new(
+				&format!("set_{}", named_model_form_wire_name(field)),
+				field.span(),
+			);
+			quote! {
+				if let ::core::option::Option::Some(value) = data.#field {
+					legacy.#setter(value).expect("named form policy allows its declared fields");
+				}
+			}
+		})
+		.collect::<Vec<_>>();
+	let native_adapter = forms_crate.map(|forms_crate| {
+		quote! {
+			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+			impl #contract_name {
+				#[doc = "Converts target-neutral payload data into the native ORM-backed model form.\n\nParity: P0. This trusted adapter is intentionally absent on WASM."]
+				pub fn model_form(
+					data: #data_name,
+				) -> #forms_crate::model_form::ModelForm<#model_name, #policy_name> {
+					#forms_crate::model_form::ModelForm::from_payload(data.__reinhardt_into_legacy())
+				}
+			}
+		}
+	});
+	let model_stem = ident_to_wire_name(model_name);
+	let validation_model = Ident::new(
+		&format!("Reinhardt{model_stem}{contract_stem}ValidationModel"),
+		contract_name.span(),
+	);
+	let validation_data = Ident::new(
+		&format!("{validation_model}ModelFormData"),
+		contract_name.span(),
+	);
+	let validation_cleaned = Ident::new(
+		&format!("Cleaned{validation_model}ModelFormData"),
+		contract_name.span(),
+	);
+	let validation_field_names = config.fields.iter().collect::<HashSet<_>>();
+	let validation_fields = lowered
+		.field_infos
+		.iter()
+		.filter(|field| validation_field_names.contains(&field.name))
+		.cloned()
+		.collect::<Vec<_>>();
+	validate_model_form_trim(&lowered.field_infos, true)?;
+	let form_config = ModelFormConfig::from_attrs(&input.attrs)?;
+	let wasm_validation = generate_model_form_support(
+		&validation_model,
+		visibility,
+		&validation_fields,
+		&form_config,
+		None,
+	)?;
+	let wasm_validation_items = syn::parse2::<syn::File>(wasm_validation)?.items;
+	let serde_path = LitStr::new(&serde_crate.to_string(), contract_name.span());
+	let legacy_conversion = quote! {
+		let mut legacy = #legacy_data_name::<#policy_name>::empty();
+		#(#into_legacy_assignments)*
+		legacy.__reinhardt_defaulted_fields = data.__reinhardt_defaulted_fields;
+		legacy
+	};
+	let cleaned_getters = field_idents.iter().zip(&field_types).map(|(name, ty)| {
+		let field_name = LitStr::new(&named_model_form_wire_name(name), name.span());
+		quote! {
+			#[doc = concat!("Returns the normalized value for `", #field_name, "`. Parity: P2.")]
+			pub fn #name(&self) -> ::core::option::Option<&#ty> {
+				self.0.#name()
+			}
+		}
+	});
+
+	Ok(quote! {
+		// Keep the shared payload emitter in the caller's scope so field types,
+		// default expressions, and validator paths resolve identically on both targets.
+		// Only selected scalar fields enter the WASM carrier; ORM fields stay native.
+		#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+		#[doc(hidden)]
+		#[derive(Clone, #serde_crate::Serialize)]
+		#[serde(crate = #serde_path)]
+		#visibility struct #validation_model {
+			#(#field_idents: #field_types,)*
+		}
+
+		#(
+			#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+			#[doc(hidden)]
+			#wasm_validation_items
+		)*
+
+		#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+		#visibility use self::{
+			#validation_data as #legacy_data_name,
+			#validation_cleaned as #legacy_cleaned_name,
+		};
+
+		#[doc = "A target-neutral named model form contract marker.\n\nParity: P2. This marker is generated on native and `wasm32-unknown-unknown` targets."]
+		#visibility struct #contract_name;
+
+		#[derive(Clone, Debug, Default, PartialEq)]
+		#[doc = "The target-neutral JSON payload for a named model form contract.\n\nParity: P2. This payload is generated on native and `wasm32-unknown-unknown` targets."]
+		#visibility struct #data_name {
+			#(#field_idents: ::core::option::Option<#field_types>,)*
+			__reinhardt_defaulted_fields: ::std::vec::Vec<&'static str>,
+		}
+
+		#[doc = "The target-neutral field descriptor schema for a named model form contract.\n\nParity: P2. This schema is generated on native and `wasm32-unknown-unknown` targets."]
+		#visibility struct #schema_name;
+
+		#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+		#[doc = "Typed field tokens for a named model form contract.\n\nParity: P2. This field-token type is generated on native and `wasm32-unknown-unknown` targets."]
+		#visibility enum #field_name {
+			#(#variant_docs)*
+		}
+
+		#[doc(hidden)]
+		#visibility struct #policy_name;
+
+		#(#wire_type_assertions)*
+
+		const #descriptor_const: [#core_crate::model_form::ModelFormFieldDescriptor; #field_count] = [
+			#(#descriptors,)*
+		];
+
+		impl #schema_name {
+			#(#descriptor_accessors)*
+		}
+
+		impl #contract_name {
+			#(#marker_accessors)*
+		}
+
+		#native_adapter
+
+		#validation_cfg
+		#[doc = "A normalized named model-form payload. Parity: P2 on native and WASM targets."]
+		#visibility struct #cleaned_data_name(#legacy_cleaned_name<#policy_name>);
+
+		#validation_cfg
+		impl #cleaned_data_name {
+			#(#cleaned_getters)*
+
+			#[doc = "Converts this normalized payload back to its named raw payload. Parity: P2."]
+			pub fn into_raw(self) -> #data_name {
+				let data = self.0.into_raw();
+				let defaulted_fields = [#(#field_literals),*].into_iter().filter(|field| {
+					<#legacy_data_name<#policy_name> as #core_crate::model_form::ModelFormPayload<#policy_name>>::is_defaulted(&data, field)
+				}).collect();
+				#data_name {
+					#(#field_idents: data.#field_idents().cloned(),)*
+					__reinhardt_defaulted_fields: defaulted_fields,
+				}
+			}
+		}
+
+		#validation_cfg
+		impl #core_crate::model_form::ModelFormCleanedPayload for #cleaned_data_name {
+			type Raw = #data_name;
+
+			fn into_raw(self) -> Self::Raw {
+				#cleaned_data_name::into_raw(self)
+			}
+		}
+
+		#validation_cfg
+		impl #data_name {
+			fn __reinhardt_into_legacy(self) -> #legacy_data_name<#policy_name> {
+				let data = self;
+				#legacy_conversion
+			}
+		}
+
+		#validation_cfg
+		impl #core_crate::model_form::ModelFormValidatingPayload for #data_name {
+			type Cleaned = #cleaned_data_name;
+
+			fn clean_and_validate(self) -> ::core::result::Result<Self::Cleaned, #core_crate::validators::ValidationErrors> {
+				<#legacy_data_name<#policy_name> as #core_crate::model_form::ModelFormValidatingPayload>::clean_and_validate(
+					self.__reinhardt_into_legacy(),
+				).map(#cleaned_data_name)
+			}
+
+			fn clean_and_validate_with_deferred_required_fields(
+				self,
+				deferred_fields: &[&str],
+			) -> ::core::result::Result<Self::Cleaned, #core_crate::validators::ValidationErrors> {
+				<#legacy_data_name<#policy_name> as #core_crate::model_form::ModelFormValidatingPayload>::clean_and_validate_with_deferred_required_fields(
+					self.__reinhardt_into_legacy(),
+					deferred_fields,
+				).map(#cleaned_data_name)
+			}
+		}
+
+		impl #data_name {
+			#(#getters)*
+			#(#setters)*
+		}
+
+		impl #core_crate::model_form::ModelFormContractSchema for #schema_name {
+			fn contract_fields() -> &'static [#core_crate::model_form::ModelFormFieldDescriptor] {
+				&#descriptor_const
+			}
+
+			fn contract_default_boolean_is_true(field: &str) -> bool {
+				#default_true_boolean_body
+			}
+		}
+
+		impl #core_crate::model_form::ModelFormContractField for #field_name {
+			fn name(self) -> &'static str {
+				match self {
+					#(#field_name_arms,)*
+				}
+			}
+		}
+
+		impl #core_crate::model_form::ModelFormPolicy for #policy_name {
+			fn allows(field: &str) -> bool {
+				match field {
+					#(#policy_arms,)*
+					_ => false,
+				}
+			}
+		}
+
+		impl #core_crate::model_form::ModelFormPayload<#policy_name> for #data_name {
+			fn supplied_fields(&self) -> ::std::vec::Vec<&'static str> {
+				let mut fields = ::std::vec::Vec::new();
+				#(#supplied_fields)*
+				fields
+			}
+
+			fn forbidden_fields(&self) -> &[&'static str] {
+				&[]
+			}
+
+			fn is_defaulted(&self, field: &str) -> bool {
+				self.__reinhardt_defaulted_fields.contains(&field)
+			}
+
+			fn get_json(&self, field: &str) -> ::core::option::Option<#serde_json_crate::Value> {
+				match field {
+					#(#get_json_arms)*
+					_ => ::core::option::Option::None,
+				}
+			}
+
+			fn set_json(
+				&mut self,
+				field: &str,
+				value: #serde_json_crate::Value,
+			) -> ::core::result::Result<(), #core_crate::model_form::ModelFormPayloadError> {
+				match field {
+					#(#set_json_arms,)*
+					_ => ::core::result::Result::Err(
+						#core_crate::model_form::ModelFormPayloadError::UnknownField {
+							field: field.to_owned(),
+						},
+					),
+				}
+			}
+		}
+
+		impl #core_crate::model_form::NativeModelFormPayload for #data_name {
+			fn from_native_form_value(
+				value: #serde_json_crate::Value,
+			) -> ::core::result::Result<Self, #serde_json_crate::Error> {
+				let value = #core_crate::model_form::normalize_native_model_form_value::<#schema_name, #policy_name>(value)?;
+				#serde_json_crate::from_value(value)
+			}
+		}
+
+		impl #serde_crate::Serialize for #data_name {
+			fn serialize<S>(&self, serializer: S) -> ::core::result::Result<S::Ok, S::Error>
+			where
+				S: #serde_crate::Serializer,
+			{
+				let mut map = #serde_crate::Serializer::serialize_map(
+					serializer,
+					::core::option::Option::None,
+				)?;
+				#(#serialize_entries)*
+				#serde_crate::ser::SerializeMap::end(map)
+			}
+		}
+
+		struct #visitor_name;
+
+		impl<'de> #serde_crate::de::Visitor<'de> for #visitor_name {
+			type Value = #data_name;
+
+			fn expecting(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+				formatter.write_str("a named model form payload object")
+			}
+
+			fn visit_map<A>(self, mut map: A) -> ::core::result::Result<Self::Value, A::Error>
+			where
+				A: #serde_crate::de::MapAccess<'de>,
+			{
+				#(#deserialize_initializers)*
+				while let ::core::option::Option::Some(field) =
+					map.next_key::<::std::string::String>()?
+				{
+					match field.as_str() {
+						#(#deserialize_arms,)*
+						_ => return ::core::result::Result::Err(
+							<A::Error as #serde_crate::de::Error>::unknown_field(
+								&field,
+								&[#(#field_literals),*],
+							),
+						),
+					}
+				}
+				::core::result::Result::Ok(#data_name {
+					#(#field_idents,)*
+					__reinhardt_defaulted_fields: ::std::vec::Vec::new(),
+				})
+			}
+		}
+
+		impl<'de> #serde_crate::Deserialize<'de> for #data_name {
+			fn deserialize<D>(deserializer: D) -> ::core::result::Result<Self, D::Error>
+			where
+				D: #serde_crate::Deserializer<'de>,
+			{
+				#serde_crate::Deserializer::deserialize_map(deserializer, #visitor_name)
+			}
+		}
+
+		impl #core_crate::model_form::ModelFormContract for #contract_name {
+			type Data = #data_name;
+			type Schema = #schema_name;
+			type Field = #field_name;
+			type Policy = #policy_name;
+
+			fn fields() -> &'static [Self::Field] {
+				&[#(#ordered_variants),*]
 			}
 		}
 	})
@@ -4942,11 +6351,11 @@ fn generate_field_accessors(
 	let mut unique_field_names: HashSet<String> = field_infos
 		.iter()
 		.filter(|field| field.config.unique == Some(true))
-		.map(|field| field.name.to_string())
+		.map(|field| ident_to_wire_name(&field.name))
 		.collect();
 
 	if let [primary_key] = primary_key_fields.as_slice() {
-		unique_field_names.insert(primary_key.name.to_string());
+		unique_field_names.insert(ident_to_wire_name(&primary_key.name));
 	}
 
 	for constraint in constraints {
@@ -4967,14 +6376,14 @@ fn generate_field_accessors(
 		.filter(|field| !field.config.skip)
 		.map(|field| {
 			let field_name = &field.name;
-			let logical_name = field_name.to_string();
+			let logical_name = ident_to_wire_name(field_name);
 			let field_type = &field.ty;
-			let method_name = syn::Ident::new(&format!("field_{}", field_name), field_name.span());
+			let method_name = syn::Ident::new(&format!("field_{logical_name}"), field_name.span());
 			let column_name = field
 				.config
 				.db_column
 				.clone()
-				.unwrap_or_else(|| field_name.to_string());
+				.unwrap_or_else(|| logical_name.clone());
 			let field_constructor = if storage_field_kind(&field.ty).is_some() {
 				let storage_alias = field.config.file_storage.as_deref().unwrap_or("default");
 				let max_length = file_field_max_length(&field.config)
@@ -5017,7 +6426,7 @@ fn generate_field_accessors(
 					StorageFieldKind::File => {
 						let cleanup = field.config.cleanup.unwrap_or(false);
 						let method_name =
-							syn::Ident::new(&format!("file_{}", field_name), field_name.span());
+							syn::Ident::new(&format!("file_{logical_name}"), field_name.span());
 						quote! {
 							/// Upload policy descriptor for this storage-backed file field.
 							pub const fn #method_name() -> #orm_crate::ModelFileField<Self> {
@@ -5037,7 +6446,7 @@ fn generate_field_accessors(
 					}
 					StorageFieldKind::Image => {
 						let method_name =
-							syn::Ident::new(&format!("image_{}", field_name), field_name.span());
+							syn::Ident::new(&format!("image_{logical_name}"), field_name.span());
 						let cleanup = field.config.cleanup.unwrap_or(false);
 						let max_width = field
 							.config
@@ -5094,7 +6503,7 @@ fn generate_field_accessors(
 	let declared_field_names: HashSet<_> = field_infos
 		.iter()
 		.filter(|field| !field.config.skip)
-		.map(|field| field.name.to_string())
+		.map(|field| ident_to_wire_name(&field.name))
 		.collect();
 	let relation_column_accessor_methods: Vec<_> = field_infos
 		.iter()
@@ -5111,7 +6520,7 @@ fn generate_field_accessors(
 			if declared_field_names.contains(column_name) {
 				return None;
 			}
-			let generated_id_field_name = format!("{}_id", field.name);
+			let generated_id_field_name = format!("{}_id", ident_to_wire_name(&field.name));
 			let field_type = &field_infos
 				.iter()
 				.find(|candidate| candidate.name == generated_id_field_name)?
@@ -5149,13 +6558,14 @@ fn generate_field_accessors(
 		.filter(|field| !is_many_to_many_field_type(&field.ty))
 		.map(|field| {
 			let field_name = &field.name;
+			let logical_name = ident_to_wire_name(field_name);
 			let method_name =
-				syn::Ident::new(&format!("ordering_{}", field_name), field_name.span());
+				syn::Ident::new(&format!("ordering_{logical_name}"), field_name.span());
 			let column_name = field
 				.config
 				.db_column
 				.clone()
-				.unwrap_or_else(|| field_name.to_string());
+				.unwrap_or_else(|| logical_name.clone());
 
 			quote! {
 				/// Ordering proof for a persisted scalar model field.
@@ -5169,22 +6579,23 @@ fn generate_field_accessors(
 	let unique_fields: Vec<_> = field_infos
 		.iter()
 		.filter(|field| !field.config.skip)
-		.filter(|field| unique_field_names.contains(&field.name.to_string()))
+		.filter(|field| unique_field_names.contains(&ident_to_wire_name(&field.name)))
 		.collect();
 	let unique_accessor_methods: Vec<_> = unique_fields
 		.iter()
 		.map(|field| {
 			let field_name = &field.name;
-			let logical_name = field_name.to_string();
+			let logical_name = ident_to_wire_name(field_name);
 			let (is_option, lookup_type) = extract_option_type(&field.ty);
 			let field_name_str = field
 				.config
 				.db_column
 				.clone()
-				.unwrap_or_else(|| field_name.to_string());
-			let method_name = syn::Ident::new(&format!("unique_{}", field_name), field_name.span());
+				.unwrap_or_else(|| logical_name.clone());
+			let method_name =
+				syn::Ident::new(&format!("unique_{logical_name}"), field_name.span());
 			let getter_name = syn::Ident::new(
-				&format!("__reinhardt_unique_get_{}", field_name),
+				&format!("__reinhardt_unique_get_{logical_name}"),
 				field_name.span(),
 			);
 			let getter_body = if is_option {
@@ -5291,14 +6702,14 @@ fn generate_relation_traversal_accessors(
 		.filter(|field| !is_many_to_many_field_type(&field.ty))
 		.map(|field| {
 			let field_name = &field.name;
-			let logical_name = field_name.to_string();
+			let logical_name = ident_to_wire_name(field_name);
 			let column_name = field
 				.config
 				.db_column
 				.clone()
 				.unwrap_or_else(|| logical_name.clone());
 			let field_type = &field.ty;
-			let method_name = syn::Ident::new(&format!("field_{}", field_name), field_name.span());
+			let method_name = syn::Ident::new(&format!("field_{logical_name}"), field_name.span());
 			let doc_comment =
 				format!("Reference the `{logical_name}` field through this relation path.");
 
@@ -5346,8 +6757,8 @@ fn generate_relation_traversal_accessors(
 		.filter_map(|field| {
 			let rel = field.rel.as_ref()?;
 			let field_name = &field.name;
-			let field_name_str = field_name.to_string();
-			let method_name = syn::Ident::new(&format!("rel_{}", field_name), field_name.span());
+			let field_name_str = ident_to_wire_name(field_name);
+			let method_name = syn::Ident::new(&format!("rel_{field_name_str}"), field_name.span());
 			let relation_type_name = crate::pascal_case::to_pascal_case_with_suffix(
 				&field_name_str,
 				"RelationDescriptor",
@@ -5369,6 +6780,7 @@ fn generate_relation_traversal_accessors(
 					let target_column = rel.to_field.as_ref().map_or_else(
 						|| quote! { <#target_ty as #orm_crate::Model>::primary_key_column() },
 						|field| {
+							let target_field_name = field.clone();
 							quote! {
 								<#target_ty as #orm_crate::Model>::field_metadata()
 									.into_iter()
@@ -5379,7 +6791,7 @@ fn generate_relation_traversal_accessors(
 											None
 										}
 									})
-									.unwrap_or_else(|| #field.to_string())
+									.unwrap_or_else(|| #target_field_name.to_string())
 							}
 						},
 					);
@@ -5411,6 +6823,7 @@ fn generate_relation_traversal_accessors(
 					let source_column = rel.to_field.as_ref().map_or_else(
 						|| quote! { <#struct_name as #orm_crate::Model>::primary_key_column() },
 						|field| {
+							let target_field_name = field.clone();
 							quote! {
 								<#struct_name as #orm_crate::Model>::field_metadata()
 									.into_iter()
@@ -5421,7 +6834,7 @@ fn generate_relation_traversal_accessors(
 											None
 										}
 									})
-									.unwrap_or_else(|| #field.to_string())
+									.unwrap_or_else(|| #target_field_name.to_string())
 							}
 						},
 					);
@@ -5697,11 +7110,11 @@ fn generate_m2m_accessor_methods(
 		.filter(|field| is_many_to_many_field_type(&field.ty))
 		.filter_map(|field| {
 			let field_name = &field.name;
-			let field_name_str = field_name.to_string();
+			let field_name_str = ident_to_wire_name(field_name);
 
 			// Method name: {field_name}_accessor
 			let method_name = syn::Ident::new(
-				&format!("{}_accessor", field_name),
+				&format!("{field_name_str}_accessor"),
 				field_name.span()
 			);
 
@@ -5762,11 +7175,11 @@ fn generate_fk_accessor_methods(
 		})
 		.map(|field| {
 			let field_name = &field.name;
-			let field_name_str = field_name.to_string();
+			let field_name_str = ident_to_wire_name(field_name);
 
 			// FK _id field name (e.g., user → user_id)
 			let fk_id_field_name = syn::Ident::new(
-				&format!("{}_id", field_name),
+				&format!("{}_id", ident_to_wire_name(field_name)),
 				field_name.span()
 			);
 
@@ -5781,6 +7194,7 @@ fn generate_fk_accessor_methods(
 				.is_some_and(|candidate| extract_option_type(&candidate.ty).0);
 			let target_column = field.rel.as_ref().and_then(|relation| {
 				relation.to_field.as_ref().map(|target_field| {
+					let target_field_name = target_field.clone();
 					quote! {
 						<#target_ty as #orm_crate::Model>::field_metadata()
 							.into_iter()
@@ -5791,7 +7205,7 @@ fn generate_fk_accessor_methods(
 									None
 								}
 							})
-							.unwrap_or_else(|| #target_field.to_string())
+							.unwrap_or_else(|| #target_field_name.to_string())
 					}
 				})
 			});
@@ -5899,7 +7313,7 @@ fn generate_fk_static_accessor_methods(
 		})
 		.map(|field| {
 			let field_name = &field.name;
-			let field_name_str = field_name.to_string();
+			let field_name_str = ident_to_wire_name(field_name);
 
 			let db_column = field
 				.rel
@@ -5909,7 +7323,7 @@ fn generate_fk_static_accessor_methods(
 
 			// Method name: {field_name}_accessor
 			let method_name =
-				syn::Ident::new(&format!("{}_accessor", field_name), field_name.span());
+				syn::Ident::new(&format!("{field_name_str}_accessor"), field_name.span());
 
 			// Extract Target from ForeignKeyField<Target> or OneToOneField<Target>
 			let target_ty = extract_foreign_key_target_type(&field.ty);
@@ -6010,6 +7424,7 @@ where
 		})
 		.map(|field| {
 			let field_name = &field.name;
+			let field_name_wire = ident_to_wire_name(field_name);
 			let field_type = &field.ty;
 			let method_name = field_name;
 
@@ -6017,21 +7432,21 @@ where
 			// them by value so native and WASM callers share the same API.
 			if field.is_fk_id_field {
 				quote! {
-					#[doc = concat!("Get ", stringify!(#field_name))]
+					#[doc = concat!("Get ", #field_name_wire)]
 					pub fn #method_name(&self) -> #field_type {
 						self.#field_name.clone()
 					}
 				}
 			} else if is_copy_type(field_type) {
 				quote! {
-					#[doc = concat!("Get ", stringify!(#field_name))]
+					#[doc = concat!("Get ", #field_name_wire)]
 					pub fn #method_name(&self) -> #field_type {
 						self.#field_name
 					}
 				}
 			} else {
 				quote! {
-					#[doc = concat!("Get reference to ", stringify!(#field_name))]
+					#[doc = concat!("Get reference to ", #field_name_wire)]
 					pub fn #method_name(&self) -> &#field_type {
 						&self.#field_name
 					}
@@ -6054,11 +7469,15 @@ fn generate_setter_methods(struct_name: &syn::Ident, field_infos: &[FieldInfo]) 
 		.filter(|f| !is_auto_generated_field(f) && !f.config.skip_getter)
 		.map(|field| {
 			let field_name = &field.name;
+			let field_name_wire = ident_to_wire_name(field_name);
 			let field_type = &field.ty;
-			let setter_name = syn::Ident::new(&format!("set_{}", field_name), field_name.span());
+			let setter_name = syn::Ident::new(
+				&format!("set_{}", ident_to_wire_name(field_name)),
+				field_name.span(),
+			);
 
 			quote! {
-				#[doc = concat!("Set ", stringify!(#field_name))]
+				#[doc = concat!("Set ", #field_name_wire)]
 				pub fn #setter_name(&mut self, value: #field_type) {
 					self.#field_name = value;
 				}
@@ -6121,82 +7540,11 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 		}
 	};
 
-	// Process all fields
-	let mut field_infos = Vec::new();
-	let mut rel_fields = Vec::new();
-	// Collect auto-generated FK _id field names for builder setter generation.
-	let mut fk_id_field_names: Vec<syn::Ident> = Vec::new();
-
-	for field in fields {
-		// Check if this is auto-generated FK _id field
-		// These are generated by #[model] attribute macro
-		// Identified by: field name ends with "_id" AND type matches a generated primary-key projection
-		let is_fk_id_field = if let Some(field_name) = &field.ident {
-			let name_str = field_name.to_string();
-			let field_ty = &field.ty;
-			let type_str = quote!(#field_ty).to_string();
-
-			// Check if field name ends with "_id" and type contains a primary-key projection.
-			// This pattern identifies auto-generated FK _id fields created by #[model(...)] macro
-			name_str.ends_with("_id")
-				&& (type_str.contains("InfoModel") || type_str.contains("Model"))
-				&& type_str.contains("PrimaryKey")
-		} else {
-			false
-		};
-
-		if is_fk_id_field {
-			// Collect the field name for builder setter generation.
-			if let Some(field_name) = &field.ident {
-				fk_id_field_names.push(field_name.clone());
-			}
-			// FK _id fields need getters but not setters, so add them to field_infos
-			// with a flag to indicate they are auto-generated
-		}
-
-		let name = field
-			.ident
-			.clone()
-			.ok_or_else(|| syn::Error::new_spanned(field, "Field must have a name"))?;
-		let ty = field.ty.clone();
-		let config = FieldConfig::from_attrs(&field.attrs)?;
-		config.validate_for_field_type(&ty)?;
-		let form = FieldFormConfig::from_attrs(&field.attrs)?;
-		let injected_relation_serde_skip = field.attrs.iter().any(|attr| {
-			attr.path()
-				.is_ident("reinhardt_internal_relation_serde_skip")
-		});
-		let serde_attrs: Vec<syn::Attribute> = field
-			.attrs
-			.iter()
-			.filter(|attr| attr.path().is_ident("serde"))
-			.cloned()
-			.collect();
-
-		// Parse #[rel(...)] attribute if present
-		let rel = field
-			.attrs
-			.iter()
-			.find(|attr| attr.path().is_ident("rel"))
-			.map(RelAttribute::from_attribute)
-			.transpose()?;
-
-		// Collect relationship fields for later processing
-		if let Some(ref rel_attr) = rel {
-			rel_fields.push((name.clone(), rel_attr.clone()));
-		}
-
-		field_infos.push(FieldInfo {
-			name,
-			ty,
-			config,
-			form,
-			serde_attrs,
-			injected_relation_serde_skip,
-			rel,
-			is_fk_id_field,
-		});
-	}
+	let LoweredModelFields {
+		field_infos,
+		rel_fields,
+		fk_id_field_names,
+	} = lower_model_fields(fields)?;
 	validate_model_form_trim(&field_infos, model_config.form)?;
 
 	let latest_by_fields = model_config
@@ -6253,7 +7601,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 				let id_column_name = rel_attr
 					.db_column
 					.clone()
-					.unwrap_or_else(|| format!("{}_id", field_info.name));
+					.unwrap_or_else(|| format!("{}_id", ident_to_wire_name(&field_info.name)));
 
 				fk_field_infos.push(ForeignKeyFieldInfo {
 					field_name: field_info.name.clone(),
@@ -6298,7 +7646,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 						.config
 						.db_column
 						.clone()
-						.unwrap_or_else(|| field.name.to_string())
+						.unwrap_or_else(|| ident_to_wire_name(&field.name))
 				});
 			(column, field.config.index_condition.clone())
 		})
@@ -6324,7 +7672,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 				.config
 				.db_column
 				.clone()
-				.unwrap_or_else(|| field.name.to_string());
+				.unwrap_or_else(|| ident_to_wire_name(&field.name));
 			let opclass = &config.opclass;
 			let index_type = match config.method {
 				StructuredIndexMethod::Hnsw => {
@@ -6367,7 +7715,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			f.config
 				.check
 				.as_ref()
-				.map(|expr| (f.name.to_string(), expr.clone()))
+				.map(|expr| (ident_to_wire_name(&f.name), expr.clone()))
 		})
 		.collect();
 
@@ -6387,7 +7735,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			.iter()
 			.find(|field| field.name == field_name)
 			.and_then(|field| field.config.db_column.clone())
-			.unwrap_or_else(|| field_name.to_string())
+			.unwrap_or_else(|| field_name.to_owned())
 	};
 	let unique_constraints: Vec<UniqueConstraintMetadata> = model_config
 		.constraints
@@ -6495,7 +7843,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 		.config
 		.db_column
 		.clone()
-		.unwrap_or_else(|| pk_fields[0].name.to_string());
+		.unwrap_or_else(|| ident_to_wire_name(&pk_fields[0].name));
 	let primary_key_uses_zero_sentinel = !is_composite_pk
 		&& !pk_is_option
 		&& is_integer_primary_key_type(&pk_fields[0].ty)
@@ -6734,7 +8082,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	};
 	let primary_key_field_names = pk_fields
 		.iter()
-		.map(|field| LitStr::new(&field.name.to_string(), field.name.span()));
+		.map(|field| LitStr::new(&ident_to_wire_name(&field.name), field.name.span()));
 	let model_form_primary_key_fields_impl = quote! {
 		impl #info_impl_generics #core_crate::model_form::ModelFormPrimaryKeyFields for #struct_name #info_ty_generics #info_where_clause {
 			fn primary_key_fields() -> &'static [&'static str] {
@@ -6805,17 +8153,19 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 		}
 
 		let field_name = &field.name;
+		let field_name_wire = ident_to_wire_name(field_name);
 		Some(quote! {
-			stringify!(#field_name) => self.#field_name.is_none(),
+			#field_name_wire => self.#field_name.is_none(),
 		})
 	});
 	let generated_field_names: Vec<_> = field_infos
 		.iter()
 		.filter(|field| field.config.generated.is_some() || field.config.generated_sql.is_some())
 		.flat_map(|field| {
-			let rust_name = LitStr::new(&field.name.to_string(), field.name.span());
+			let rust_name = LitStr::new(&ident_to_wire_name(&field.name), field.name.span());
 			let column_name = field.config.db_column.as_ref().and_then(|name| {
-				(name != &field.name.to_string()).then(|| LitStr::new(name, field.name.span()))
+				(name != &ident_to_wire_name(&field.name))
+					.then(|| LitStr::new(name, field.name.span()))
 			});
 			std::iter::once(rust_name).chain(column_name)
 		})
@@ -6827,11 +8177,12 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	let encode_database_fields = database_codec_fields.iter().map(|field| {
 		let field_name = &field.name;
 		let field_ty = &field.ty;
+		let logical_name = ident_to_wire_name(field_name);
 		let column_name = field
 			.config
 			.db_column
 			.clone()
-			.unwrap_or_else(|| field_name.to_string());
+			.unwrap_or_else(|| logical_name.clone());
 		let context_metadata = if storage_field_kind(&field.ty).is_some() {
 			let storage_alias = field.config.file_storage.as_deref().unwrap_or("default");
 			let max_length = file_field_max_length(&field.config)
@@ -6844,7 +8195,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 		quote! {
 			let context = #orm_crate::FieldCodecContext::new(
 				stringify!(#struct_name),
-				stringify!(#field_name),
+				#logical_name,
 				#column_name,
 			)#context_metadata;
 			<#field_ty as #orm_crate::DatabaseField>::validate_database_context(
@@ -6852,7 +8203,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 				&context,
 			)?;
 			fields.insert(
-				stringify!(#field_name).to_string(),
+				#logical_name.to_string(),
 				<<#field_ty as #orm_crate::DatabaseField>::Storage as #orm_crate::DatabaseScalar>::into_database_value(
 					<#field_ty as #orm_crate::DatabaseField>::encode_database(&self.#field_name)?
 				),
@@ -6878,11 +8229,12 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	let decode_database_fields = database_codec_fields.iter().map(|field| {
 		let field_name = &field.name;
 		let field_ty = &field.ty;
+		let logical_name = ident_to_wire_name(field_name);
 		let column_name = field
 			.config
 			.db_column
 			.clone()
-			.unwrap_or_else(|| field_name.to_string());
+			.unwrap_or_else(|| logical_name.clone());
 		let context_metadata = if storage_field_kind(&field.ty).is_some() {
 			let storage_alias = field.config.file_storage.as_deref().unwrap_or("default");
 			let max_length = file_field_max_length(&field.config)
@@ -6893,11 +8245,11 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			quote! {}
 		};
 		quote! {
-			stringify!(#field_name) => {
+			#logical_name => {
 				let storage = <<#field_ty as #orm_crate::DatabaseField>::Storage as #orm_crate::DatabaseScalar>::from_database_value(value)?;
 				let context = #orm_crate::FieldCodecContext::new(
 					stringify!(#struct_name),
-					stringify!(#field_name),
+					#logical_name,
 					#column_name,
 				)#context_metadata;
 				let decoded = <#field_ty as #orm_crate::DatabaseField>::decode_database(storage, &context)?;
@@ -6908,7 +8260,17 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	let fixture_validation =
 		generate_fixture_validation(struct_name, generics, &field_infos, &fk_field_infos);
 	let model_form_output = if model_config.form {
-		generate_model_form_support(struct_name, struct_vis, &field_infos, &model_form_config)?
+		let selected_fields = model_config
+			.named_form
+			.as_ref()
+			.map(|form| form.fields.as_slice());
+		generate_model_form_support(
+			struct_name,
+			struct_vis,
+			&field_infos,
+			&model_form_config,
+			selected_fields,
+		)?
 	} else {
 		quote! {}
 	};
@@ -7185,8 +8547,11 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 				let unique_columns = vec![#(#generated_unique_physical_columns.to_string()),*];
 				let mut reserved = vec![#(#declared_constraint_names.to_string()),*];
 				reserved.extend([#(#generated_foreign_key_names),*]);
+				// Inherent `field_{name}` accessors such as `field_metadata()` for a
+				// model field named `metadata` shadow `Self::field_metadata()`. Use
+				// UFCS so constraint lookup keeps the Model trait method.
 				reserved.extend(
-					Self::field_metadata()
+					<Self as #orm_crate::Model>::field_metadata()
 						.into_iter()
 						.filter(|field| field.domain.is_some())
 						.map(|field| #orm_crate::naming::enum_domain_constraint_name(
@@ -7345,6 +8710,7 @@ fn generate_fixture_validation(
 		}
 
 		let field_name = &field.name;
+		let field_name_wire = ident_to_wire_name(field_name);
 		let field_type = &field.ty;
 		let is_database_generated = is_fixture_generated_field(field);
 		let has_sql_default = field
@@ -7355,7 +8721,7 @@ fn generate_fixture_validation(
 			.is_some();
 		if storage_field_kind(field_type).is_some() {
 			let validator_name = Ident::new(
-				&format!("__reinhardt_validate_fixture_file_field_{field_name}"),
+				&format!("__reinhardt_validate_fixture_file_field_{field_name_wire}"),
 				field_name.span(),
 			);
 			let validator = LitStr::new(&validator_name.to_string(), field_name.span());
@@ -7370,7 +8736,7 @@ fn generate_fixture_validation(
 				.expect("validated FileField max_length must fit in u32")
 				.to_string();
 			let model_name = struct_name.to_string();
-			let logical_name = field_name.to_string();
+			let logical_name = field_name_wire.clone();
 			let column_name = field
 				.config
 				.db_column
@@ -7441,11 +8807,11 @@ fn generate_fixture_validation(
 			};
 			let validator = if let Some(deserializer) = custom_deserializer {
 				let validator_name = Ident::new(
-					&format!("__reinhardt_validate_defaulted_fixture_field_{field_name}"),
+					&format!("__reinhardt_validate_defaulted_fixture_field_{field_name_wire}"),
 					field_name.span(),
 				);
 				let null_error_message = LitStr::new(
-					&format!("fixture field '{field_name}' cannot be null"),
+					&format!("fixture field '{field_name_wire}' cannot be null"),
 					field_name.span(),
 				);
 				let validation = if is_option && field.config.null == Some(false) {
@@ -7513,12 +8879,12 @@ fn generate_fixture_validation(
 						|| (field.config.primary_key && !is_fixture_generated_field(field))));
 			if let Some(deserializer) = custom_deserializer.filter(|_| type_is_rewritten) {
 				let validator_name = Ident::new(
-					&format!("__reinhardt_validate_fixture_field_{field_name}"),
+					&format!("__reinhardt_validate_fixture_field_{field_name_wire}"),
 					field_name.span(),
 				);
 				let validator = LitStr::new(&validator_name.to_string(), field_name.span());
 				let null_error_message = LitStr::new(
-					&format!("fixture field '{field_name}' cannot be null"),
+					&format!("fixture field '{field_name_wire}' cannot be null"),
 					field_name.span(),
 				);
 				let rejects_null = is_option
@@ -7753,7 +9119,7 @@ fn generate_field_metadata(
 	}
 
 	for field_info in regular_fields {
-		let name = field_info.name.to_string();
+		let name = ident_to_wire_name(&field_info.name);
 		let field_type_path = field_type_to_metadata_string(&field_info.ty, &field_info.config)?;
 		let _field_type = map_type_to_field_type(&field_info.ty, &field_info.config)?;
 		let config = &field_info.config;
@@ -8313,7 +9679,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 	// Generate field registration code for regular fields
 	let mut field_registrations = Vec::new();
 	for field_info in &regular_fields {
-		let field_name = field_info.name.to_string();
+		let field_name = ident_to_wire_name(&field_info.name);
 		let field_ty = &field_info.ty;
 		let field_type = map_type_to_field_type(&field_info.ty, &field_info.config)?;
 		let config = &field_info.config;
@@ -8539,7 +9905,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 	// Generate ManyToMany field registration code
 	let mut m2m_registrations = Vec::new();
 	for field_info in &m2m_fields {
-		let field_name = field_info.name.to_string();
+		let field_name = ident_to_wire_name(&field_info.name);
 		let target_ty = extract_m2m_target_type(&field_info.ty)
 			.cloned()
 			.or_else(|| {
@@ -8606,8 +9972,8 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 	let mut fk_id_registrations = Vec::new();
 	for fk_info in fk_field_infos {
 		let id_column_name = &fk_info.id_column_name;
-		let rust_field_name = fk_info.field_name.to_string();
-		let logical_field_name = format!("{}_id", fk_info.field_name);
+		let rust_field_name = ident_to_wire_name(&fk_info.field_name);
+		let logical_field_name = format!("{}_id", ident_to_wire_name(&fk_info.field_name));
 		let nullable = fk_info.rel_attr.null.unwrap_or(false);
 		let unique = fk_info.is_one_to_one; // OneToOne fields have UNIQUE constraint
 		let db_index = fk_info.rel_attr.db_index.unwrap_or(true); // FK fields are indexed by default
@@ -8828,7 +10194,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 				.config
 				.db_column
 				.clone()
-				.unwrap_or_else(|| field.name.to_string());
+				.unwrap_or_else(|| ident_to_wire_name(&field.name));
 			let opclass = &config.opclass;
 			let index_type = match config.method {
 				StructuredIndexMethod::Hnsw => {
@@ -8876,7 +10242,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 						.config
 						.db_column
 						.clone()
-						.unwrap_or_else(|| field.name.to_string())
+						.unwrap_or_else(|| ident_to_wire_name(&field.name))
 				});
 			let name = format!("idx_{}_{}", table_name, column);
 			let condition = match &field.config.index_condition {
@@ -8969,7 +10335,7 @@ fn generate_relationship_registrations(
 	// Process ForeignKey and OneToOne fields
 	for fk_info in fk_field_infos {
 		let field_name = &fk_info.field_name;
-		let field_name_str = field_name.to_string();
+		let field_name_str = ident_to_wire_name(field_name);
 		let is_one_to_one = fk_info.is_one_to_one;
 
 		// Extract target model name from Type
@@ -9082,7 +10448,7 @@ fn generate_relationship_registrations(
 		}
 
 		let field_name = &field_info.name;
-		let field_name_str = field_name.to_string();
+		let field_name_str = ident_to_wire_name(field_name);
 
 		// Extract target model name from ManyToManyField<Source, Target>
 		let target_model_name = if let Some(target_ty) = extract_m2m_target_type(&field_info.ty) {
@@ -9189,7 +10555,10 @@ fn generate_relationship_registrations(
 fn generate_composite_pk_impl(pk_fields: &[&FieldInfo]) -> TokenStream {
 	let orm_crate = get_reinhardt_orm_crate();
 
-	let field_name_strings: Vec<String> = pk_fields.iter().map(|f| f.name.to_string()).collect();
+	let field_name_strings: Vec<String> = pk_fields
+		.iter()
+		.map(|f| ident_to_wire_name(&f.name))
+		.collect();
 
 	quote! {
 		fn composite_primary_key() -> Option<#orm_crate::composite_pk::CompositePrimaryKey> {
@@ -9248,9 +10617,10 @@ fn generate_composite_pk_type(struct_name: &syn::Ident, pk_fields: &[&FieldInfo]
 	let pk_value_conversions: Vec<_> = field_names
 		.iter()
 		.map(|name| {
+			let name_wire = ident_to_wire_name(name);
 			quote! {
 				values.insert(
-					stringify!(#name).to_string(),
+					#name_wire.to_string(),
 					#orm_crate::composite_pk::PkValue::from(&self.#name)
 				);
 			}
@@ -9357,17 +10727,17 @@ fn generate_relationship_metadata(
 
 	let foreign_keys: HashMap<String, &ForeignKeyFieldInfo> = fk_field_infos
 		.iter()
-		.map(|field| (field.field_name.to_string(), field))
+		.map(|field| (ident_to_wire_name(&field.field_name), field))
 		.collect();
 	let fields: HashMap<String, &FieldInfo> = field_infos
 		.iter()
-		.map(|field| (field.name.to_string(), field))
+		.map(|field| (ident_to_wire_name(&field.name), field))
 		.collect();
 
 	let relation_info_items: Vec<TokenStream> = rel_fields
 		.iter()
 		.map(|(field_name, rel)| {
-			let field_name_str = field_name.to_string();
+			let field_name_str = ident_to_wire_name(field_name);
 			let foreign_key_info = foreign_keys.get(&field_name_str);
 			let field_info = fields.get(&field_name_str);
 
@@ -9906,7 +11276,7 @@ fn generate_new_alias(
 	let fk_id_to_fk_field: HashMap<String, String> = fk_id_field_names
 		.iter()
 		.filter_map(|id_name| {
-			let id_str = id_name.to_string();
+			let id_str = ident_to_wire_name(id_name);
 			if id_str.ends_with("_id") {
 				let fk_name = id_str.trim_end_matches("_id").to_string();
 				Some((id_str, fk_name))
@@ -9921,12 +11291,12 @@ fn generate_new_alias(
 
 	let slot_count = user_fields
 		.iter()
-		.filter(|f| !fk_field_names.contains(&f.name.to_string()))
+		.filter(|f| !fk_field_names.contains(&ident_to_wire_name(&f.name)))
 		.count()
 		+ fk_id_field_names
 			.iter()
 			.filter(|id_name| {
-				let id_str = id_name.to_string();
+				let id_str = ident_to_wire_name(id_name);
 				fk_id_to_fk_field.contains_key(&id_str)
 			})
 			.count();
@@ -10014,7 +11384,7 @@ fn generate_build_function(
 	let fk_id_to_fk_field: HashMap<String, String> = fk_id_field_names
 		.iter()
 		.filter_map(|id_name| {
-			let id_str = id_name.to_string();
+			let id_str = ident_to_wire_name(id_name);
 			if id_str.ends_with("_id") {
 				let fk_name = id_str.trim_end_matches("_id").to_string();
 				Some((id_str, fk_name))
@@ -10054,17 +11424,21 @@ fn generate_build_function(
 	let mut required: Vec<Required> =
 		Vec::with_capacity(user_fields.len() + fk_id_field_names.len());
 	for f in user_fields.iter() {
-		let name_str = f.name.to_string();
+		let name_str = ident_to_wire_name(&f.name);
 		if let Some(fk_field_name) = fk_id_to_fk_field.get(&name_str) {
 			// FK `*_id` field. Look up the related model type from the FK field.
-			let fk_field_info = field_infos.iter().find(|fi| fi.name == *fk_field_name);
+			let fk_field_info = field_infos
+				.iter()
+				.find(|fi| ident_to_wire_name(&fi.name) == *fk_field_name);
 			let related_type = match fk_field_info {
 				Some(info) => extract_foreign_key_target_type(&info.ty),
 				// Defensive fallback: keep the stored type. This branch is not
 				// expected because the builder mapping comes from the same field set.
 				None => f.ty.clone(),
 			};
-			let setter_name = syn::Ident::new(fk_field_name, f.name.span());
+			let setter_name = fk_field_info
+				.map(|info| info.name.clone())
+				.unwrap_or_else(|| syn::Ident::new_raw(fk_field_name, f.name.span()));
 			required.push(Required {
 				storage_name: f.name.clone(),
 				storage_ty: &f.ty,
@@ -10094,7 +11468,7 @@ fn generate_build_function(
 	// but they still need a user-facing setter on the builder so that callers
 	// can supply the related model / primary key.
 	for fk_id_name in fk_id_field_names.iter() {
-		let fk_id_str = fk_id_name.to_string();
+		let fk_id_str = ident_to_wire_name(fk_id_name);
 		// `fk_id_to_fk_field` only retains `*_id`-suffixed names (see its
 		// construction above); names that don't follow the convention have no
 		// implicit related-field name and are intentionally skipped.
@@ -10112,7 +11486,9 @@ fn generate_build_function(
 					fk_id_str
 				)
 			});
-		let fk_field_info = field_infos.iter().find(|fi| fi.name == *fk_field_name);
+		let fk_field_info = field_infos
+			.iter()
+			.find(|fi| ident_to_wire_name(&fi.name) == *fk_field_name);
 		let related_type = match fk_field_info {
 			Some(info) => extract_foreign_key_target_type(&info.ty),
 			// Defensive fallback: use the `*_id` storage type itself.
@@ -10132,9 +11508,7 @@ fn generate_build_function(
 		let setter_name = match fk_field_info {
 			Some(info) => info.name.clone(),
 			None => {
-				let bare = fk_field_name
-					.strip_prefix("r#")
-					.unwrap_or(fk_field_name.as_str());
+				let bare = fk_field_name.as_str();
 				if matches!(bare, "self" | "Self" | "super" | "crate") {
 					return syn::Error::new(
 						fk_id_name.span(),
@@ -10366,17 +11740,18 @@ fn generate_build_function(
 	let user_field_assignments: Vec<TokenStream> = user_fields
 		.iter()
 		.filter(|f| {
-			!fk_field_names.contains(&f.name.to_string())
-				&& !fk_id_field_names_set.contains(&f.name.to_string())
+			!fk_field_names.contains(&ident_to_wire_name(&f.name))
+				&& !fk_id_field_names_set.contains(&ident_to_wire_name(&f.name))
 		})
 		.map(|f| {
 			let name = &f.name;
+			let name_wire = ident_to_wire_name(name);
 			quote! {
 				#name: self
 					.#name
 					.expect(concat!(
 						"build() typestate guarantees ",
-						stringify!(#name),
+						#name_wire,
 						" is set before finish() is callable"
 					))
 			}
@@ -10389,12 +11764,13 @@ fn generate_build_function(
 		.iter()
 		.map(|fk_id_name| {
 			let name = fk_id_name.clone();
+			let name_wire = ident_to_wire_name(&name);
 			quote! {
 				#name: self
 					.#name
 					.expect(concat!(
 						"build() typestate guarantees ",
-						stringify!(#name),
+						#name_wire,
 						" is set before finish() is callable"
 					))
 			}
@@ -10405,7 +11781,13 @@ fn generate_build_function(
 	let fk_field_assignments: Vec<TokenStream> = fk_id_to_fk_field
 		.values()
 		.map(|fk_name_str| {
-			let fk_name = syn::Ident::new(fk_name_str, proc_macro2::Span::call_site());
+			let fk_name = field_infos
+				.iter()
+				.find(|field| ident_to_wire_name(&field.name) == *fk_name_str)
+				.map(|field| field.name.clone())
+				.unwrap_or_else(|| {
+					syn::Ident::new_raw(fk_name_str, proc_macro2::Span::call_site())
+				});
 			quote! { #fk_name: ::std::default::Default::default() }
 		})
 		.collect();
@@ -10415,8 +11797,8 @@ fn generate_build_function(
 	let auto_field_assignments: Vec<TokenStream> = auto_fields
 		.iter()
 		.filter(|f| {
-			!fk_field_names.contains(&f.name.to_string())
-				&& !fk_id_field_names_set.contains(&f.name.to_string())
+			!fk_field_names.contains(&ident_to_wire_name(&f.name))
+				&& !fk_id_field_names_set.contains(&ident_to_wire_name(&f.name))
 		})
 		.map(|f| {
 			let name = &f.name;
@@ -10616,11 +11998,8 @@ fn generate_field_selector_struct(
 		.iter()
 		.map(|field| {
 			let field_name = &field.name;
-			let field_name_str = field
-				.config
-				.db_column
-				.clone()
-				.unwrap_or_else(|| field_name.to_string());
+			let field_name_wire = ident_to_wire_name(field_name);
+			let field_name_str = field.config.db_column.clone().unwrap_or(field_name_wire);
 			quote! {
 				#field_name: #orm_crate::query_fields::Field::new(vec![#field_name_str])
 			}
@@ -10799,11 +12178,11 @@ fn generate_info_struct(
 
 	let fk_by_field_name: HashMap<String, &ForeignKeyFieldInfo> = fk_field_infos
 		.iter()
-		.map(|fk| (fk.field_name.to_string(), fk))
+		.map(|fk| (ident_to_wire_name(&fk.field_name), fk))
 		.collect();
 	let fk_id_to_field: HashMap<String, &ForeignKeyFieldInfo> = fk_field_infos
 		.iter()
-		.map(|fk| (format!("{}_id", fk.field_name), fk))
+		.map(|fk| (format!("{}_id", ident_to_wire_name(&fk.field_name)), fk))
 		.collect();
 
 	let mut info_fields = Vec::new();
@@ -10813,8 +12192,8 @@ fn generate_info_struct(
 		}
 
 		let name = f.name.clone();
-		if let Some(fk) = fk_by_field_name.get(&name.to_string()) {
-			let id_name = Ident::new(&format!("{}_id", name), name.span());
+		if let Some(fk) = fk_by_field_name.get(&ident_to_wire_name(&name)) {
+			let id_name = Ident::new(&format!("{}_id", ident_to_wire_name(&name)), name.span());
 			let target_ty = normalize_relation_ty(&fk.target_type);
 			let nullable = field_infos
 				.iter()
@@ -10955,7 +12334,7 @@ fn generate_info_struct(
 		.iter()
 		.map(|f| {
 			let name = &f.name;
-			let name_str = name.to_string();
+			let name_str = ident_to_wire_name(name);
 			if let Some(fk) = fk_id_to_field.get(&name_str)
 				&& info_fields.iter().any(|inf| inf.name == fk.field_name)
 			{
@@ -12145,7 +13524,7 @@ mod tests {
 			})
 			.collect::<Vec<_>>();
 
-		assert!(compact.contains("stringify!(owner_id).to_string()"));
+		assert!(compact.contains("\"owner_id\".to_string()"));
 		assert!(compact.contains("\"full_name\",\"display_name\""));
 		assert!(
 			compact
@@ -12405,6 +13784,104 @@ mod tests {
 			config.get_latest_by.as_deref(),
 			Some(vec!["created_at".to_string(), "id".to_string()].as_slice())
 		);
+	}
+
+	#[test]
+	fn model_config_parses_named_form() {
+		let struct_name = parse_quote! { Cluster };
+		let attrs = vec![parse_quote! {
+			#[model(
+				app_label = "clusters",
+				table_name = "clusters",
+				form(name = ClusterCreateForm, fields(name, api_url))
+			)]
+		}];
+
+		let config =
+			ModelConfig::from_attrs(&attrs, &struct_name).expect("named forms should parse");
+
+		assert!(config.form);
+		let named_form = config.named_form.expect("named form should be retained");
+		assert_eq!(named_form.name.to_string(), "ClusterCreateForm");
+		assert_eq!(
+			named_form
+				.fields
+				.iter()
+				.map(ToString::to_string)
+				.collect::<Vec<_>>(),
+			vec!["name", "api_url"]
+		);
+	}
+
+	#[test]
+	fn constraint_lookup_uses_model_field_metadata_when_a_field_is_named_metadata() {
+		let input = quote! {
+			#[model(app_label = "forms", table_name = "documents")]
+			pub struct Document {
+				#[field(primary_key = true)]
+				pub id: i64,
+				pub metadata: serde_json::Value,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+		let output_str = output.to_string();
+
+		assert!(output_str.contains("pub const fn field_metadata"));
+		assert!(
+			output_str.contains("< Self as") && output_str.contains(":: field_metadata ()"),
+			"constraint lookup should use UFCS so a `metadata` field accessor cannot shadow Model::field_metadata: {output_str}"
+		);
+		assert!(
+			!output_str.contains("Self :: field_metadata ()"),
+			"constraint lookup must not call the inherent field_metadata accessor"
+		);
+	}
+
+	#[rstest]
+	#[case(
+		quote!(app_label = "clusters", form()),
+		"parse_args_with failed: named model form requires `name = Ident`"
+	)]
+	#[case(
+		quote!(app_label = "clusters", form(fields(name))),
+		"parse_args_with failed: named model form requires `name = Ident`"
+	)]
+	#[case(
+		quote!(app_label = "clusters", form(name = ClusterCreateForm)),
+		"parse_args_with failed: named model form requires `fields(field, ...)`"
+	)]
+	#[case(
+		quote!(app_label = "clusters", form(name = ClusterCreateForm, fields())),
+		"parse_args_with failed: named model form requires at least one field"
+	)]
+	#[case(
+		quote!(app_label = "clusters", form(name = ClusterCreateForm, fields(name, name))),
+		"parse_args_with failed: named model form field `name` is specified more than once"
+	)]
+	#[case(
+		quote!(app_label = "clusters", form(name = ClusterCreateForm, fields(r#type, r#type))),
+		"parse_args_with failed: named model form field `type` is specified more than once"
+	)]
+	#[case(
+		quote!(app_label = "clusters", form(name = ClusterCreateForm, fields(name)), form(name = ClusterUpdateForm, fields(name))),
+		"parse_args_with failed: named model form is specified more than once"
+	)]
+	#[case(
+		quote!(app_label = "clusters", form = true, form(name = ClusterCreateForm, fields(name))),
+		"parse_args_with failed: `form = true` cannot be combined with `form(...)`"
+	)]
+	fn model_config_rejects_invalid_named_forms(
+		#[case] tokens: TokenStream,
+		#[case] expected_error: &str,
+	) {
+		let struct_name = parse_quote! { Cluster };
+		let attribute: syn::Attribute = parse_quote! { #[model(#tokens)] };
+
+		let error = ModelConfig::from_attrs(&[attribute], &struct_name)
+			.expect_err("invalid named forms should be rejected");
+
+		assert_eq!(error.to_string(), expected_error);
 	}
 
 	#[test]
@@ -13459,8 +14936,11 @@ mod tests {
 			vec![
 				"clean_for_update",
 				"build_from_cleaned_compat",
+				"build_from_cleaned_with_deferred_required_field",
+				"field_json",
 				"apply_cleaned",
 				"set_trusted_field_json",
+				"accepts_trusted_field",
 				"trusted_relation_field_kind",
 				"trusted_relation_field_is_required",
 				"save_with_mode",
@@ -13634,7 +15114,9 @@ mod tests {
 			"supplied_fields",
 			"__reinhardt_checkbox_enabled",
 			"__reinhardt_color_accent",
+			"__reinhardt_range_amount",
 			"__reinhardt_defaulted_summary",
+			"csrfmiddlewaretoken",
 		] {
 			let field_name = Ident::new(field_name, proc_macro2::Span::call_site());
 			let input = quote! {
@@ -13649,11 +15131,201 @@ mod tests {
 
 			let error = model_derive_impl(syn::parse2(input).unwrap())
 				.expect_err("payload API names must not be shadowed by generated accessors");
+			let expected_message = if field_name == "csrfmiddlewaretoken" {
+				"reserve `csrfmiddlewaretoken` for the CSRF control"
+			} else {
+				"collides with generated model-form API"
+			};
 			assert!(
-				error
-					.to_string()
-					.contains("collides with generated model-form API"),
+				error.to_string().contains(expected_message),
 				"field `{field_name}` must be rejected: {error}",
+			);
+		}
+	}
+
+	#[rstest]
+	fn test_named_model_form_rejects_generated_api_accessor_collisions() {
+		for field_name in [
+			"clone",
+			"clone_from",
+			"contract_default_boolean_is_true",
+			"contract_fields",
+			"contract_relation_target_matches",
+			"deserialize",
+			"eq",
+			"fmt",
+			"ne",
+			"serialize",
+		] {
+			let field = Ident::new(field_name, Span::call_site());
+			let args = quote! {
+				app_label = "fixture_tests",
+				table_name = "fixture_models",
+				form(name = FixtureCreateForm, fields(#field))
+			};
+			let input = quote! {
+				struct FixtureModel {
+					#[field(primary_key = true)]
+					id: i64,
+					#[field(max_length = 64)]
+					#field: String,
+				}
+			};
+
+			let error =
+				crate::model_attribute::model_attribute_impl(args, syn::parse2(input).unwrap())
+					.expect_err("named contract accessors must not shadow derived trait methods");
+
+			assert_eq!(
+				error.to_string(),
+				"named model form field name collides with generated contract API",
+				"field `{field_name}` must be reserved",
+			);
+		}
+	}
+
+	#[test]
+	fn test_named_model_form_rejects_field_without_variant_name() {
+		let args = quote! {
+			app_label = "fixture_tests",
+			table_name = "fixture_models",
+			form(name = FixtureCreateForm, fields(__))
+		};
+		let input = quote! {
+			struct FixtureModel {
+				#[field(primary_key = true)]
+				id: i64,
+				#[field(max_length = 64)]
+				__: String,
+			}
+		};
+
+		let error = crate::model_attribute::model_attribute_impl(
+			args,
+			syn::parse2(input).expect("fixture model should parse"),
+		)
+		.expect_err("underscore-only fields cannot generate a field-token variant");
+
+		assert_eq!(
+			error.to_string(),
+			"named model form field name must contain an alphanumeric character"
+		);
+	}
+
+	#[test]
+	fn test_named_model_form_rejects_reserved_self_variant() {
+		for field_name in ["self_", "_self"] {
+			let field = Ident::new(field_name, Span::call_site());
+			let args = quote! {
+				app_label = "fixture_tests",
+				table_name = "fixture_models",
+				form(name = FixtureCreateForm, fields(#field))
+			};
+			let input = quote! {
+				struct FixtureModel {
+					#[field(primary_key = true)]
+					id: i64,
+					#[field(max_length = 64)]
+					#field: String,
+				}
+			};
+
+			let error = crate::model_attribute::model_attribute_impl(
+				args,
+				syn::parse2(input).expect("fixture model should parse"),
+			)
+			.expect_err("field names must not generate the reserved `Self` variant");
+
+			assert_eq!(
+				error.to_string(),
+				"named model form field name must not generate the reserved `Self` variant"
+			);
+		}
+	}
+
+	#[test]
+	fn test_model_attribute_forwards_config_to_existing_model_derive() {
+		let args = quote! {
+			app_label = "fixture_tests",
+			form(name = FixtureCreateForm, fields(name))
+		};
+		let input = quote! {
+			#[derive(Model, Serialize, Deserialize)]
+			struct FixtureModel {
+				#[field(primary_key = true)]
+				id: i64,
+				#[field(max_length = 64)]
+				name: String,
+			}
+		};
+
+		let output = crate::model_attribute::model_attribute_impl(
+			args,
+			syn::parse2(input).expect("fixture model should parse"),
+		)
+		.expect("an existing Model derive should retain model configuration");
+		let file: syn::File =
+			syn::parse2(output).expect("generated model output should remain valid Rust");
+		let model = file
+			.items
+			.iter()
+			.find_map(|item| match item {
+				syn::Item::Struct(item) if item.ident == "FixtureModel" => Some(item),
+				_ => None,
+			})
+			.expect("the configured model should remain in the generated output");
+		let config = ModelConfig::from_attrs(&model.attrs, &model.ident)
+			.expect("the Model derive should receive the forwarded configuration");
+
+		assert!(config.form);
+		assert_eq!(
+			config
+				.named_form
+				.as_ref()
+				.expect("the named form should be retained")
+				.name,
+			"FixtureCreateForm"
+		);
+		assert!(config.serde_serialize);
+		assert!(config.serde_deserialize);
+	}
+
+	#[test]
+	fn test_named_model_form_normalizes_raw_contract_name_suffixes() {
+		let args = quote! {
+			app_label = "fixture_tests",
+			form(name = r#type, fields(name))
+		};
+		let input = quote! {
+			struct FixtureModel {
+				#[field(primary_key = true)]
+				id: i64,
+				#[field(max_length = 64)]
+				name: String,
+			}
+		};
+
+		let output = crate::model_attribute::model_attribute_impl(
+			args,
+			syn::parse2(input).expect("fixture model should parse"),
+		)
+		.expect("raw contract names should generate valid suffixed identifiers");
+		let file: syn::File =
+			syn::parse2(output).expect("generated raw contract output should parse");
+		let generated_names = file
+			.items
+			.iter()
+			.filter_map(|item| match item {
+				syn::Item::Struct(item) => Some(item.ident.to_string()),
+				syn::Item::Enum(item) => Some(item.ident.to_string()),
+				_ => None,
+			})
+			.collect::<Vec<_>>();
+
+		for expected in ["typeData", "typeSchema", "typeField", "typePolicy"] {
+			assert!(
+				generated_names.iter().any(|name| name == expected),
+				"raw contract name should generate `{expected}`: {generated_names:?}"
 			);
 		}
 	}

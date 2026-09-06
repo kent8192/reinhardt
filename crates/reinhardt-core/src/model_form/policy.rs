@@ -2,9 +2,12 @@
 
 use std::fmt;
 
-use crate::model_form::{ModelFormFieldKind, ModelFormSchema};
+use crate::model_form::{ModelFormContractSchema, ModelFormFieldKind};
 
 /// Determines which known model fields a form may accept.
+///
+/// Parity: P2. The policy decision is target-neutral and can be evaluated on
+/// native and `wasm32-unknown-unknown` targets.
 pub trait ModelFormPolicy: Send + Sync + 'static {
 	/// Returns whether the named model field is permitted by this policy.
 	fn allows(field: &str) -> bool;
@@ -20,6 +23,9 @@ impl ModelFormPolicy for AllEditableModelFields {
 }
 
 /// A target-neutral payload accepted by a model-backed form.
+///
+/// Parity: P2. Payload inspection and JSON updates are available on native and
+/// `wasm32-unknown-unknown` targets.
 pub trait ModelFormPayload<P: ModelFormPolicy>: Sized {
 	/// Returns the statically known fields supplied by this payload.
 	fn supplied_fields(&self) -> Vec<&'static str>;
@@ -40,6 +46,43 @@ pub trait ModelFormPayload<P: ModelFormPolicy>: Sized {
 		field: &str,
 		value: serde_json::Value,
 	) -> Result<(), ModelFormPayloadError>;
+
+	/// Removes a supplied value while preserving omission separately from JSON null.
+	///
+	/// Parity: P2. Generated native and WASM payloads support this normalization hook.
+	#[doc(hidden)]
+	fn clear_json(&mut self, field: &str) -> Result<(), ModelFormPayloadError> {
+		Err(ModelFormPayloadError::InvalidValue {
+			field: field.to_owned(),
+			message: "This payload does not support omitting supplied fields.".to_owned(),
+		})
+	}
+
+	/// Fills omitted fields with their declared model defaults before create validation.
+	///
+	/// Parity: P2. Generated payloads evaluate each missing default once on either target.
+	#[doc(hidden)]
+	fn apply_defaults(&mut self) {}
+
+	/// Reports whether a value came from a previously evaluated model default.
+	///
+	/// Parity: P2. Normalization preserves evaluated defaults on native and WASM.
+	#[doc(hidden)]
+	fn is_defaulted(&self, _field: &str) -> bool {
+		false
+	}
+
+	/// Stores a normalized value without discarding its model-default provenance.
+	///
+	/// Parity: P2. Generated native and WASM cleaners use this internal write path.
+	#[doc(hidden)]
+	fn set_normalized_json(
+		&mut self,
+		field: &str,
+		value: serde_json::Value,
+	) -> Result<(), ModelFormPayloadError> {
+		self.set_json(field, value)
+	}
 }
 
 /// Converts an already-normalized native HTML form object into a model-form payload.
@@ -57,9 +100,11 @@ pub trait NativeModelFormPayload: Sized {
 /// omit unchecked checkboxes. The generated color-control marker also omits an
 /// untouched optional color control when the browser supplies its synthetic
 /// black fallback. An untouched optional range control likewise omits its
-/// browser-generated minimum value. This conversion is intentionally limited to schema fields
-/// permitted by the selected policy; unrelated controls such as the CSRF token
-/// are removed before typed payload decoding.
+/// browser-generated minimum value. An explicit clear marker for a nullable,
+/// defaulted control takes precedence over the control's submitted value. This
+/// conversion is intentionally limited to schema fields permitted by the selected
+/// policy; unrelated controls such as the CSRF token are removed before typed
+/// payload decoding.
 ///
 /// # Errors
 ///
@@ -68,7 +113,7 @@ pub fn normalize_native_model_form_value<S, P>(
 	mut value: serde_json::Value,
 ) -> Result<serde_json::Value, serde_json::Error>
 where
-	S: ModelFormSchema,
+	S: ModelFormContractSchema,
 	P: ModelFormPolicy,
 {
 	let serde_json::Value::Object(values) = &mut value else {
@@ -76,7 +121,7 @@ where
 	};
 
 	values.remove("csrfmiddlewaretoken");
-	for descriptor in S::fields() {
+	for descriptor in S::contract_fields() {
 		if !descriptor.editable || !P::allows(descriptor.name) {
 			continue;
 		}
@@ -96,9 +141,15 @@ where
 		let range_sentinel = format!("__reinhardt_range_{}", descriptor.name);
 		let range_default = values.remove(&range_sentinel);
 		let default_clear_sentinel = format!("__reinhardt_defaulted_{}", descriptor.name);
-		let had_defaulted_value = values
-			.remove(&default_clear_sentinel)
-			.is_some_and(|value| value == serde_json::Value::String("true".to_owned()));
+		let clears_default = descriptor.nullable
+			&& descriptor.has_default
+			&& values
+				.remove(&default_clear_sentinel)
+				.is_some_and(|value| value == serde_json::Value::String("true".to_owned()));
+		if clears_default {
+			values.insert(descriptor.name.to_owned(), serde_json::Value::Null);
+			continue;
+		}
 		let Some(control) = values.get_mut(descriptor.name) else {
 			if matches!(descriptor.kind, ModelFormFieldKind::Boolean) && checkbox_was_unchecked {
 				values.insert(descriptor.name.to_owned(), serde_json::Value::Bool(false));
@@ -132,7 +183,7 @@ where
 						| ModelFormFieldKind::Url { .. }
 				));
 		if text.is_empty() && !descriptor.required && descriptor.nullable {
-			if descriptor.has_default && !had_defaulted_value {
+			if descriptor.has_default {
 				values.remove(descriptor.name);
 			} else {
 				*control = serde_json::Value::Null;
@@ -255,6 +306,7 @@ mod tests {
 	use crate::model_form::{
 		ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPolicy, ModelFormSchema,
 	};
+	use rstest::rstest;
 
 	struct PublicOnly;
 
@@ -394,6 +446,30 @@ mod tests {
 		}
 	}
 
+	struct NullableDefaultTrueBooleanSchema;
+
+	impl ModelFormSchema for NullableDefaultTrueBooleanSchema {
+		type Model = ();
+
+		fn fields() -> &'static [ModelFormFieldDescriptor] {
+			const FIELDS: [ModelFormFieldDescriptor; 1] = [ModelFormFieldDescriptor {
+				name: "published",
+				kind: ModelFormFieldKind::Boolean,
+				required: false,
+				has_default: true,
+				nullable: true,
+				editable: true,
+				generated_relation_id: false,
+				trim: false,
+			}];
+			&FIELDS
+		}
+
+		fn default_boolean_is_true(field: &str) -> bool {
+			field == "published"
+		}
+	}
+
 	#[test]
 	fn policy_rejects_known_but_unselected_fields() {
 		assert!(PublicOnly::allows("title"));
@@ -465,6 +541,22 @@ mod tests {
 	}
 
 	#[test]
+	fn native_normalization_clears_nullable_default_true_checkbox() {
+		assert!(NullableDefaultTrueBooleanSchema::default_boolean_is_true(
+			"published"
+		));
+		let value = normalize_native_model_form_value::<
+			NullableDefaultTrueBooleanSchema,
+			AllEditableModelFields,
+		>(serde_json::json!({
+			"__reinhardt_checkbox_published": "false",
+		}))
+		.expect("unchecked default-true checkbox should normalize");
+
+		assert_eq!(value, serde_json::json!({ "published": false }));
+	}
+
+	#[test]
 	fn native_normalization_keeps_blank_optional_text() {
 		let value = normalize_native_model_form_value::<TestSchema, AllEditableModelFields>(
 			serde_json::json!({ "title": "" }),
@@ -484,11 +576,13 @@ mod tests {
 		assert_eq!(value, serde_json::json!({}));
 	}
 
-	#[test]
-	fn native_normalization_preserves_explicit_nullable_default_clears() {
+	#[rstest]
+	#[case("")]
+	#[case("existing summary")]
+	fn native_normalization_honors_explicit_nullable_default_clears(#[case] control: &str) {
 		let value = normalize_native_model_form_value::<TestSchema, AllEditableModelFields>(
 			serde_json::json!({
-				"summary": "",
+				"summary": control,
 				"__reinhardt_defaulted_summary": "true",
 			}),
 		)

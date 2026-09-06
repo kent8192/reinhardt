@@ -486,7 +486,8 @@
 //! match: equal steps with aligned bases, or all `step="any"`. Differing grids,
 //! including continuous/stepped pairs, keep normalization local even if they
 //! share valid values. Decimal grid alignment allows bounded floating-point
-//! roundoff.
+//! roundoff. Each controlled range write updates its default step base before
+//! live value normalization.
 //! Radio `value` expressions are evaluated once per rendered element. A bound
 //! single select projects only its first matching option in tree order during
 //! SSR, including options resolved inside a pending boundary; a multiple

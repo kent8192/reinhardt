@@ -21,6 +21,18 @@ struct SsrStateElement(web_sys::Element);
 
 struct AttachedRootCleanup(web_sys::Element);
 
+struct HydratedControlPage(Page);
+
+impl Component for HydratedControlPage {
+	fn name() -> &'static str {
+		"HydratedControlPage"
+	}
+
+	fn render(&self) -> Page {
+		self.0.clone()
+	}
+}
+
 impl Drop for AttachedRootCleanup {
 	fn drop(&mut self) {
 		reinhardt_pages::cleanup_reactive_nodes();
@@ -125,11 +137,14 @@ fn unrelated_reactive_attributes_preserve_an_active_control_edit() {
 }
 
 #[rstest]
-#[case(false)]
-#[case(true)]
+#[case::mount(false, false)]
+#[case::reactive_if(true, false)]
+#[case::hydrate(false, true)]
+#[case::hydrate_reactive_if(true, true)]
 #[wasm_bindgen_test]
-fn initial_range_reconciliation_uses_the_bound_value_as_the_step_base(
+fn range_reconciliation_updates_the_bound_value_as_the_step_base(
 	#[case] nested_in_reactive_if: bool,
+	#[case] hydrate: bool,
 ) {
 	ReactiveScope::run(|| {
 		// Arrange
@@ -137,7 +152,8 @@ fn initial_range_reconciliation_uses_the_bound_value_as_the_step_base(
 			.expect("window")
 			.document()
 			.expect("document");
-		let root = Element::new(document.create_element("div").expect("root"));
+		let container = document.create_element("div").expect("container");
+		let _cleanup = AttachedRootCleanup(container.clone());
 		let value = Signal::new(3_i32);
 		let range_value = value.clone();
 		let range = move || {
@@ -148,17 +164,30 @@ fn initial_range_reconciliation_uses_the_bound_value_as_the_step_base(
 				.control_binding(ControlBinding::number(range_value.clone()))
 				.into_page()
 		};
-		let page = if nested_in_reactive_if {
+		let input_page = if nested_in_reactive_if {
 			Page::reactive_if(|| true, range, || Page::Empty)
 		} else {
 			range()
 		};
+		let page = PageElement::new("div").child(input_page).into_page();
 
 		// Act
-		page.mount(&root).expect("mount");
+		let root = if hydrate {
+			container.set_inner_html(&page.render_to_string());
+			let root = Element::new(container.first_element_child().expect("SSR root"));
+			let _state = SsrStateElement::install(&document);
+			reinhardt_pages::hydration::hydrate(&HydratedControlPage(page), &root)
+				.expect("hydrate");
+			root
+		} else {
+			let root = Element::new(container);
+			page.mount(&root).expect("mount");
+			root
+		};
 		let input: web_sys::HtmlInputElement = root
 			.as_web_sys()
-			.first_element_child()
+			.query_selector("input")
+			.expect("query")
 			.expect("range")
 			.unchecked_into();
 
@@ -166,7 +195,20 @@ fn initial_range_reconciliation_uses_the_bound_value_as_the_step_base(
 		assert_eq!(value.get(), 3);
 		assert_eq!(input.value(), "3");
 		assert_eq!(input.get_attribute("value").as_deref(), Some("3"));
-		reinhardt_pages::cleanup_reactive_nodes();
+
+		value.set(4);
+
+		assert_eq!(value.get(), 4);
+		assert_eq!(input.value(), "4");
+		assert_eq!(input.default_value(), "4");
+		assert!(
+			input.is_same_node(
+				root.as_web_sys()
+					.query_selector("input")
+					.unwrap()
+					.as_deref()
+			)
+		);
 	});
 }
 

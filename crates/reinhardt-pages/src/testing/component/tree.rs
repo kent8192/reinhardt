@@ -587,15 +587,23 @@ impl TestDom {
 	pub(crate) fn refresh_control_bindings(&mut self) {
 		let mut selects = Vec::new();
 		for node_id in 0..self.nodes.len() {
-			let binding = {
+			let (binding, value) = {
 				let TestNode::Element(element) = &mut self.nodes[node_id] else {
 					continue;
 				};
 				element.refresh_reactive_attributes();
-				element.control_binding.clone()
-			};
-			let Some(binding) = binding else {
-				continue;
+				let Some(binding) = element.control_binding.clone() else {
+					continue;
+				};
+				let value = binding.read();
+				if binding.kind() == ControlKind::Number
+					&& native_range_constraints(element).is_some()
+				{
+					// The controlled default determines the range step base before its
+					// live value is normalized, matching initial rendering.
+					element.project_controlled_attributes(&binding, &value);
+				}
+				(binding, value)
 			};
 			let conflicting_range = {
 				let TestNode::Element(element) = &self.nodes[node_id] else {
@@ -606,7 +614,6 @@ impl TestDom {
 			let TestNode::Element(element) = &mut self.nodes[node_id] else {
 				continue;
 			};
-			let value = binding.read();
 			let normalized = normalize_native_control_value(element, &binding, value.clone());
 			let applied = apply_native_control_normalization(
 				element,

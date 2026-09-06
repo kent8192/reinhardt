@@ -1323,7 +1323,8 @@ fn native_range_binding_applies_declared_step(reactive_scope: ReactiveScope) {
 }
 
 #[rstest]
-fn native_initial_range_reconciliation_uses_the_bound_value_as_the_step_base(
+#[tokio::test]
+async fn native_initial_range_reconciliation_uses_the_bound_value_as_the_step_base(
 	reactive_scope: ReactiveScope,
 ) {
 	// Arrange
@@ -1343,6 +1344,17 @@ fn native_initial_range_reconciliation_uses_the_bound_value_as_the_step_base(
 	assert_eq!(
 		screen.get_by_label("Implicit step base").value().as_deref(),
 		Some("3")
+	);
+
+	// Act
+	value.set(4);
+	screen.settle().await;
+
+	// Assert
+	assert_eq!(value.get(), 4);
+	assert_eq!(
+		screen.get_by_label("Implicit step base").value().as_deref(),
+		Some("4")
 	);
 }
 
@@ -1385,7 +1397,6 @@ async fn native_shared_decimal_ranges_converge_without_roundoff_drift(
 		Some(expected.to_string())
 	);
 }
-
 
 #[rstest]
 #[case::leading_plus_min("min", "+10")]

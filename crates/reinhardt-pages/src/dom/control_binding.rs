@@ -1360,6 +1360,10 @@ fn write_control_and_reconcile(
 	binding: &ControlBinding,
 	value: &ControlValue,
 ) -> Result<(), ControlBindingError> {
+	if binding.kind() == ControlKind::Number && range_constraints(element.as_web_sys()).is_some() {
+		// Without a minimum, range stepping uses the controlled default as its base.
+		crate::component::into_page::initialize_control_default(element, binding);
+	}
 	write_control(element, binding.kind(), value)?;
 	if matches!(binding.kind(), ControlKind::Text | ControlKind::Number) {
 		let live_value = read_control(element, binding.kind())?;

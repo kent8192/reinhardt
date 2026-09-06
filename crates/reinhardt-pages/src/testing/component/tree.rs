@@ -1306,7 +1306,7 @@ fn normalize_native_control_value(
 	if binding.kind() == ControlKind::Text
 		&& crate::control_binding::is_effective_text_input_type(Some(input_type))
 	{
-		let mut normalized = if input_type_removes_line_breaks(input_type) {
+		let mut normalized = if !is_temporal_input_type(input_type) {
 			raw.replace(['\r', '\n'], "")
 		} else {
 			raw
@@ -1387,12 +1387,6 @@ fn normalize_native_control_value(
 	} else {
 		ControlValue::Text(normalized)
 	}
-}
-
-fn input_type_removes_line_breaks(input_type: &str) -> bool {
-	["text", "search", "tel", "url", "email", "password"]
-		.iter()
-		.any(|known| input_type.eq_ignore_ascii_case(known))
 }
 
 fn normalize_datetime_local_value(value: &str) -> String {

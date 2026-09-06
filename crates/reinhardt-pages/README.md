@@ -260,6 +260,10 @@ control shape determines the signal type: `String` for string-valued inputs
 controls; `bool` for checkboxes; a supported numeric primitive for `number`
 and `range` inputs; and `Vec<String>` for multiple selects.
 
+Native component tests mirror browser value sanitization. Low-level text
+bindings on inputs with a missing, empty, or unknown `type` remove line breaks
+just like `type="text"`.
+
 ```rust
 use reinhardt_pages::prelude::*;
 

@@ -44,6 +44,10 @@
 //! # fn main() {}
 //! ```
 //!
+//! WASM clients can use named model-form contracts and their generated validation
+//! with only the `pages` feature. No `core` feature or direct `reinhardt-core`
+//! dependency is required.
+//!
 //! ## Feature Flags
 //!
 //! Reinhardt provides flexible feature flags to control compilation and reduce binary size.
@@ -238,7 +242,8 @@ pub mod reinhardt_core {
 pub mod reinhardt_core {
 	pub use reinhardt_core::model_form;
 	pub use reinhardt_core::model_info;
-	#[cfg(feature = "core")]
+	// Pages enables validators for generated model-form payloads independently of core.
+	#[cfg(any(feature = "core", feature = "pages"))]
 	pub use reinhardt_core::validators;
 }
 

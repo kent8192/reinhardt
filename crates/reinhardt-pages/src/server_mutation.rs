@@ -349,6 +349,8 @@ where
 	}
 
 	/// Resets generated form values back to defaults after a successful mutation.
+	///
+	/// Skips the reset if a success callback starts another pending submission.
 	pub fn reset_form_on_success(mut self) -> Self {
 		self.reset_form_on_success = true;
 		self
@@ -382,7 +384,14 @@ where
 		if reset_form_on_success {
 			let form_for_reset = form.clone();
 			builder.after_success.push(Rc::new(move |_| {
-				form_for_reset.reset();
+				if form_for_reset
+					.form_state()
+					.is_submitting
+					.try_get_untracked()
+					.is_ok_and(|pending| !pending)
+				{
+					form_for_reset.reset();
+				}
 			}));
 		}
 		let form_for_error = form.clone();
@@ -511,16 +520,13 @@ where
 
 	/// Returns `true` while validation or the server request is pending.
 	///
+	/// Tracks both the mutation action and the shared form submission state.
 	/// A disposed form runtime is treated as unavailable, so the live mutation
 	/// action remains observable without accessing stale form signals.
 	pub fn is_pending(&self) -> bool {
 		let mutation_pending = self.mutation.is_pending();
-		let form_pending = self
-			.form
-			.form_state()
-			.is_submitting
-			.try_get_untracked()
-			.unwrap_or(false);
+		let is_submitting = self.form.form_state().is_submitting;
+		let form_pending = is_submitting.try_get_untracked().is_ok() && is_submitting.get();
 		mutation_pending || form_pending
 	}
 
@@ -842,8 +848,10 @@ mod tests {
 
 	#[cfg(all(native, feature = "testing"))]
 	#[rstest]
+	#[case::same_action(false)]
+	#[case::shared_form(true)]
 	#[serial_test::serial(reactive_runtime)]
-	fn generated_form_pending_observer_tracks_action_completion() {
+	fn generated_form_pending_observer_tracks_action_completion(#[case] observe_sibling: bool) {
 		let queued = Rc::new(RefCell::new(None));
 		let queued_for_sink = Rc::clone(&queued);
 		let _task_sink = crate::platform::install_task_sink(move |task| {
@@ -857,7 +865,13 @@ mod tests {
 			let mutation = use_server_mutation(|_: ()| async { Ok::<(), ServerFnError>(()) })
 				.with_generated_form(&runtime, |_| Ok(()))
 				.build();
-			let mutation_for_effect = mutation.clone();
+			let mutation_for_effect = if observe_sibling {
+				use_server_mutation(|_: ()| async { Ok::<(), ServerFnError>(()) })
+					.with_generated_form(&runtime, |_| Ok(()))
+					.build()
+			} else {
+				mutation.clone()
+			};
 			let observed_for_effect = Rc::clone(&observed);
 			let effect = Effect::new(move || {
 				observed_for_effect
@@ -881,6 +895,24 @@ mod tests {
 		with_runtime(|runtime| runtime.flush_updates());
 
 		assert_eq!(observed.borrow().as_slice(), [false, true, false]);
+	}
+
+	#[rstest]
+	fn generated_form_pending_observation_tolerates_disposed_form_scope() {
+		let form_scope = ReactiveScope::new();
+		let runtime = form_scope.enter(|| {
+			let form = NameForm::new("Ada", Rc::new(Cell::new(0)));
+			use_form(&form).build()
+		});
+		ReactiveScope::run(|| {
+			let mutation = use_server_mutation(|_: ()| async { Ok::<(), ServerFnError>(()) })
+				.with_generated_form(&runtime, |_| Ok(()))
+				.build();
+
+			form_scope.dispose();
+
+			assert!(!mutation.is_pending());
+		});
 	}
 
 	#[rstest]
@@ -1118,6 +1150,57 @@ mod tests {
 			);
 			assert_eq!(mutation.result().as_deref(), Some("saved"));
 			assert_eq!(runtime.get_values(), "Ada".to_string());
+		});
+	}
+
+	#[rstest]
+	#[case::form_callback(true)]
+	#[case::mutation_callback(false)]
+	fn generated_form_success_reset_preserves_nested_submission(#[case] form_callback: bool) {
+		ReactiveScope::run(|| {
+			// Arrange: either success callback starts a new submission on the shared runtime.
+			let form = NameForm::new("Ada", Rc::new(Cell::new(0)));
+			let runtime = use_form(&form)
+				.on_submit_success(move |runtime| {
+					if form_callback {
+						runtime.set_value(NameField::Name, "nested".to_owned());
+						assert_eq!(
+							runtime.begin_submit_lifecycle(),
+							crate::UseFormSubmitOutcome::Submitted
+						);
+					}
+				})
+				.build();
+			let runtime_for_success = runtime.clone();
+			let mutation = use_server_mutation(|_: ()| async { Ok::<(), ServerFnError>(()) })
+				.with_generated_form(&runtime, |_| Ok(()))
+				.on_success(move |_| {
+					if !form_callback {
+						runtime_for_success.set_value(NameField::Name, "nested".to_owned());
+						assert_eq!(
+							runtime_for_success.begin_submit_lifecycle(),
+							crate::UseFormSubmitOutcome::Submitted
+						);
+					}
+				})
+				.reset_form_on_success()
+				.build();
+			assert_eq!(
+				runtime.begin_submit_lifecycle(),
+				crate::UseFormSubmitOutcome::Submitted
+			);
+
+			// Act: complete the first request and run both success hooks and the reset hook.
+			mutation.force_success_for_test(());
+
+			// Assert: the new request retains its input and excludes concurrent submissions.
+			assert_eq!(runtime.get_values(), "nested");
+			assert!(runtime.form_state().is_submitting.get());
+			assert!(!runtime.form_state().is_submit_successful.get());
+			assert_eq!(
+				runtime.begin_submit_lifecycle(),
+				crate::UseFormSubmitOutcome::AlreadyPending
+			);
 		});
 	}
 

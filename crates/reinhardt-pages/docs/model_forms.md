@@ -316,7 +316,9 @@ match mutation.dispatch() {
 Use `submit_response()` when the caller needs the immediate awaited response.
 Use `form.server_mutation(&runtime)` when the UI should observe phase, pending
 state, latest `ServerFnError`, and the latest successful typed result through a
-reusable handle.
+reusable handle. `is_pending()` reactively observes the shared runtime, so every
+mutation handle attached to the same form stays busy during another handle's
+submission.
 
 Structured `ServerFnError` field errors are routed through the same runtime:
 matching selected fields are available from `get_field_state`, while errors
@@ -327,7 +329,9 @@ field selections provide typed accessors such as `title_field()`; forms using
 `reset_form_on_success()` resets the generated runtime after a successful
 server mutation, but the mutation handle still retains its latest result until
 `mutation.reset()` is called. This lets the UI clear browser controls while
-continuing to render a success token or server-generated identifier.
+continuing to render a success token or server-generated identifier. If a form
+or mutation success callback starts another submission, the automatic reset is
+skipped while that submission is pending to preserve its input and state.
 
 Model-form mutation construction does not require a separate named
 `ModelFormData` contract in the style of issue #6217. `form.server_mutation(&runtime)`

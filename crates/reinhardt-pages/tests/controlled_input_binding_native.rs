@@ -1134,23 +1134,41 @@ fn number_binding_accepts_range_input_type(reactive_scope: ReactiveScope) {
 }
 
 #[rstest]
-fn native_text_binding_applies_browser_value_sanitization(reactive_scope: ReactiveScope) {
+#[case("url", "  https://example.test\n", "https://example.test")]
+#[case("custom", "a\r\nb", "ab")]
+#[case("", "a\r\nb", "ab")]
+#[case(
+	"url",
+	" \u{000b}https://example.test\u{000b}\t",
+	"\u{000b}https://example.test\u{000b}"
+)]
+#[case(
+	"email",
+	" \u{000b}mail@example.test\u{000b}\t",
+	"\u{000b}mail@example.test\u{000b}"
+)]
+fn native_text_binding_applies_browser_value_sanitization(
+	#[case] input_type: &str,
+	#[case] initial: &str,
+	#[case] expected: &str,
+	reactive_scope: ReactiveScope,
+) {
 	// Arrange
-	let value = signal_in_scope(&reactive_scope, "  https://example.test\n".to_owned());
+	let value = signal_in_scope(&reactive_scope, initial.to_owned());
 
 	// Act
 	let screen = render(
 		PageElement::new("input")
-			.attr("aria-label", "URL")
-			.attr("type", "url")
+			.attr("aria-label", "Text target")
+			.attr("type", input_type.to_owned())
 			.control_binding(ControlBinding::text(value.clone())),
 	);
 
 	// Assert
-	assert_eq!(value.get(), "https://example.test");
+	assert_eq!(value.get(), expected);
 	assert_eq!(
-		screen.get_by_label("URL").value().as_deref(),
-		Some("https://example.test")
+		screen.get_by_label("Text target").value().as_deref(),
+		Some(expected)
 	);
 }
 

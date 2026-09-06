@@ -3,7 +3,9 @@
 use std::cell::Cell;
 
 use reinhardt_core::reactive::ReactiveScope;
-use reinhardt_core::types::page::{ControlValue, ControlWriteOutcome};
+use reinhardt_core::types::page::{
+	ControlValue, ControlWriteOutcome, NumberParseError, NumberParseErrorKind,
+};
 use reinhardt_core::validators::{Validate, ValidationError, ValidationErrors};
 use reinhardt_pages::control_binding::__private::{
 	CheckboxBinding, NumberBinding, RadioBinding, SelectOneBinding, TextBinding,
@@ -226,6 +228,133 @@ fn client_form_runtime_bindings_update_typed_fields_and_report_numeric_rejection
 				.get()
 				.contains_key(&ProjectRequestClientFormField::RetryCount)
 		);
+	});
+}
+
+#[rstest::rstest]
+#[case::all_errors(true)]
+#[case::field_error(false)]
+fn client_form_clear_errors_preserves_numeric_parse_failures(#[case] clear_all: bool) {
+	ReactiveScope::run(|| {
+		// Arrange
+		let form = ProjectRequestClientForm::new();
+		let runtime = use_form(&form).build();
+		runtime.set_value(form.name_field(), String::from("Ada"));
+		runtime.set_value(form.retry_count_field(), 41);
+		let number =
+			into_control_binding::<NumberBinding, _>(runtime.field(form.retry_count_field()), ());
+		assert_eq!(
+			number.write(ControlValue::Text("1e".to_owned())).unwrap(),
+			ControlWriteOutcome::Rejected(NumberParseError::from_raw_kind(
+				"1e",
+				NumberParseErrorKind::Incomplete,
+			))
+		);
+
+		// Act
+		if clear_all {
+			runtime.clear_errors();
+		} else {
+			runtime.clear_field_error(form.retry_count_field());
+		}
+
+		// Assert
+		assert_eq!(
+			runtime.get_field_state(form.retry_count_field()).error,
+			None
+		);
+		let validation = runtime
+			.trigger()
+			.expect_err("clearing displayed errors must preserve invalid numeric input");
+		assert_eq!(validation.field_errors().len(), 1);
+		assert_eq!(
+			validation.field_errors().get(&form.retry_count_field()),
+			Some(&FieldError::new(
+				"cannot parse numeric control value \"1e\": Incomplete"
+			))
+		);
+		assert_eq!(
+			runtime.handle_submit(),
+			UseFormSubmitOutcome::ValidationFailed
+		);
+		assert_eq!(runtime.get_values().retry_count, 41);
+		assert_eq!(
+			number.write(ControlValue::Text("42".to_owned())).unwrap(),
+			ControlWriteOutcome::Committed
+		);
+		assert_eq!(
+			runtime.get_field_state(form.retry_count_field()).error,
+			None
+		);
+	});
+}
+
+#[derive(Clone, Debug, PartialEq, ClientForm)]
+struct NumericInputsRequest {
+	count: i32,
+	ratio: f64,
+}
+
+#[rstest::rstest]
+fn client_form_reset_field_clears_only_its_numeric_parse_error() {
+	ReactiveScope::run(|| {
+		// Arrange
+		let form = NumericInputsRequestClientForm::new().with_defaults(NumericInputsRequest {
+			count: 41,
+			ratio: 2.5,
+		});
+		let runtime = use_form(&form).build();
+		let count = into_control_binding::<NumberBinding, _>(runtime.field(form.count_field()), ());
+		let ratio = into_control_binding::<NumberBinding, _>(runtime.field(form.ratio_field()), ());
+		count.write(ControlValue::Text("42".to_owned())).unwrap();
+		for binding in [&count, &ratio] {
+			assert_eq!(
+				binding.write(ControlValue::Text("1e".to_owned())).unwrap(),
+				ControlWriteOutcome::Rejected(NumberParseError::from_raw_kind(
+					"1e",
+					NumberParseErrorKind::Incomplete,
+				))
+			);
+		}
+		assert_eq!(
+			runtime
+				.trigger()
+				.expect_err("numeric input must be validated without DTO validation")
+				.field_errors()
+				.len(),
+			2
+		);
+
+		// Act
+		runtime.reset_field(form.count_field());
+
+		// Assert
+		assert_eq!(count.read(), ControlValue::Text("41".to_owned()));
+		assert_eq!(runtime.get_field_state(form.count_field()).error, None);
+		let validation = runtime
+			.trigger()
+			.expect_err("resetting one field must preserve the other invalid numeric input");
+		assert_eq!(validation.field_errors().len(), 1);
+		assert_eq!(
+			validation.field_errors().get(&form.ratio_field()),
+			Some(&FieldError::new(
+				"cannot parse numeric control value \"1e\": Incomplete"
+			))
+		);
+		assert_eq!(
+			runtime.handle_submit(),
+			UseFormSubmitOutcome::ValidationFailed
+		);
+
+		// A typed write and a full reset also replace invalid numeric input.
+		runtime.set_value(form.ratio_field(), 3.5_f64);
+		assert_eq!(runtime.handle_submit(), UseFormSubmitOutcome::Submitted);
+		count.write(ControlValue::Text("1e".to_owned())).unwrap();
+		runtime.reset();
+		assert_eq!(runtime.get_values().count, 41);
+		assert_eq!(runtime.get_values().ratio, 2.5);
+		assert_eq!(runtime.form_state().field_errors.get().len(), 0);
+		assert_eq!(runtime.handle_submit(), UseFormSubmitOutcome::Submitted);
 	});
 }
 

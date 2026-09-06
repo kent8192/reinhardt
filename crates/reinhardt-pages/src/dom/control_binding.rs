@@ -1087,7 +1087,12 @@ pub(crate) fn validate_control(
 					&& element
 						.as_web_sys()
 						.dyn_ref::<web_sys::HtmlInputElement>()
-						.is_some_and(|input| input.type_() == "text"))
+						.is_some_and(|input| {
+							matches!(
+								input.type_().as_str(),
+								"text" | "email" | "url" | "password"
+							)
+						}))
 		}
 		ControlKind::Number => input_has_type(element, &tag, "number"),
 		ControlKind::Checkbox => input_has_type(element, &tag, "checkbox"),
@@ -1310,21 +1315,29 @@ mod tests {
 	fn mounted_text_control_synchronizes_both_directions() {
 		let scope = ReactiveScope::new();
 		scope.enter(|| {
-			let element = element("input");
-			let input: web_sys::HtmlInputElement = element.as_web_sys().clone().unchecked_into();
-			let signal = Signal::new("signal".to_owned());
-			let _controller =
-				ControlBindingController::mount(element, ControlBinding::text(signal.clone()))
-					.expect("binding");
+			for input_type in ["text", "email", "url", "password"] {
+				// Arrange
+				let element = element("input");
+				let input: web_sys::HtmlInputElement =
+					element.as_web_sys().clone().unchecked_into();
+				input.set_type(input_type);
+				let signal = Signal::new("signal".to_owned());
+				let _controller =
+					ControlBindingController::mount(element, ControlBinding::text(signal.clone()))
+						.expect("binding");
 
-			assert_eq!(input.value(), "signal");
-			input.set_value("dom");
-			input
-				.dispatch_event(&web_sys::InputEvent::new("input").expect("input event"))
-				.expect("dispatch");
-			assert_eq!(signal.get(), "dom");
-			signal.set("updated".to_owned());
-			assert_eq!(input.value(), "updated");
+				// Act
+				assert_eq!(input.value(), "signal");
+				input.set_value("dom");
+				input
+					.dispatch_event(&web_sys::InputEvent::new("input").expect("input event"))
+					.expect("dispatch");
+				assert_eq!(signal.get(), "dom");
+				signal.set("updated".to_owned());
+
+				// Assert
+				assert_eq!(input.value(), "updated");
+			}
 		});
 	}
 
@@ -1918,7 +1931,7 @@ mod tests {
 	fn text_binding_rejects_non_text_input_types_without_writing_file_value() {
 		let scope = ReactiveScope::new();
 		scope.enter(|| {
-			for input_type in ["search", "email", "file", "range", "password", "url"] {
+			for input_type in ["search", "file", "range"] {
 				let element = element("input");
 				let input: web_sys::HtmlInputElement =
 					element.as_web_sys().clone().unchecked_into();

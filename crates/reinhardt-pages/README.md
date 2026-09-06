@@ -489,7 +489,7 @@ The supported value/control matrix is:
 
 | Generated value | Supported controls |
 |---|---|
-| `String` | text or textarea, radio, select-one |
+| `String` | text, email, URL, password or textarea, radio, select-one |
 | `T: NumberValue` | number (`input[type=number]`) |
 | `bool` | checkbox |
 | `Vec<String>` | select-many |
@@ -517,11 +517,16 @@ normal DOM-first hydration.
 For numeric bindings, invalid or incomplete raw text remains in the editor and
 the typed value remains the last valid value. The associated
 `NumberParseError` keeps the raw text and failure kind and is surfaced through
-field error state. A valid numeric write clears that tracked parse error;
-`reset()` restores the formatted default and clears it.
+field error state. Clearing displayed errors with `clear_errors()` or
+`clear_field_error()` preserves the parse failure and continues to block
+validation and submission. A valid numeric write clears it; `reset_field()`
+clears only the restored field's parse state, while `reset()` restores every
+formatted default and clears all parse state. Generated `EmailInput`,
+`UrlInput`, and `PasswordInput` widgets also synchronize their mounted values
+on reset.
 
-Typed runtime field bindings do not cover file inputs, ModelForm
-`exclude: [...]`, or nested collection paths. Use the existing generated file,
+Typed runtime field bindings do not cover file inputs, named `model_form:`
+contracts, ModelForm `exclude: [...]`, or nested collection paths. Use the existing generated file,
 string, and collection APIs for those cases.
 
 DTO request types can opt in to generated client-form companions with

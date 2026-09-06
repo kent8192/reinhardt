@@ -463,6 +463,17 @@ fn numeric_binding_rejection_and_snapshot_preserve_value_and_error() {
 			Some("cannot parse numeric control value \"1e\": Incomplete")
 		);
 
+		// Clearing displayed errors must not discard the rejected editor value.
+		runtime.clear_errors();
+		runtime.clear_field_error(form.count_field());
+		assert_eq!(
+			form.runtime_custom_widget_error(form.count_field())
+				.as_ref()
+				.map(reinhardt_pages::FieldError::message),
+			Some("cannot parse numeric control value \"1e\": Incomplete"),
+		);
+		assert!(runtime.trigger().is_err());
+
 		let snapshot = binding.snapshot();
 		assert_eq!(
 			binding.write(ControlValue::Text("9".to_owned())),

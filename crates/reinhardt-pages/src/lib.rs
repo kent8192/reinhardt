@@ -582,7 +582,7 @@
 //!
 //! | Generated value | Supported controls |
 //! | --- | --- |
-//! | `String` | text or textarea, radio, select-one |
+//! | `String` | text, email, URL, password or textarea, radio, select-one |
 //! | `T` implementing [`NumberValue`] | number (`input[type=number]`) |
 //! | `bool` | checkbox |
 //! | `Vec<String>` | select-many |
@@ -615,12 +615,16 @@
 //!
 //! Numeric bindings preserve invalid editor text and the last valid typed
 //! value. The current [`NumberParseError`] retains the raw text and failure
-//! kind; generated form runtimes expose it through field error state. A later
-//! valid numeric write clears that tracked parse error, and `reset()` restores
-//! the formatted default and clears it.
+//! kind; generated form runtimes expose it through field error state. Clearing
+//! displayed errors preserves parse failures and continues to block validation
+//! and submission. A valid numeric write clears the parse failure;
+//! [`UseFormReturn::reset_field`] clears it only for the restored field, while
+//! `reset()` restores every formatted default and clears all parse state.
+//! Generated email, URL, and password widgets synchronize their mounted values
+//! on reset as well.
 //!
-//! Typed runtime bindings intentionally exclude file inputs, ModelForm
-//! `exclude: [...]` declarations, and nested collection paths. Those forms
+//! Typed runtime bindings intentionally exclude file inputs, named `model_form:`
+//! contracts, ModelForm `exclude: [...]` declarations, and nested collection paths. Those forms
 //! keep their existing generated/file/collection APIs. The binding categories
 //! above reuse the existing `page!` classification and do not add a second DOM
 //! registry or application-facing adapter type.

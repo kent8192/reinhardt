@@ -322,7 +322,12 @@ fn generate_form_items(context: FormItemContext<'_>) -> proc_macro2::TokenStream
 	});
 	let apply_values = fields.iter().map(|field| {
 		let name = &field.name;
-		quote! { self.#name.set(values.#name.clone()); }
+		if field.exposes_field_token(dto_vis) {
+			let variant = &field.variant;
+			quote! { self.runtime_set_field_value(#field_ident::#variant, values.#name.clone()); }
+		} else {
+			quote! { self.#name.set(values.#name.clone()); }
+		}
 	});
 	let apply_skipped_values = skipped_fields.iter().map(|field| {
 		let name = &field.name;
@@ -347,11 +352,18 @@ fn generate_form_items(context: FormItemContext<'_>) -> proc_macro2::TokenStream
 		let name = &field.name;
 		let variant = &field.variant;
 		let value_ty = field.value_ty();
+		let clear_number_error = matches!(&field.kind, FieldKind::Scalar).then(|| {
+			let error = field.number_error_ident();
+			quote! { self.#error.set(::core::option::Option::None); }
+		});
 		quote! {
 			#field_ident::#variant => {
 				let value = ::std::boxed::Box::new(value) as ::std::boxed::Box<dyn ::core::any::Any>;
 				match value.downcast::<#value_ty>() {
-					::core::result::Result::Ok(value) => self.#name.set(*value),
+					::core::result::Result::Ok(value) => #pages_crate::reactive::batch(|| {
+						self.#name.set(*value);
+						#clear_number_error
+					}),
 					::core::result::Result::Err(_) => {
 						panic!(
 							"field {:?} is not compatible with provided value type {}",
@@ -366,7 +378,7 @@ fn generate_form_items(context: FormItemContext<'_>) -> proc_macro2::TokenStream
 	let apply_field_arms = field_token_fields.iter().map(|field| {
 		let name = &field.name;
 		let variant = &field.variant;
-		quote! { #field_ident::#variant => self.#name.set(values.#name.clone()) }
+		quote! { #field_ident::#variant => self.runtime_set_field_value(field, values.#name.clone()) }
 	});
 	let dirty_arms = field_token_fields.iter().map(|field| {
 		let name = &field.name;
@@ -430,11 +442,6 @@ fn generate_form_items(context: FormItemContext<'_>) -> proc_macro2::TokenStream
 				.map(|error| #pages_crate::FieldError::new(error.to_string()))
 		}
 	});
-	let clear_number_error_arms = numeric_field_tokens.iter().map(|field| {
-		let variant = &field.variant;
-		let error = field.number_error_ident();
-		quote! { #field_ident::#variant => self.#error.set(::core::option::Option::None) }
-	});
 	let fields_slice = field_token_fields.iter().map(|field| {
 		let variant = &field.variant;
 		quote! { #field_ident::#variant }
@@ -478,14 +485,23 @@ fn generate_form_items(context: FormItemContext<'_>) -> proc_macro2::TokenStream
 			}
 		}
 	});
-	let runtime_validate_method = if validate {
-		quote! {
-			fn runtime_validate(&self) -> ::core::result::Result<(), #pages_crate::FormValidationError<Self::Field>> {
+	let runtime_validate_method = if validate || !numeric_field_tokens.is_empty() {
+		let initial_validation = if validate {
+			quote! {
 				let request = #form_ident::values_to_request(&self.runtime_current_values());
 				let mut validation = #pages_crate::__private::client_form::validate_dto_request(
 					&request,
 					#form_ident::field_from_name,
 				);
+			}
+		} else {
+			quote! {
+				let mut validation: ::core::result::Result<(), #pages_crate::FormValidationError<Self::Field>> = ::core::result::Result::Ok(());
+			}
+		};
+		quote! {
+			fn runtime_validate(&self) -> ::core::result::Result<(), #pages_crate::FormValidationError<Self::Field>> {
+				#initial_validation
 				#(#number_error_validation)*
 				validation
 			}
@@ -679,19 +695,6 @@ fn generate_form_items(context: FormItemContext<'_>) -> proc_macro2::TokenStream
 				match field {
 					#(#custom_widget_error_arms,)*
 					_ => ::core::option::Option::None,
-				}
-			}
-
-			fn runtime_set_custom_widget_error(
-				&self,
-				field: Self::Field,
-				error: ::core::option::Option<#pages_crate::FieldError>,
-			) {
-				if error.is_none() {
-					match field {
-						#(#clear_number_error_arms,)*
-						_ => {}
-					}
 				}
 			}
 

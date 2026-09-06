@@ -371,13 +371,14 @@ fn generate_form_runtime_contract(
 		.iter()
 		.map(|field| {
 			let name = &field.name;
+			let number_error_reset = number_parse_error_reset(field);
 			let custom_widget_touched_reset =
 				custom_widget_touched_ident(field).map(|touched_name| {
 					quote! { self.#touched_name.set(false); }
 				});
 			quote! {
 				self.#name.set(values.#name.clone());
-
+				#number_error_reset
 				#custom_widget_touched_reset
 			}
 		})
@@ -566,6 +567,7 @@ fn generate_form_runtime_contract(
 		.map(|(field, variant)| {
 			let name = &field.name;
 			let ty = field_type_to_value_type(&field.field_type);
+			let number_error_reset = number_parse_error_reset(field);
 			let custom_widget_touched_set =
 				custom_widget_touched_ident(field).map(|touched_name| {
 					quote! { self.#touched_name.set(true); }
@@ -577,7 +579,7 @@ fn generate_form_runtime_contract(
 					match boxed.downcast::<#ty>() {
 						Ok(value) => {
 							self.#name.set(*value);
-
+							#number_error_reset
 							#custom_widget_touched_set
 						}
 						Err(_) => panic!(
@@ -595,6 +597,7 @@ fn generate_form_runtime_contract(
 		.zip(field_variants.iter())
 		.map(|(field, variant)| {
 			let name = &field.name;
+			let number_error_reset = number_parse_error_reset(field);
 			let custom_widget_touched_reset =
 				custom_widget_touched_ident(field).map(|touched_name| {
 					quote! { self.#touched_name.set(false); }
@@ -602,7 +605,7 @@ fn generate_form_runtime_contract(
 			quote! {
 				#field_ident::#variant => {
 					self.#name.set(values.#name.clone());
-
+				#number_error_reset
 					#custom_widget_touched_reset
 				}
 			}
@@ -797,10 +800,11 @@ fn generate_form_runtime_contract(
 			.iter()
 			.map(|field| {
 				let name = &field.name;
+				let number_error_reset = number_parse_error_reset(field);
 				quote! {
 					if current.#name == old_defaults.#name {
 						self.#name.set(new_defaults.#name.clone());
-
+						#number_error_reset
 					}
 				}
 			})
@@ -1538,20 +1542,7 @@ fn generate_form_runtime_contract(
 		.collect();
 	let number_parse_error_resets: Vec<TokenStream> = all_fields
 		.iter()
-		.filter_map(|field| {
-			if !matches!(
-				field.field_type,
-				TypedFieldType::IntegerField | TypedFieldType::FloatField
-			) {
-				return None;
-			}
-			let name = format_ident!(
-				"__{}_number_parse_error",
-				field.name,
-				span = field.name.span()
-			);
-			Some(quote! { self.#name.set(::core::option::Option::None); })
-		})
+		.filter_map(|field| number_parse_error_reset(field))
 		.collect();
 	let collection_constraints_validation_checks: Vec<TokenStream> = collections
 		.iter()
@@ -1898,6 +1889,21 @@ fn generate_form_runtime_contract(
 		let _ = ::core::mem::size_of::<#field_ident>();
 		#collection_token_guard
 	}
+}
+
+fn number_parse_error_reset(field: &TypedFormFieldDef) -> Option<TokenStream> {
+	if !matches!(
+		field.field_type,
+		TypedFieldType::IntegerField | TypedFieldType::FloatField
+	) {
+		return None;
+	}
+	let error = format_ident!(
+		"__{}_number_parse_error",
+		field.name,
+		span = field.name.span()
+	);
+	Some(quote! { self.#error.set(::core::option::Option::None); })
 }
 
 fn field_variant_ident(ident: &syn::Ident) -> syn::Ident {
@@ -2403,7 +2409,6 @@ fn generate_model_form(
 		model_form_number_error_clearer,
 		model_form_runtime_binding_arms,
 		model_form_custom_error_arms,
-		model_form_custom_error_setters,
 	) = match selection {
 		Some(TypedModelFieldSelection::Fields(fields)) => {
 			let binding_target_declarations = fields.iter().map(|field| {
@@ -2464,15 +2469,6 @@ fn generate_model_form(
 						.map(|error| #pages_crate::FieldError::new(error.to_string())),
 				}
 			});
-			let custom_error_setters = fields.iter().map(|field| {
-				let variant = field_variant_ident(field);
-				let error = format_ident!("__{}_number_parse_error", field, span = field.span());
-				quote! {
-					__ReinhardtModelFormField::#variant if error.is_none() => {
-						self.#error.set(::core::option::Option::None);
-					}
-				}
-			});
 			(
 				quote!(#(#binding_target_declarations)*),
 				quote!(#(#binding_target_initializers)*),
@@ -2489,7 +2485,6 @@ fn generate_model_form(
 				},
 				quote!(#(#binding_arms)*),
 				quote!(#(#custom_error_arms)*),
-				quote!(#(#custom_error_setters,)*),
 			)
 		}
 		None | Some(TypedModelFieldSelection::Exclude(_)) => (
@@ -2501,7 +2496,6 @@ fn generate_model_form(
 			quote! {
 				fn __clear_number_parse_error(&self, _field: &str) {}
 			},
-			quote! {},
 			quote! {},
 			quote! {},
 		),
@@ -2761,16 +2755,6 @@ fn generate_model_form(
 				}
 			}
 
-			fn runtime_set_custom_widget_error(
-				&self,
-				field: Self::Field,
-				error: ::core::option::Option<#pages_crate::FieldError>,
-			) {
-				match field {
-					#model_form_custom_error_setters
-					_ => {}
-				}
-			}
 		},
 		None | Some(TypedModelFieldSelection::Exclude(_)) => quote! {},
 	};
@@ -7485,7 +7469,11 @@ fn generate_generated_control_binding(
 			}
 		}
 		(
-			TypedWidget::TextInput | TypedWidget::Textarea,
+			TypedWidget::TextInput
+			| TypedWidget::Textarea
+			| TypedWidget::EmailInput
+			| TypedWidget::UrlInput
+			| TypedWidget::PasswordInput,
 			TypedFieldType::CharField
 			| TypedFieldType::TextField
 			| TypedFieldType::EmailField
@@ -7498,9 +7486,14 @@ fn generate_generated_control_binding(
 				#hydration_preference
 			)
 		},
-		(TypedWidget::TextInput | TypedWidget::Textarea, TypedFieldType::ChoiceField { inner })
-			if type_is_string(inner) =>
-		{
+		(
+			TypedWidget::TextInput
+			| TypedWidget::Textarea
+			| TypedWidget::EmailInput
+			| TypedWidget::UrlInput
+			| TypedWidget::PasswordInput,
+			TypedFieldType::ChoiceField { inner },
+		) if type_is_string(inner) => {
 			quote! {
 				.control_binding(
 					#pages_crate::component::ControlBinding::text(#signal_ident.clone())

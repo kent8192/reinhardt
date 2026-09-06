@@ -1612,12 +1612,14 @@ where
 		self.sync_first_error();
 	}
 
-	/// Clears all validation and submit errors.
+	/// Clears displayed validation and submit errors.
+	///
+	/// Rejected numeric editor state remains invalid until a valid write or reset.
 	pub fn clear_errors(&self) {
 		for field in self.form.runtime_fields() {
 			self.form.runtime_set_custom_widget_error(*field, None);
 		}
-		self.custom_widget_error_fields.borrow_mut().clear();
+		*self.custom_widget_error_fields.borrow_mut() = collect_custom_widget_errors(&self.form);
 		self.state.field_errors.set(HashMap::new());
 		self.collection_errors.set(HashMap::new());
 		self.path_errors.set(HashMap::new());
@@ -1626,10 +1628,12 @@ where
 		self.state.error.set(None);
 	}
 
-	/// Clears one field error.
+	/// Clears one displayed field error without discarding rejected numeric input.
 	pub fn clear_field_error(&self, field: Form::Field) {
 		self.form.runtime_set_custom_widget_error(field, None);
-		self.custom_widget_error_fields.borrow_mut().remove(&field);
+		if self.form.runtime_custom_widget_error(field).is_none() {
+			self.custom_widget_error_fields.borrow_mut().remove(&field);
+		}
 		let mut errors = self.state.field_errors.get();
 		errors.remove(&field);
 		self.state.field_errors.set(errors);
@@ -1718,7 +1722,7 @@ where
 		self.clear_errors();
 	}
 
-	/// Resets one field to its current default value.
+	/// Resets one field to its current default value and clears its numeric parse state.
 	pub fn reset_field(&self, field: Form::Field) {
 		let defaults = self.default_values.borrow();
 		let _guard = self.suppress_signal_sync();

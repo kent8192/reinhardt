@@ -478,9 +478,11 @@
 //! control remains compatible with its binding. Initial hydration writes
 //! browser-normalized range values back after reactive `min`, `max`, or `step`
 //! constraints apply, while ordinary number inputs retain rejected editor text.
-//! Multiple range controls bound to one signal synchronize only when their
-//! overlapping constraints contain a value accepted by every stepped grid;
-//! `step="any"` makes only that control continuous.
+//! Multiple range controls bound to one signal reconcile browser-normalized
+//! values only when their bounds overlap at an accepted value and their grids
+//! match: equal steps with aligned bases, or all `step="any"`. Differing grids,
+//! including continuous/stepped pairs, keep normalization local even if they
+//! share valid values.
 //! Radio `value` expressions are evaluated once per rendered element. A bound
 //! single select projects only its first matching option in tree order during
 //! SSR, including options resolved inside a pending boundary; a multiple

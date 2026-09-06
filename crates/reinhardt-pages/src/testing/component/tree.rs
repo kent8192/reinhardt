@@ -2003,6 +2003,46 @@ mod case_normalization_tests {
 	}
 
 	#[rstest]
+	#[case::intersecting_grids(("0", "15", "2"), ("0", "15", "3"), 8.0, "8", "9")]
+	#[case::nested_grids(("0", "8", "2"), ("4", "12", "6"), 8.0, "8", "10")]
+	#[case::continuous_peer(("0.2", "1.6", "any"), ("0", "2", "1"), 1.6, "1.6", "2")]
+	fn native_shared_ranges_do_not_alternate_between_normalized_values(
+		#[case] first: (&str, &str, &str),
+		#[case] second: (&str, &str, &str),
+		#[case] initial: f64,
+		#[case] first_value: &str,
+		#[case] second_value: &str,
+	) {
+		ReactiveScope::run(|| {
+			// Arrange
+			let value = Signal::new(initial);
+			let mut container = PageElement::new("div");
+			for (min, max, step) in [first, second] {
+				container = container.child(
+					PageElement::new("input")
+						.attr("type", "range")
+						.attr("min", min.to_owned())
+						.attr("max", max.to_owned())
+						.attr("step", step.to_owned())
+						.control_binding(ControlBinding::number(value)),
+				);
+			}
+			let mut dom = TestDom::render(container.into_page());
+			let container = dom.children(dom.root())[0];
+			let ranges = dom.children(container).to_vec();
+
+			// Act
+			value.set(initial);
+			dom.refresh_control_bindings();
+
+			// Assert
+			assert_eq!(value.get(), initial);
+			assert_eq!(dom.value(ranges[0]).as_deref(), Some(first_value));
+			assert_eq!(dom.value(ranges[1]).as_deref(), Some(second_value));
+		});
+	}
+
+	#[rstest]
 	fn native_overlapping_ranges_without_a_common_step_keep_browser_values_local() {
 		ReactiveScope::run(|| {
 			// Arrange

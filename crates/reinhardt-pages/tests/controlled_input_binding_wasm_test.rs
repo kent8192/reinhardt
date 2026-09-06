@@ -208,6 +208,59 @@ fn range_binding_canonicalizes_negative_zero() {
 }
 
 #[rstest]
+#[wasm_bindgen_test]
+fn shared_ranges_with_different_step_grids_keep_their_local_projection() {
+	ReactiveScope::run(|| {
+		// Arrange
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_root = document.create_element("div").expect("root");
+		let _cleanup = AttachedRootCleanup(raw_root.clone());
+		let root = Element::new(raw_root);
+		let value = Signal::new(8_i32);
+		Page::Fragment(
+			["2", "3"]
+				.into_iter()
+				.map(|step| {
+					PageElement::new("input")
+						.attr("type", "range")
+						.attr("min", "0")
+						.attr("max", "15")
+						.attr("step", step)
+						.control_binding(ControlBinding::number(value))
+						.into_page()
+				})
+				.collect(),
+		)
+		.mount(&root)
+		.expect("mount");
+		let first: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("first range")
+			.unchecked_into();
+		let second: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.last_element_child()
+			.expect("second range")
+			.unchecked_into();
+
+		// Act: the grids intersect, but their local projections of 8 cycle 9 <-> 10.
+		value.set(8);
+		with_runtime(|runtime| runtime.flush_updates());
+
+		// Assert
+		assert_eq!(value.get(), 8);
+		assert_eq!(
+			(first.value(), second.value()),
+			("8".to_owned(), "9".to_owned())
+		);
+	});
+}
+
+#[rstest]
 #[case(false)]
 #[case(true)]
 #[wasm_bindgen_test]

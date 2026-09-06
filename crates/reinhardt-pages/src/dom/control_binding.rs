@@ -1326,7 +1326,7 @@ fn write_control_and_reconcile(
 				return Ok(());
 			}
 			if has_conflicting_range_binding(element, binding) {
-				// Disjoint range controls cannot both normalize one shared signal.
+				// Conflicting range projections cannot safely normalize one shared signal.
 				// Keep their browser values local; writing back here would make their
 				// layout effects alternate forever.
 				return Ok(());

@@ -144,7 +144,7 @@ pub(crate) fn range_constraints_conflict(
 	let overlap_min = first_min.max(second_min);
 	let overlap_max = first_max.min(second_max);
 	overlap_min > overlap_max
-		|| !range_step_grids_have_common_value(
+		|| !range_step_grids_allow_reconciliation(
 			overlap_min,
 			overlap_max,
 			first_step,
@@ -155,7 +155,7 @@ pub(crate) fn range_constraints_conflict(
 }
 
 #[cfg(any(wasm, test, feature = "testing"))]
-fn range_step_grids_have_common_value(
+fn range_step_grids_allow_reconciliation(
 	overlap_min: f64,
 	overlap_max: f64,
 	first_step: Option<f64>,
@@ -165,42 +165,19 @@ fn range_step_grids_have_common_value(
 ) -> bool {
 	let (first_step, second_step) = match (first_step, second_step) {
 		(None, None) => return true,
-		(Some(step), None) => {
-			return range_step_grid_has_value(overlap_min, overlap_max, step, first_base);
-		}
-		(None, Some(step)) => {
-			return range_step_grid_has_value(overlap_min, overlap_max, step, second_base);
-		}
+		(Some(_), None) | (None, Some(_)) => return false,
 		(Some(first_step), Some(second_step)) => (first_step, second_step),
 	};
-	let tolerance = first_step.max(second_step) * 1e-12;
-	let mut previous_remainder = first_step;
-	let mut remainder = second_step;
-	let mut previous_first_coefficient = 1.0;
-	let mut first_coefficient = 0.0;
-	while remainder.abs() > tolerance {
-		let quotient = (previous_remainder / remainder).floor();
-		(previous_remainder, remainder) = (remainder, previous_remainder - quotient * remainder);
-		(previous_first_coefficient, first_coefficient) = (
-			first_coefficient,
-			previous_first_coefficient - quotient * first_coefficient,
-		);
-	}
-	let greatest_common_step = previous_remainder.abs();
-	if !greatest_common_step.is_finite() || greatest_common_step <= 0.0 {
+	// ponytail: differing grids stay local even if some projections converge;
+	// support them only with a shared normalization algorithm that cannot cycle.
+	if first_step != second_step || !first_step.is_finite() || first_step <= 0.0 {
 		return false;
 	}
-	let phase = (second_base - first_base) / greatest_common_step;
-	let phase_tolerance = phase.abs().max(1.0) * 1e-9;
-	if !phase.is_finite() || (phase - phase.round()).abs() > phase_tolerance {
+	let phase = (second_base - first_base) / first_step;
+	if !phase.is_finite() || phase.fract() != 0.0 {
 		return false;
 	}
-	let origin = first_base + first_step * previous_first_coefficient * phase.round();
-	let period = first_step / greatest_common_step * second_step;
-	if !origin.is_finite() || !period.is_finite() || period <= 0.0 {
-		return false;
-	}
-	range_step_grid_has_value(overlap_min, overlap_max, period, origin)
+	range_step_grid_has_value(overlap_min, overlap_max, first_step, first_base)
 }
 
 #[cfg(any(wasm, test, feature = "testing"))]
@@ -245,10 +222,10 @@ mod tests {
 	}
 
 	#[test]
-	fn range_step_grid_compatibility_requires_a_common_value_inside_the_overlap() {
+	fn range_step_grid_compatibility_requires_the_same_grid_inside_the_overlap() {
 		// Arrange
 		let outside_only = ((0.0, 5.0, Some(4.0), 0.0), (2.0, 5.0, Some(6.0), 2.0));
-		let inside = ((0.0, 8.0, Some(4.0), 0.0), (2.0, 8.0, Some(6.0), 2.0));
+		let inside = ((0.0, 8.0, Some(4.0), 0.0), (4.0, 8.0, Some(4.0), 4.0));
 
 		// Act
 		let outside_only_conflicts = range_constraints_conflict(outside_only.0, outside_only.1);
@@ -259,7 +236,7 @@ mod tests {
 	}
 
 	#[test]
-	fn continuous_range_requires_the_stepped_peer_to_enter_the_overlap() {
+	fn continuous_and_stepped_ranges_keep_their_normalized_values_local() {
 		// Arrange
 		let outside_only = ((0.5, 0.6, None, 0.5), (0.0, 0.6, Some(1.0), 0.0));
 		let inside = ((0.5, 1.1, None, 0.5), (0.0, 1.1, Some(1.0), 0.0));
@@ -273,6 +250,10 @@ mod tests {
 		];
 
 		// Assert
-		assert_eq!(conflicts, [true, true, false, false]);
+		assert_eq!(conflicts, [true; 4]);
+		assert_eq!(
+			range_constraints_conflict((0.5, 1.1, None, 0.5), (0.0, 1.1, None, 0.0)),
+			false
+		);
 	}
 }

@@ -307,9 +307,10 @@ with its binding is ignored, keeping the mounted controller usable. During
 initial hydration, browser normalization caused by reactive `min`, `max`, or
 `step` constraints is written back for range inputs, while ordinary number
 inputs continue to preserve rejected editor text. Multiple range controls bound
-to one signal synchronize only when their overlapping constraints contain a
-value accepted by every stepped grid; `step="any"` makes only that control
-continuous. See the
+to one signal reconcile browser-normalized values only when their bounds
+overlap at an accepted value and their grids match: equal steps with aligned
+bases, or all `step="any"`. Differing grids, including continuous/stepped pairs,
+keep normalization local even if they share valid values. See the
 [React migration guide](docs/react_to_reinhardt.md#controlled-and-uncontrolled-form-controls)
 for event ordering, IME, numeric-error, and low-level escape-hatch details.
 For `input[type=number]`, the binding combines `beforeinput` metadata with the

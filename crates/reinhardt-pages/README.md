@@ -506,7 +506,8 @@ a native `<button type="reset">` or reset event. Use
 `runtime.sync_after_native_reset()` only when the application deliberately
 handles the browser's native reset behavior. Pending network work continues;
 stale form-action completions cannot repopulate form-owned submit state, while
-standalone `use_action` handles are outside this reset boundary.
+standalone `use_action` handles are outside this reset boundary. Reset skips
+connected actions whose child scope has already been disposed.
 
 Fresh mount writes runtime values to the DOM. Hydration is normally DOM-first,
 so edits made after SSR and before hydration are preserved. A reset performed

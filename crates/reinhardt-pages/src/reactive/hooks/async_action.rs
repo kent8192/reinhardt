@@ -317,6 +317,13 @@ impl<T: Clone + 'static, E: Clone + 'static> Action<T, E> {
 		self.state().set(ActionPhase::Idle);
 	}
 
+	/// Resets a connected action only while its owning scope remains alive.
+	pub(crate) fn reset_if_alive(&self) {
+		if let Ok(state) = with_page_node::<ActionSlot<T, E>, _>(self.key, |slot| slot.state) {
+			let _ = state.try_set(ActionPhase::Idle);
+		}
+	}
+
 	/// Returns an event callback that dispatches this action with `payload`.
 	///
 	/// Use [`Action::dispatching_with`] when the payload should be read at click

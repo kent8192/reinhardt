@@ -2348,6 +2348,45 @@ fn form_action_ui_preserves_submit_semantics_and_renders_validation_errors() {
 }
 
 #[rstest::rstest]
+#[serial_test::serial(reactive_runtime)]
+fn form_reset_ignores_disposed_connected_action_scope() {
+	ReactiveScope::run(|| {
+		// Arrange
+		let profile = form! {
+			name: ProfileForm,
+			action: "/profile",
+			fields: {
+				display_name: CharField {
+					initial: "Ada",
+				}
+			}
+		};
+		let runtime = use_form(&profile).build();
+		let child_scope = ReactiveScope::new();
+		let retained_action = {
+			let action = child_scope
+				.enter(|| use_form_action(&runtime, |_values| async { Ok::<(), String>(()) }));
+			action.clone()
+		};
+		runtime.set_value(profile.display_name_field(), "Grace".to_owned());
+		runtime.set_error(profile.display_name_field(), FieldError::new("invalid"));
+		child_scope.dispose();
+
+		// Act
+		runtime.reset();
+
+		// Assert
+		assert_eq!(retained_action.form().get_values().display_name, "Ada");
+		assert!(!runtime.form_state().is_dirty.get());
+		assert!(!runtime.form_state().is_touched.get());
+		assert_eq!(
+			runtime.get_field_state(profile.display_name_field()).error,
+			None
+		);
+	});
+}
+
+#[rstest::rstest]
 #[case::field_reset("reset_field")]
 #[case::field_write("set_value")]
 #[case::all_values("set_values")]

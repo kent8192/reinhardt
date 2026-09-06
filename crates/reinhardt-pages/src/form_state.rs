@@ -29,7 +29,8 @@
 //! actions created with [`use_form_action`]. It does not run automatically
 //! after success and is not connected automatically to a native reset button
 //! or reset event. A pending request is not cancelled; its stale completion is
-//! ignored by the form-owned action.
+//! ignored by the form-owned action. Actions from disposed child scopes are
+//! skipped when the parent form resets.
 //!
 //! Hydration remains DOM-first so edits made after SSR are preserved. A reset
 //! made before hydration marks runtime field bindings as source-preferred, so
@@ -2680,7 +2681,7 @@ where
 		id_for_guard.get() == Some(completed_id)
 			&& generation_for_guard.get() == Some(form_for_guard.current_submit_generation())
 	});
-	let reset_callback: ConnectedActionReset = { Rc::new(move || action.reset()) };
+	let reset_callback: ConnectedActionReset = { Rc::new(move || action.reset_if_alive()) };
 	form.register_connected_action(&reset_callback);
 
 	let form_for_success = form.clone();

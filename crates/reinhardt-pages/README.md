@@ -302,6 +302,9 @@ edits made before hydration. The adopted value also becomes the browser reset
 default, so a later form reset preserves the pre-hydration control state. Later
 signal changes update the control. Password bindings set only the live value
 property and never expose the secret through an SSR or DOM `value` attribute.
+Resetting a connected password form clears its bound signal in a deferred
+task, after the browser reset completes. Cancelled resets preserve the
+value, and unmounting a control cancels its queued reset reconciliation.
 Reactive attributes reconcile a binding only when they can change the control's
 value, so unrelated presentation updates preserve an in-progress edit. A
 reactive `type` or `multiple` update that would make the control incompatible

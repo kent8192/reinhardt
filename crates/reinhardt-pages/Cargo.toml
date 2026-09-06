@@ -289,6 +289,7 @@ reinhardt-core = {workspace = true, default-features = false, features = ["react
 smallvec = { workspace = true }
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 wasm-bindgen-futures = "0.4.56"
+gloo-timers = { version = "0.3", features = ["futures"] }
 uuid = { version = "1.7", features = ["v7", "js"] }
 # Issue #4217: depend on reinhardt-urls on wasm to consume the canonical
 # `client_router::history` primitives (deduplicates with the server-side
@@ -334,11 +335,6 @@ reinhardt-macros = { workspace = true }
 # `chrono` resolvable in the generated fixture binary.
 chrono = { workspace = true }
 base64 = { workspace = true }
-
-[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
-# Used by tests/wasm/client_launcher_navigation_test.rs (Refs #4075) to
-# yield to the reactive scheduler between `Router::push` calls.
-gloo-timers = { version = "0.3", features = ["futures"] }
 
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

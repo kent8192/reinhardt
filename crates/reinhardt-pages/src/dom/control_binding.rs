@@ -224,6 +224,7 @@ fn restore_rejected_number_snapshot(element: &Element, snapshot: &RejectedNumber
 pub(crate) struct ControlBindingController {
 	effect: Effect,
 	_listeners: Vec<EventHandle>,
+	_password_reset_listener: Option<PasswordResetListener>,
 	_option_observer: Option<SelectOptionObserver>,
 	_number_binding_registration: Option<NumberBindingRegistration>,
 }
@@ -338,6 +339,80 @@ impl Drop for SelectOptionObserver {
 	fn drop(&mut self) {
 		self.observer.disconnect();
 	}
+}
+
+struct PasswordResetListener {
+	document: web_sys::Document,
+	callback: Closure<dyn FnMut(web_sys::Event)>,
+}
+
+impl Drop for PasswordResetListener {
+	fn drop(&mut self) {
+		let _ = self.document.remove_event_listener_with_callback_and_bool(
+			"reset",
+			self.callback.as_ref().unchecked_ref(),
+			true,
+		);
+	}
+}
+
+fn install_password_reset_listener(
+	element: &Element,
+	binding: &ControlBinding,
+	state: &Rc<RefCell<CompositionState>>,
+) -> Option<PasswordResetListener> {
+	if binding.kind() != ControlKind::Text {
+		return None;
+	}
+	let input = element
+		.as_web_sys()
+		.dyn_ref::<web_sys::HtmlInputElement>()?
+		.clone();
+	let document = input.owner_document()?;
+	let binding = binding.clone();
+	let state = Rc::downgrade(state);
+	// ponytail: one document listener per text input; share delegation if large forms make reset dispatch costly.
+	// Capture also covers form= reassociation and reset handlers that stop propagation.
+	let callback = Closure::wrap(Box::new(move |event: web_sys::Event| {
+		if !input.type_().eq_ignore_ascii_case("password")
+			|| !input.form().is_some_and(|form| {
+				event
+					.target()
+					.is_some_and(|target| target == form.unchecked_into::<web_sys::EventTarget>())
+			}) {
+			return;
+		}
+		let input = input.clone();
+		let binding = binding.clone();
+		let state = state.clone();
+		// Real user events can flush microtasks before reset handlers and default actions.
+		// A task waits for both cancellation and the browser's value reset to complete.
+		let after_reset = gloo_timers::future::TimeoutFuture::new(0);
+		crate::platform::spawn_task(async move {
+			after_reset.await;
+			let Some(state) = state.upgrade() else {
+				return;
+			};
+			if event.default_prevented()
+				|| !with_runtime(|runtime| runtime.has_node(binding.target()))
+			{
+				return;
+			}
+			{
+				let mut state = state.borrow_mut();
+				state.composing = false;
+				state.skip_next_input = None;
+			}
+			let value = ControlValue::Text(input.value());
+			if untracked(|| binding.read()) != value {
+				let _ = write_binding_from_input(&binding, &state, value);
+			}
+		});
+	}) as Box<dyn FnMut(web_sys::Event)>);
+	document
+		.add_event_listener_with_callback_and_bool("reset", callback.as_ref().unchecked_ref(), true)
+		.ok()?;
+	Some(PasswordResetListener { document, callback })
 }
 
 impl std::fmt::Debug for ControlBindingController {
@@ -481,6 +556,7 @@ impl ControlBindingController {
 			adopted || rejected
 		};
 		let option_observer = install_select_option_observer(&element, &binding);
+		let password_reset_listener = install_password_reset_listener(&element, &binding, &state);
 		let effect = install_effect(element, binding, true, state);
 		if let Some(registration) = &number_binding_registration {
 			registration.set_effect(effect);
@@ -489,6 +565,7 @@ impl ControlBindingController {
 			Self {
 				effect,
 				_listeners: listeners,
+				_password_reset_listener: password_reset_listener,
 				_option_observer: option_observer,
 				_number_binding_registration: number_binding_registration,
 			},
@@ -511,6 +588,7 @@ impl ControlBindingController {
 			number_position,
 		);
 		let option_observer = install_select_option_observer(&element, &binding);
+		let password_reset_listener = install_password_reset_listener(&element, &binding, &state);
 		let effect = install_effect(element, binding, skip_first_write, state);
 		if let Some(registration) = &number_binding_registration {
 			registration.set_effect(effect);
@@ -518,6 +596,7 @@ impl ControlBindingController {
 		Ok(Self {
 			effect,
 			_listeners: listeners,
+			_password_reset_listener: password_reset_listener,
 			_option_observer: option_observer,
 			_number_binding_registration: number_binding_registration,
 		})

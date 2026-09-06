@@ -471,6 +471,9 @@
 //! `2026-08-31 10:30` becoming `2026-08-31T10:30` for `datetime-local`. When an
 //! invalid application value is sanitized to `""`, the original signal is
 //! preserved.
+//! Password values stay out of HTML attributes. Resetting a connected password
+//! form reconciles its signal in a deferred task; cancelled resets and
+//! unmounted controls do not change the signal.
 //! Numeric bindings may expose a [`NumberParseError`] signal that retains
 //! recoverable invalid editor text.
 //! Only unmodified Arrow/Home/End keyboard moves are predicted; modifier-key

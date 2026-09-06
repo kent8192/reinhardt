@@ -3,11 +3,13 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use gloo_timers::future::TimeoutFuture;
 use reinhardt_pages::component::{
 	Component, ControlBinding, ControlBindingError, ControlKind, ControlValue, IntoPage,
 	MountError, NumberParseError, NumberParseErrorKind, Page, PageExt,
 };
 use reinhardt_pages::dom::Element;
+use reinhardt_pages::prelude::defer_yield;
 use reinhardt_pages::reactive::{ReactiveScope, Signal, with_runtime};
 use reinhardt_pages::{PageElement, page};
 use rstest::rstest;
@@ -611,6 +613,181 @@ fn reactive_password_type_removes_the_serialized_bound_value(#[case] nested_in_r
 		assert_eq!(input.value(), "secret");
 		reinhardt_pages::cleanup_reactive_nodes();
 	});
+}
+
+fn password_reset_form(
+	value: Signal<String>,
+	hydrate: bool,
+) -> (
+	AttachedRootCleanup,
+	web_sys::HtmlFormElement,
+	web_sys::HtmlInputElement,
+) {
+	let document = web_sys::window()
+		.expect("window")
+		.document()
+		.expect("document");
+	let container = document.create_element("div").expect("container");
+	let cleanup = AttachedRootCleanup(container.clone());
+	document
+		.body()
+		.expect("body")
+		.append_child(&container)
+		.expect("attach form container");
+	let page = PageElement::new("form")
+		.child(
+			PageElement::new("input")
+				.attr("type", "password")
+				.control_binding(ControlBinding::text(value)),
+		)
+		.child(PageElement::new("button").attr("type", "reset"))
+		.into_page();
+	if hydrate {
+		container.set_inner_html(&page.render_to_string());
+		let root = Element::new(container.first_element_child().expect("SSR form"));
+		let _state = SsrStateElement::install(&document);
+		reinhardt_pages::hydration::hydrate(&HydratedControlPage(page), &root)
+			.expect("hydrate password form");
+	} else {
+		page.mount(&Element::new(container.clone()))
+			.expect("mount password form");
+	}
+	let form: web_sys::HtmlFormElement = container
+		.first_element_child()
+		.expect("form")
+		.unchecked_into();
+	let input = form
+		.query_selector("input")
+		.expect("query password")
+		.expect("password input")
+		.unchecked_into();
+	(cleanup, form, input)
+}
+
+#[rstest]
+#[case::mount_form_reset(false, false)]
+#[case::mount_reset_button(false, true)]
+#[case::hydrate_form_reset(true, false)]
+#[case::hydrate_reset_button(true, true)]
+#[test_attr(wasm_bindgen_test)]
+async fn bound_password_reset_respects_cancellation_and_clears_the_signal(
+	#[case] hydrate: bool,
+	#[case] use_reset_button: bool,
+) {
+	// Arrange
+	let scope = ReactiveScope::new();
+	let value = scope.enter(|| Signal::new("initial-secret".to_owned()));
+	let (_cleanup, form, input) = scope.enter(|| password_reset_form(value, hydrate));
+	assert_eq!(input.value(), "initial-secret");
+	assert_eq!(input.get_attribute("value"), None);
+	assert_eq!(input.default_value(), "");
+	input.set_value("edited-secret");
+	input
+		.dispatch_event(&web_sys::InputEvent::new("input").expect("input event"))
+		.expect("dispatch password edit");
+	assert_eq!(value.get(), "edited-secret");
+	let cancel_reset = Rc::new(Cell::new(true));
+	let reset_count = Rc::new(Cell::new(0));
+	let cancel_for_handler = Rc::clone(&cancel_reset);
+	let count_for_handler = Rc::clone(&reset_count);
+	let _reset_listener = Element::new(form.clone().unchecked_into())
+		.add_event_listener_with_event("reset", move |event| {
+			count_for_handler.set(count_for_handler.get() + 1);
+			event.stop_propagation();
+			if cancel_for_handler.get() {
+				event.prevent_default();
+			}
+		});
+	let reset = || {
+		if use_reset_button {
+			form.query_selector("button")
+				.expect("query reset button")
+				.expect("reset button")
+				.unchecked_into::<web_sys::HtmlElement>()
+				.click();
+		} else {
+			form.reset();
+		}
+	};
+
+	// Act: a cancelled reset preserves both the live value and the signal.
+	reset();
+	TimeoutFuture::new(0).await;
+	with_runtime(|runtime| runtime.flush_updates());
+
+	// Assert
+	assert_eq!(reset_count.get(), 1);
+	assert_eq!(input.value(), "edited-secret");
+	assert_eq!(value.get(), "edited-secret");
+	assert_eq!(input.get_attribute("value"), None);
+	assert_eq!(input.default_value(), "");
+
+	// Act: allow the browser reset despite the stopped event propagation.
+	cancel_reset.set(false);
+	reset();
+	defer_yield().await;
+	// Native clicks can run microtasks before the reset default action completes.
+	assert_eq!(value.get(), "edited-secret");
+	TimeoutFuture::new(0).await;
+	with_runtime(|runtime| runtime.flush_updates());
+
+	// Assert
+	assert_eq!(reset_count.get(), 2);
+	assert_eq!(input.value(), "");
+	assert_eq!(value.get(), "");
+	assert_eq!(input.get_attribute("value"), None);
+	assert_eq!(input.default_value(), "");
+}
+
+#[rstest]
+#[case::mount_unmount(false, false)]
+#[case::mount_dispose_signal(false, true)]
+#[case::hydrate_unmount(true, false)]
+#[case::hydrate_dispose_signal(true, true)]
+#[test_attr(wasm_bindgen_test)]
+async fn bound_password_reset_queued_before_teardown_skips_removed_controls(
+	#[case] hydrate: bool,
+	#[case] dispose_signal: bool,
+) {
+	// Arrange
+	let signal_scope = ReactiveScope::new();
+	let value = signal_scope.enter(|| Signal::new("secret".to_owned()));
+	let binding_scope = ReactiveScope::new();
+	let (cleanup, form, input) = binding_scope.enter(|| password_reset_form(value, hydrate));
+	let effects = with_runtime(|runtime| runtime.debug_subscribers(value.id()));
+	assert_eq!(input.value(), "secret");
+	assert_eq!(input.get_attribute("value"), None);
+	assert_eq!(input.default_value(), "");
+
+	// Act: remove the binding before its deferred reset reconciliation runs.
+	form.reset();
+	drop(cleanup);
+	if dispose_signal {
+		drop(signal_scope);
+	}
+	TimeoutFuture::new(0).await;
+	with_runtime(|runtime| runtime.flush_updates());
+
+	// Assert: queued work neither writes a removed binding nor revives its effects.
+	assert_eq!(input.value(), "");
+	assert_eq!(input.get_attribute("value"), None);
+	assert_eq!(input.default_value(), "");
+	assert_eq!(
+		with_runtime(|runtime| runtime.subscriber_count(value.id())),
+		0
+	);
+	assert!(
+		effects
+			.iter()
+			.all(|effect| !with_runtime(|runtime| runtime.has_node(*effect)))
+	);
+	if dispose_signal {
+		assert!(value.try_get_untracked().is_err());
+	} else {
+		assert_eq!(value.get(), "secret");
+		value.set("after-teardown".to_owned());
+		assert_eq!(input.value(), "");
+	}
 }
 
 #[rstest]

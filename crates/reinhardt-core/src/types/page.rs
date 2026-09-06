@@ -47,6 +47,8 @@ pub use util::{BOOLEAN_ATTRS, is_boolean_attr, is_boolean_attr_truthy};
 use std::borrow::Cow;
 use std::sync::Arc;
 
+use control_binding::SSR_OMITTED_PASSWORD_ATTRIBUTE;
+
 /// Type alias for event handler functions.
 #[cfg(wasm)]
 pub type PageEventHandler = Arc<dyn Fn(web_sys::Event) + 'static>;
@@ -1165,6 +1167,8 @@ impl Page {
 	/// Renders the view to an HTML string.
 	///
 	/// This is the core SSR method that converts the view tree to HTML.
+	/// Bound password values are omitted and marked with `data-rh-password-omitted`
+	/// so browser hydration can restore the bound value without exposing it in HTML.
 	pub fn render_to_string(&self) -> String {
 		let mut output = String::new();
 		self.render_to_string_inner(&mut output, None);
@@ -1274,6 +1278,8 @@ impl Page {
 						&& (projects_value || omits_bound_password_value))
 						|| (name_str.eq_ignore_ascii_case("checked") && binding.is_some())
 						|| (name_str.eq_ignore_ascii_case("selected") && selection.is_some())
+						|| (omits_bound_password_value
+							&& name_str.eq_ignore_ascii_case(SSR_OMITTED_PASSWORD_ATTRIBUTE))
 						|| (is_boolean_attr(name_str) && !is_boolean_attr_truthy(value))
 						|| has_reactive_attribute
 					{
@@ -1292,6 +1298,8 @@ impl Page {
 						&& (projects_value || omits_bound_password_value))
 						|| (name.eq_ignore_ascii_case("checked") && binding.is_some())
 						|| (name.eq_ignore_ascii_case("selected") && selection.is_some())
+						|| (omits_bound_password_value
+							&& name.eq_ignore_ascii_case(SSR_OMITTED_PASSWORD_ATTRIBUTE))
 					{
 						continue;
 					}
@@ -1338,6 +1346,11 @@ impl Page {
 					output.push_str(" value=\"");
 					output.push_str(&html_escape(value));
 					output.push('"');
+				}
+				if omits_bound_password_value {
+					output.push(' ');
+					output.push_str(SSR_OMITTED_PASSWORD_ATTRIBUTE);
+					output.push_str("=\"true\"");
 				}
 				if projects_checked {
 					output.push_str(" checked=\"checked\"");
@@ -2051,16 +2064,26 @@ mod tests {
 		});
 	}
 
-	#[test]
+	#[rstest]
 	fn render_to_string_omits_bound_password_values() {
 		ReactiveScope::run(|| {
+			// Arrange
 			let input = PageElement::new("input")
 				.attr("type", "password")
 				.attr("value", "stale")
+				.attr("data-rh-password-omitted", "false")
+				.attr("DATA-RH-PASSWORD-OMITTED", "conflicting")
 				.control_binding(ControlBinding::text(Signal::new("secret".to_owned())))
 				.into_page();
 
-			assert_eq!(input.render_to_string(), "<input type=\"password\" />");
+			// Act
+			let html = input.render_to_string();
+
+			// Assert
+			assert_eq!(
+				html,
+				"<input type=\"password\" data-rh-password-omitted=\"true\" />"
+			);
 		});
 	}
 
@@ -2075,7 +2098,7 @@ mod tests {
 
 			assert_eq!(
 				input.render_to_string(),
-				"<input type=\"password\" type=\"text\" />"
+				"<input type=\"password\" type=\"text\" data-rh-password-omitted=\"true\" />"
 			);
 		});
 	}
@@ -2092,8 +2115,11 @@ mod tests {
 			let first_class_evaluations = Rc::clone(&superseded_class_evaluations);
 			let final_class_evaluations = Rc::new(Cell::new(0));
 			let last_class_evaluations = Rc::clone(&final_class_evaluations);
+			let marker_evaluations = Rc::new(Cell::new(0));
+			let reactive_marker_evaluations = Rc::clone(&marker_evaluations);
 			let input = PageElement::new("input")
 				.attr("type", "text")
+				.attr("data-rh-password-omitted", "false")
 				.reactive_attr("type", move || {
 					reactive_type_evaluations.set(reactive_type_evaluations.get() + 1);
 					Some("password".into())
@@ -2101,6 +2127,10 @@ mod tests {
 				.reactive_attr("value", move || {
 					reactive_value_evaluations.set(reactive_value_evaluations.get() + 1);
 					Some("exposed".into())
+				})
+				.reactive_attr("DATA-RH-PASSWORD-OMITTED", move || {
+					reactive_marker_evaluations.set(reactive_marker_evaluations.get() + 1);
+					Some("false".into())
 				})
 				.reactive_attr("class", move || {
 					first_class_evaluations.set(first_class_evaluations.get() + 1);
@@ -2118,11 +2148,47 @@ mod tests {
 			let html = input.render_to_string();
 
 			// Assert
-			assert_eq!(html, "<input type=\"password\" class=\"final\" />");
+			assert_eq!(
+				html,
+				"<input type=\"password\" class=\"final\" data-rh-password-omitted=\"true\" />"
+			);
 			assert_eq!(type_evaluations.get(), 1);
 			assert_eq!(overridden_value_evaluations.get(), 0);
 			assert_eq!(superseded_class_evaluations.get(), 0);
 			assert_eq!(final_class_evaluations.get(), 1);
+			assert_eq!(marker_evaluations.get(), 0);
+		});
+	}
+
+	#[rstest]
+	#[case(None, "<input value=\"secret\" />")]
+	#[case(Some("text"), "<input type=\"text\" value=\"secret\" />")]
+	#[case(Some("TIME"), "<input type=\"TIME\" value=\"secret\" />")]
+	#[case(
+		Some("PASSWORD"),
+		"<input type=\"PASSWORD\" data-rh-password-omitted=\"true\" />"
+	)]
+	#[case(
+		Some("file"),
+		"<input type=\"password\" data-rh-password-omitted=\"true\" />"
+	)]
+	fn render_to_string_marks_only_effective_bound_password_types(
+		#[case] input_type: Option<&'static str>,
+		#[case] expected: &str,
+	) {
+		ReactiveScope::run(|| {
+			// Arrange
+			let input = PageElement::new("input")
+				.attr("type", "password")
+				.reactive_attr("type", move || input_type.map(Into::into))
+				.control_binding(ControlBinding::text(Signal::new("secret".to_owned())))
+				.into_page();
+
+			// Act
+			let html = input.render_to_string();
+
+			// Assert
+			assert_eq!(html, expected);
 		});
 	}
 

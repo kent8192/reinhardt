@@ -999,29 +999,36 @@ fn hydration_initial_reactive_range_constraint_reconciles_browser_sanitization()
 #[wasm_bindgen_test]
 fn hydration_accepts_the_browser_first_static_password_type() {
 	ReactiveScope::run(|| {
+		// Arrange: hydrate the actual core renderer output.
 		let document = web_sys::window()
 			.expect("window")
 			.document()
 			.expect("document");
-		let raw_input = document.create_element("input").expect("input");
-		raw_input
-			.set_attribute("type", "password")
-			.expect("input type");
-		raw_input
-			.set_attribute("data-rh-password-omitted", "true")
-			.expect("password omission marker");
+		let value = Signal::new("secret".to_owned());
+		let component = HydratedDuplicateStaticPasswordInput { value };
+		let container = document.create_element("div").expect("container");
+		let _cleanup = AttachedRootCleanup(container.clone());
+		container.set_inner_html(&component.render().render_to_string());
+		let raw_input = container.first_element_child().expect("server input");
 		let input: web_sys::HtmlInputElement = raw_input.clone().unchecked_into();
 		let root = Element::new(raw_input);
-		let value = Signal::new("secret".to_owned());
 		let _state = SsrStateElement::install(&document);
-		reinhardt_pages::hydration::hydrate(&HydratedDuplicateStaticPasswordInput { value }, &root)
-			.expect("hydrate");
+		assert_eq!(input.value(), "");
+		assert_eq!(input.get_attribute("value"), None);
+		assert_eq!(
+			input.get_attribute("data-rh-password-omitted").as_deref(),
+			Some("true")
+		);
 
+		// Act
+		reinhardt_pages::hydration::hydrate(&component, &root).expect("hydrate");
+
+		// Assert
 		assert_eq!(input.type_(), "password");
 		assert_eq!(input.value(), "secret");
 		assert_eq!(input.get_attribute("value"), None);
+		assert_eq!(input.get_attribute("data-rh-password-omitted"), None);
 		assert_eq!(value.get(), "secret");
-		reinhardt_pages::cleanup_reactive_nodes();
 	});
 }
 

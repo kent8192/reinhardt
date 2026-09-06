@@ -7,6 +7,10 @@ use crate::reactive::{Signal, runtime::NodeId};
 
 use super::is_boolean_attr_truthy;
 
+/// Marks an SSR password value omission for browser hydration.
+#[doc(hidden)]
+pub const SSR_OMITTED_PASSWORD_ATTRIBUTE: &str = "data-rh-password-omitted";
+
 /// Identifies the form control represented by a binding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlKind {

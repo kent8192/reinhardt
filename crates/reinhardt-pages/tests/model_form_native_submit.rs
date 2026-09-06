@@ -5,7 +5,10 @@ include!("ui/form/model_json_support.rs");
 #[cfg(feature = "model-server-fnset")]
 use std::collections::HashMap;
 
-use reinhardt_pages::{FieldError, form, server_fn::ServerFnErrorKind, use_form};
+use reinhardt_pages::{
+	FieldError, FormRuntimeSource, form, server_fn::ServerFnErrorKind, use_form,
+};
+use rstest::rstest;
 
 #[cfg(feature = "model-server-fnset")]
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
@@ -272,5 +275,31 @@ fn model_form_runtime_mutations_track_explicit_and_excluded_fields() {
 		excluded_runtime.set_value(excluded_field, "changed".to_owned());
 		assert!(excluded_runtime.get_field_state(excluded_field).is_touched);
 		assert!(excluded_runtime.get_field_state(excluded_field).is_dirty);
+	});
+}
+
+#[rstest]
+fn model_form_reset_clears_generated_submission_state() {
+	reinhardt_core::reactive::ReactiveScope::run(|| {
+		// Arrange
+		let form = form! {
+			name: QuestionResetForm,
+			model: Question,
+			policy: QuestionPolicy,
+			fields: [title],
+			server_fn: save_question,
+		};
+		form.loading().set(true);
+		form.error().set(Some("stale error".to_owned()));
+		form.success().set(true);
+
+		// Act
+		form.runtime_reset_state();
+
+		// Assert
+		assert!(!form.loading().get());
+		assert_eq!(form.error().get(), None);
+		assert!(!form.success().get());
+		assert_eq!(form.title_field().name(), "title");
 	});
 }

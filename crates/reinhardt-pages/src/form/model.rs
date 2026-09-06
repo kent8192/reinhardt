@@ -13,6 +13,7 @@ use reinhardt_core::model_form::{
 	ModelFormContractSchema, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload,
 	ModelFormPayloadError, ModelFormPolicy,
 };
+use reinhardt_core::types::page::{NumberParseError, NumberParseErrorKind, NumberValue};
 
 /// Hidden compile-time selection marker for one model-form argument.
 #[doc(hidden)]
@@ -295,11 +296,68 @@ where
 				self.values.insert(descriptor.name, converted);
 				Ok(())
 			}
-			Err(error) => {
-				self.values.remove(descriptor.name);
-				Err(error)
-			}
+			Err(error) => Err(error),
 		}
+	}
+
+	/// Stores raw text emitted by a shared controlled text binding.
+	#[doc(hidden)]
+	pub fn set_binding_text(
+		&mut self,
+		field: &str,
+		value: String,
+	) -> Result<(), ModelFormPayloadError> {
+		let descriptor = self.binding_descriptor(field)?;
+		if !matches!(
+			descriptor.kind,
+			ModelFormFieldKind::Text { .. }
+				| ModelFormFieldKind::Email { .. }
+				| ModelFormFieldKind::Url { .. }
+		) {
+			return Err(invalid_value(field, "expected a shared text control field"));
+		}
+		self.values
+			.insert(descriptor.name, serde_json::Value::String(value));
+		Ok(())
+	}
+
+	/// Stores a number emitted by a shared controlled numeric binding.
+	#[doc(hidden)]
+	pub fn set_binding_number(&mut self, field: &str, raw: &str) -> Result<(), NumberParseError> {
+		let descriptor = self
+			.binding_descriptor(field)
+			.map_err(|_| NumberParseError::from_raw_kind(raw, NumberParseErrorKind::OutOfRange))?;
+		if raw.is_empty() {
+			return self
+				.set_value(field, serde_json::Value::String(String::new()))
+				.map_err(|_| NumberParseError::from_raw_kind(raw, NumberParseErrorKind::Empty));
+		}
+		let value = match descriptor.kind {
+			ModelFormFieldKind::Integer { .. } if raw.starts_with('-') => {
+				let value = <i64 as NumberValue>::parse_control_value(raw)?;
+				serde_json::Value::from(value)
+			}
+			ModelFormFieldKind::Integer { .. } => {
+				let value = <u64 as NumberValue>::parse_control_value(raw)?;
+				serde_json::Value::from(value)
+			}
+			ModelFormFieldKind::Float { .. } => {
+				let value = <f64 as NumberValue>::parse_control_value(raw)?;
+				serde_json::Number::from_f64(value)
+					.map(serde_json::Value::Number)
+					.ok_or_else(|| {
+						NumberParseError::from_raw_kind(raw, NumberParseErrorKind::OutOfRange)
+					})?
+			}
+			_ => {
+				return Err(NumberParseError::from_raw_kind(
+					raw,
+					NumberParseErrorKind::OutOfRange,
+				));
+			}
+		};
+		self.set_value(field, value)
+			.map_err(|_| NumberParseError::from_raw_kind(raw, NumberParseErrorKind::OutOfRange))
 	}
 
 	/// Stores a typed runtime value after converting it to the model-form JSON representation.
@@ -479,6 +537,39 @@ where
 			.collect()
 	}
 
+	/// Validates values retained by controlled bindings before submission.
+	///
+	/// Controlled text bindings intentionally retain raw editor text so that
+	/// incomplete input is not lost. Submission must therefore run the normal
+	/// descriptor conversion again instead of trusting the stored JSON shape.
+	#[doc(hidden)]
+	pub fn validate_values(&self) -> Result<(), ModelFormPayloadError> {
+		self.validated_for_submission().map(|_| ())
+	}
+
+	/// Returns a submission snapshot with controlled values converted to payload values.
+	#[doc(hidden)]
+	pub fn validated_for_submission(&self) -> Result<Self, ModelFormPayloadError> {
+		let mut validated = self.clone();
+		for descriptor in self.selected_descriptors() {
+			if is_file_kind(descriptor.kind) {
+				continue;
+			}
+			match self.values.get(descriptor.name) {
+				Some(serde_json::Value::Null) if descriptor.nullable => {}
+				Some(value) => {
+					let converted = convert_control_value(descriptor, value.clone())?;
+					validated.values.insert(descriptor.name, converted);
+				}
+				None if descriptor.required => {
+					return Err(invalid_value(descriptor.name, "is required"));
+				}
+				None => {}
+			}
+		}
+		Ok(validated)
+	}
+
 	/// Clears every value that belongs to the active form policy.
 	pub fn clear_selected_values(&mut self) {
 		self.values.retain(|field, _| {
@@ -510,7 +601,11 @@ where
 				continue;
 			}
 			if let Some(value) = self.values.get(descriptor.name) {
-				payload.set_json(descriptor.name, value.clone())?;
+				let value = match value {
+					serde_json::Value::Null if descriptor.nullable => value.clone(),
+					value => convert_control_value(descriptor, value.clone())?,
+				};
+				payload.set_json(descriptor.name, value)?;
 			}
 		}
 		Ok(payload)
@@ -561,6 +656,30 @@ where
 			}
 		}
 		Ok(payload)
+	}
+
+	fn binding_descriptor(
+		&self,
+		field: &str,
+	) -> Result<&'static ModelFormFieldDescriptor, ModelFormPayloadError> {
+		let descriptor = S::contract_fields()
+			.iter()
+			.find(|descriptor| descriptor.name == field)
+			.ok_or_else(|| ModelFormPayloadError::UnknownField {
+				field: field.to_owned(),
+			})?;
+		if !descriptor.editable || !P::allows(field) {
+			return Err(ModelFormPayloadError::ForbiddenField {
+				field: field.to_owned(),
+			});
+		}
+		if is_file_kind(descriptor.kind) {
+			return Err(invalid_value(
+				field,
+				"file fields must be set with set_file",
+			));
+		}
+		Ok(descriptor)
 	}
 
 	#[cfg(wasm)]

@@ -539,6 +539,103 @@ async fn model_form_files_clear_only_after_success_or_reset() {
 }
 
 #[rstest]
+#[case::stale_success(200.0)]
+#[case::stale_error(500.0)]
+#[serial(model_form_file_upload_globals)]
+#[test_attr(wasm_bindgen_test)]
+async fn invalid_model_form_snapshot_supersedes_previous_submission(#[case] status: f64) {
+	// Arrange
+	let root = BodyRoot::new();
+	let document_file = browser_file("report.pdf");
+	let avatar_file = browser_file("avatar.png");
+	let fetch = MultipartFetchGuard::install(&document_file, &avatar_file);
+	fetch.set_status(status);
+	let scope = ReactiveScope::new();
+	let form = scope.enter(|| {
+		let form = form! {
+			name: UploadForm,
+			model: Upload,
+			policy: UploadPolicy,
+			fields: [title, document, avatar],
+			server_fn: upload,
+		};
+		form.clone()
+			.into_page()
+			.mount(&Element::new(root.0.clone()))
+			.expect("model form mounts");
+		form
+	});
+	let title = query_input(&root.0, "upload-form-title");
+	title.set_value("Report");
+	title
+		.dispatch_event(&web_sys::Event::new("input").expect("input event"))
+		.expect("dispatch title input");
+	select_file(
+		&query_input(&root.0, "upload-form-document"),
+		&document_file,
+	);
+	select_file(&query_input(&root.0, "upload-form-avatar"), &avatar_file);
+	defer_yield().await;
+	let snapshot_error = "invalid value for model form field 'title': must not be empty";
+
+	// Act
+	submit(&query_form(&root.0));
+	title.set_value(" ");
+	submit(&query_form(&root.0));
+	defer_yield().await;
+
+	// Assert
+	assert_eq!(fetch.requests(), 0);
+	assert_eq!(form.error().get().as_deref(), Some(snapshot_error));
+	assert!(!form.loading().get());
+	assert!(!form.success().get());
+
+	// Act
+	let mut pending = std::pin::pin!(form.submit_response());
+	assert!(futures_util::poll!(pending.as_mut()).is_pending());
+	assert!(form.loading().get());
+	submit(&query_form(&root.0));
+
+	// Assert
+	assert_eq!(form.error().get().as_deref(), Some(snapshot_error));
+	assert!(!form.loading().get());
+	assert!(!form.success().get());
+	assert_eq!(
+		pending.await.map_err(|error| error.message().to_owned()),
+		if status < 300.0 {
+			Ok(())
+		} else {
+			Err("upload failed".to_owned())
+		}
+	);
+	assert_eq!(fetch.requests(), 1);
+	assert_eq!(fetch.payload_error(), None);
+	assert_eq!(form.error().get().as_deref(), Some(snapshot_error));
+	assert!(!form.loading().get());
+	assert!(!form.success().get());
+	assert!(same_file(
+		&selected_file(&query_input(&root.0, "upload-form-document")),
+		&document_file
+	));
+	assert!(same_file(
+		&selected_file(&query_input(&root.0, "upload-form-avatar")),
+		&avatar_file
+	));
+
+	// Act
+	fetch.set_status(200.0);
+	form.submit().await.expect("current submission succeeds");
+	assert!(form.success().get());
+	title.set_value(" ");
+	submit(&query_form(&root.0));
+
+	// Assert
+	assert_eq!(form.error().get().as_deref(), Some(snapshot_error));
+	assert!(!form.loading().get());
+	assert!(!form.success().get());
+}
+
+#[rstest]
 #[serial(model_form_file_upload_globals)]
 #[test_attr(wasm_bindgen_test)]
 async fn multipart_mutation_callbacks_continue_after_form_success_disposes_scope() {

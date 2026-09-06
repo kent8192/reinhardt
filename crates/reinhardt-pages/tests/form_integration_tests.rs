@@ -33,8 +33,8 @@ use reinhardt_core::model_form::{
 	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError,
 	ModelFormPolicy, ModelFormSchema,
 };
-use reinhardt_pages::form::ModelFormState;
 use reinhardt_pages::{FieldError, form, use_form};
+use reinhardt_pages::{NumberParseErrorKind, form::ModelFormState};
 
 #[test]
 fn named_model_form_routes_contract_and_server_owned_errors() {
@@ -326,8 +326,8 @@ fn model_form_integer_conversion_preserves_signed_and_unsigned_boundaries() {
 	));
 	assert_eq!(
 		state.value("bounded"),
-		None,
-		"an invalid edit must not retain the preceding valid control value"
+		Some(&serde_json::json!(2)),
+		"an invalid edit must preserve the preceding valid control value"
 	);
 	assert!(matches!(
 		state.set_value("bounded", serde_json::json!(3)),
@@ -358,6 +358,191 @@ fn model_form_integer_conversion_preserves_signed_and_unsigned_boundaries() {
 	);
 }
 
+struct ModelFormBindingSchema;
+
+const MODEL_FORM_BINDING_FIELDS: [ModelFormFieldDescriptor; 6] = [
+	ModelFormFieldDescriptor {
+		name: "email",
+		kind: ModelFormFieldKind::Email {
+			min_length: None,
+			max_length: None,
+		},
+		required: true,
+		has_default: false,
+		nullable: false,
+		editable: true,
+		generated_relation_id: false,
+	},
+	ModelFormFieldDescriptor {
+		name: "count",
+		kind: ModelFormFieldKind::Integer {
+			min: Some(0),
+			max: Some(10),
+		},
+		required: true,
+		has_default: false,
+		nullable: false,
+		editable: true,
+		generated_relation_id: false,
+	},
+	ModelFormFieldDescriptor {
+		name: "ratio",
+		kind: ModelFormFieldKind::Float {
+			min: Some(0.0),
+			max: Some(1.0),
+		},
+		required: true,
+		has_default: false,
+		nullable: false,
+		editable: true,
+		generated_relation_id: false,
+	},
+	ModelFormFieldDescriptor {
+		name: "private_note",
+		kind: ModelFormFieldKind::Text {
+			min_length: None,
+			max_length: None,
+			multiline: false,
+		},
+		required: false,
+		has_default: false,
+		nullable: false,
+		editable: true,
+		generated_relation_id: false,
+	},
+	ModelFormFieldDescriptor {
+		name: "document",
+		kind: ModelFormFieldKind::File,
+		required: false,
+		has_default: false,
+		nullable: false,
+		editable: true,
+		generated_relation_id: false,
+	},
+	ModelFormFieldDescriptor {
+		name: "thumbnail",
+		kind: ModelFormFieldKind::Image,
+		required: false,
+		has_default: false,
+		nullable: false,
+		editable: true,
+		generated_relation_id: false,
+	},
+];
+
+impl ModelFormSchema for ModelFormBindingSchema {
+	type Model = ();
+
+	fn fields() -> &'static [ModelFormFieldDescriptor] {
+		&MODEL_FORM_BINDING_FIELDS
+	}
+}
+
+struct ModelFormBindingPolicy;
+
+impl ModelFormPolicy for ModelFormBindingPolicy {
+	fn allows(field: &str) -> bool {
+		field != "private_note"
+	}
+}
+
+#[test]
+fn model_form_binding_setters_keep_raw_text_and_reject_invalid_numeric_edits() {
+	let mut state = ModelFormState::<ModelFormBindingSchema, ModelFormBindingPolicy>::new();
+
+	state
+		.set_binding_text("email", "partial@".to_owned())
+		.expect("text bindings must retain incomplete email input for payload validation");
+	assert_eq!(state.value("email"), Some(&serde_json::json!("partial@")));
+	assert!(matches!(
+		state.set_value("email", serde_json::json!("partial@")),
+		Err(ModelFormPayloadError::InvalidValue { .. })
+	));
+	assert_eq!(state.value("email"), Some(&serde_json::json!("partial@")));
+
+	state
+		.set_value("count", serde_json::json!(7))
+		.expect("the initial number must be valid");
+	let error = state
+		.set_binding_number("count", "1e")
+		.expect_err("incomplete numeric input must be rejected");
+	assert_eq!(error.kind(), NumberParseErrorKind::Incomplete);
+	assert_eq!(state.value("count"), Some(&serde_json::json!(7)));
+
+	let error = state
+		.set_binding_number("count", "11")
+		.expect_err("out-of-range numeric input must be rejected");
+	assert_eq!(error.kind(), NumberParseErrorKind::OutOfRange);
+	assert_eq!(state.value("count"), Some(&serde_json::json!(7)));
+}
+
+#[test]
+fn model_form_binding_validation_rechecks_raw_text_values() {
+	let mut state = ModelFormState::<ModelFormBindingSchema, ModelFormBindingPolicy>::new();
+	state
+		.set_binding_text("email", " partial@".to_owned())
+		.expect("controlled text should retain the editor value");
+	state
+		.set_value("count", serde_json::json!(7))
+		.expect("the required integer should be valid");
+	state
+		.set_value("ratio", serde_json::json!(0.5))
+		.expect("the required float should be valid");
+
+	assert_eq!(
+		state.validate_values(),
+		Err(ModelFormPayloadError::InvalidValue {
+			field: "email".to_owned(),
+			message: "has an invalid format".to_owned(),
+		})
+	);
+
+	state
+		.set_binding_text("email", " user@example.com ".to_owned())
+		.expect("a valid email should replace the raw editor value");
+	assert_eq!(
+		state.value("email"),
+		Some(&serde_json::json!(" user@example.com "))
+	);
+	let submission = state
+		.validated_for_submission()
+		.expect("valid controlled text should produce a submission snapshot");
+	assert_eq!(
+		submission.value("email"),
+		Some(&serde_json::json!("user@example.com"))
+	);
+	state
+		.validate_values()
+		.expect("validated controlled values should pass submission validation");
+}
+
+#[test]
+fn model_form_binding_text_rejects_forbidden_unknown_file_and_image_fields() {
+	let mut state = ModelFormState::<ModelFormBindingSchema, ModelFormBindingPolicy>::new();
+
+	assert_eq!(
+		state.set_binding_text("private_note", "value".to_owned()),
+		Err(ModelFormPayloadError::ForbiddenField {
+			field: "private_note".to_owned(),
+		})
+	);
+	assert_eq!(
+		state.set_binding_text("missing", "value".to_owned()),
+		Err(ModelFormPayloadError::UnknownField {
+			field: "missing".to_owned(),
+		})
+	);
+	for field in ["document", "thumbnail"] {
+		assert_eq!(
+			state.set_binding_text(field, "value".to_owned()),
+			Err(ModelFormPayloadError::InvalidValue {
+				field: field.to_owned(),
+				message: "file fields must be set with set_file".to_owned(),
+			})
+		);
+	}
+}
+
 #[test]
 fn model_form_float_conversion_enforces_descriptor_bounds() {
 	let mut state = ModelFormState::<ModelFormNumericSchema, ModelFormAllNumericFields>::new();
@@ -382,7 +567,7 @@ fn model_form_clearing_optional_control_removes_previous_payload_value() {
 		.set_value("unsigned", serde_json::json!(42_u64))
 		.expect("optional integer should accept a value");
 	state
-		.set_value("unsigned", serde_json::json!(""))
+		.set_binding_number("unsigned", "")
 		.expect("empty optional input should unset the control");
 
 	assert_eq!(state.value("unsigned"), None);

@@ -1231,13 +1231,11 @@ fn has_effective_text_type(input_type: Option<&str>) -> bool {
 			"color",
 			"date",
 			"datetime-local",
-			"email",
 			"file",
 			"hidden",
 			"image",
 			"month",
 			"number",
-			"password",
 			"radio",
 			"range",
 			"reset",
@@ -1245,7 +1243,6 @@ fn has_effective_text_type(input_type: Option<&str>) -> bool {
 			"submit",
 			"tel",
 			"time",
-			"url",
 			"week",
 		]
 		.iter()

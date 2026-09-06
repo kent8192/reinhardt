@@ -257,6 +257,8 @@ Use `bind:` when a signal should own a native control after hydration. The
 control shape determines the signal type: `String` for text, radio, and
 single-select controls; `bool` for checkboxes; a supported numeric primitive
 for number inputs; and `Vec<String>` for multiple selects.
+Signal bindings accept owned handles, shared references, and mutable references,
+including both signals passed to `number(value, error)`.
 
 ```rust
 use reinhardt_pages::prelude::*;
@@ -466,6 +468,73 @@ let login_form = form! {
 let runtime = use_form(&login_form).build();
 runtime.set_value(login_form.username_field(), "ada".to_string());
 ```
+
+#### Typed field bindings and reset ownership
+
+`UseFormReturn` owns the values, errors, touched/dirty state, and mounted
+controls for a generated form. Bind a generated field with
+`runtime.field(...)`:
+
+- `ClientForm`: `runtime.field(LoginClientFormField::Email)` when the
+  generated field enum is in scope;
+- an ordinary `form!`: `runtime.field(login_form.email_field())`;
+- a ModelForm with `fields: [email]`: `runtime.field(model_form.email_field())`.
+
+The ModelForm accessor is generated only for an explicit `fields: [...]`
+selection; its internal token type remains private. Tokens from different forms
+are rejected by Rust. A valid token paired with an incompatible control is
+detected when the page is built and panics with the field and control kind.
+
+The supported value/control matrix is:
+
+| Generated value | Supported controls |
+|---|---|
+| `String` | text, email, URL, password or textarea, radio, select-one |
+| `T: NumberValue` | number (`input[type=number]`) |
+| `bool` | checkbox |
+| `Vec<String>` | select-many |
+
+`RangeInput` and `input[type=range]` are not currently compatible with a typed
+runtime field binding; use an unbound or application-specific path for range
+controls.
+
+Call `runtime.reset()` explicitly to restore current defaults. The reset is
+source-first, clears field/collection/path/form/submit errors and
+touched/dirty/submitting/success state, and returns `use_form_action` handles
+to idle. It is not automatic after a successful submit and is not connected to
+a native `<button type="reset">` or reset event. Use
+`runtime.sync_after_native_reset()` only when the application deliberately
+handles the browser's native reset behavior. Pending network work continues;
+stale form-action completions cannot repopulate form-owned submit state, while
+standalone `use_action` handles are outside this reset boundary. Reset skips
+connected actions whose child scope has already been disposed.
+
+Fresh mount writes runtime values to the DOM. Hydration is normally DOM-first,
+so edits made after SSR and before hydration are preserved. A reset performed
+before hydration makes runtime field bindings source-preferred, causing reset
+defaults to replace stale SSR properties. Direct `Signal` bindings retain
+normal DOM-first hydration. Radio selections are captured before hydration
+updates sibling controls, preserving edits regardless of option order.
+
+For numeric bindings, invalid or incomplete raw text remains in the editor and
+the typed value remains the last valid value. The associated
+`NumberParseError` keeps the raw text and failure kind and is surfaced through
+field error state. Rejected edits mark the field as touched while leaving its
+typed value and dirty state unchanged. Clearing displayed errors with `clear_errors()` or
+`clear_field_error()` preserves the parse failure and continues to block
+validation and submission. A valid numeric write clears it; `reset_field()`
+clears only the restored field's parse state, while `reset()` restores every
+formatted default and clears all parse state. Generated `EmailInput`,
+`UrlInput`, and `PasswordInput` widgets also synchronize their mounted values
+on reset.
+
+Every native ModelForm submit supersedes earlier requests, including snapshots
+rejected during DOM value conversion. A rejected snapshot clears loading and
+success state while retaining its validation error and selected files.
+
+Typed runtime field bindings do not cover file inputs, named `model_form:`
+contracts, ModelForm `exclude: [...]`, or nested collection paths. Use the existing generated file,
+string, and collection APIs for those cases.
 
 DTO request types can opt in to generated client-form companions with
 `ClientForm`. This keeps request field names, enum choices, and typed request

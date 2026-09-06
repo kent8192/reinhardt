@@ -1,0 +1,13 @@
+error[E0308]: mismatched types
+  --> tests/ui/client_form/fail/foreign_field_binding.rs:17:25
+   |
+17 |         let _ = runtime.field(ProfileClientFormField::Email);
+   |                         ----- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `LoginClientFormField`, found `ProfileClientFormField`
+   |                         |
+   |                         arguments to this method are incorrect
+   |
+note: method defined here
+  --> src/form_state.rs
+   |
+   |     pub fn field(&self, field: Form::Field) -> RuntimeFieldBinding<Form, Deps> {
+   |            ^^^^^

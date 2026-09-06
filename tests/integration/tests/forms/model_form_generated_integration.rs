@@ -114,6 +114,34 @@ struct RequiredScalarRecord {
 	replicas: i64,
 }
 
+fn validate_raw_primary_key_candidate<P: ModelFormPolicy>(
+	payload: &CleanedRawPrimaryKeyRecordModelFormData<P>,
+) -> Result<(), ValidationErrors> {
+	if let Some(Some(expected)) = payload.expected_type()
+		&& payload.r#type() != Some(expected)
+	{
+		let mut errors = ValidationErrors::new();
+		errors.add(
+			"_all",
+			ValidationError::Custom(
+				"cross-field validation must not receive a changed primary key".to_owned(),
+			),
+		);
+		return Err(errors);
+	}
+	Ok(())
+}
+
+#[model(app_label = "forms_test", form = true, info = false)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[form(validate = validate_raw_primary_key_candidate)]
+struct RawPrimaryKeyRecord {
+	#[field(primary_key = true, editable = true, max_length = 64)]
+	r#type: String,
+	#[field(max_length = 64)]
+	expected_type: Option<String>,
+}
+
 struct ClusterNameOnlyPolicy;
 
 impl ModelFormPolicy for ClusterNameOnlyPolicy {
@@ -604,6 +632,57 @@ fn generated_required_email_uses_the_canonical_message() {
 		validation_error_tuples(&whitespace_errors),
 		vec![("email".to_owned(), "This field is required.".to_owned())]
 	);
+}
+
+#[rstest]
+fn generated_raw_primary_key_update_is_rejected_before_cross_field_validation() {
+	// Arrange
+	let existing = RawPrimaryKeyRecord {
+		r#type: "stored".to_owned(),
+		expected_type: Some("stored".to_owned()),
+	};
+	let payload: RawPrimaryKeyRecordModelFormData<AllEditableModelFields> =
+		serde_json::from_value(json!({"type": "attacker"}))
+			.expect("raw identifiers use their canonical wire name");
+	assert_eq!(payload.supplied_fields(), vec!["type"]);
+	let cleaned_create = payload
+		.clone()
+		.clean_and_validate()
+		.expect("assigned primary keys remain valid for create payloads");
+
+	// Act
+	let update_errors = match payload.clean_and_validate_for_update(&existing) {
+		Ok(_) => panic!("a supplied raw primary key must fail update validation"),
+		Err(errors) => errors,
+	};
+	let apply_error = cleaned_create
+		.apply_to(existing.clone())
+		.expect_err("a cleaned create payload cannot replace an existing primary key");
+	let unchanged = RawPrimaryKeyRecordModelFormData::<AllEditableModelFields>::empty()
+		.clean_and_validate_for_update(&existing)
+		.expect("omitted primary keys use the existing value for cross-field validation")
+		.apply_to(existing.clone())
+		.expect("omitted primary keys must preserve the existing model");
+
+	// Assert
+	assert_eq!(
+		validation_error_tuples(&update_errors),
+		vec![(
+			"type".to_owned(),
+			"model form primary keys cannot be updated".to_owned(),
+		)]
+	);
+	let ModelFormError::FieldValidation { errors } = apply_error else {
+		panic!("primary-key rejection must remain a field validation error");
+	};
+	assert_eq!(
+		errors,
+		std::collections::HashMap::from([(
+			"type".to_owned(),
+			vec!["model form primary keys cannot be updated".to_owned()],
+		)])
+	);
+	assert_eq!(unchanged, existing);
 }
 
 #[rstest]

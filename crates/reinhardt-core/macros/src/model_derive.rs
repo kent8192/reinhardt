@@ -3505,7 +3505,7 @@ fn generate_model_form_support(
 	let primary_key_literals: Vec<_> = field_infos
 		.iter()
 		.filter(|field| field.config.primary_key)
-		.map(|field| LitStr::new(&field.name.to_string(), field.name.span()))
+		.map(|field| LitStr::new(&ident_to_wire_name(&field.name), field.name.span()))
 		.collect();
 	let reject_supplied_primary_keys = if primary_key_literals.is_empty() {
 		quote! {}

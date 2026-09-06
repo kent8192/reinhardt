@@ -478,6 +478,10 @@ Editable assigned primary keys, such as natural string keys or integer keys
 with `auto_increment = false`, are included in generated create-form schemas.
 Database-generated primary keys remain excluded.
 
+Updates reject supplied primary keys before cross-field validation, including
+raw identifiers such as `r#type` supplied under the wire name `type`. Omitting
+the primary key preserves the existing value.
+
 ## Native create and update
 
 Native model forms use the model-generated payload and the same policy type:

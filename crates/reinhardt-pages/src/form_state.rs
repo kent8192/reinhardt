@@ -1468,6 +1468,12 @@ where
 		self.form.runtime_control_binding(field, request)
 	}
 
+	/// Returns the generated form source retained by this runtime.
+	#[doc(hidden)]
+	pub fn __reinhardt_form_source(&self) -> Form {
+		self.form.clone()
+	}
+
 	/// Returns a signal containing the current value struct.
 	pub fn watch(&self) -> Signal<Form::Values> {
 		self.values_signal
@@ -1680,25 +1686,27 @@ where
 	/// native reset behavior. A pending [`FormAction`] request continues running,
 	/// but its stale completion cannot restore form-owned submit state.
 	pub fn reset(&self) {
-		crate::reactive::batch(|| {
-			let _guard = self.suppress_signal_sync();
-			self.form.runtime_reset_state();
-			self.submit_generation
-				.set(self.submit_generation.get().wrapping_add(1));
-			let defaults = self.default_values.borrow().clone();
-			self.form.runtime_apply_values(&defaults);
-			self.touched_fields.borrow_mut().clear();
-			self.touched_collections.borrow_mut().clear();
-			self.touched_paths.borrow_mut().clear();
-			self.state.is_touched.set(false);
-			self.state.is_dirty.set(false);
-			self.state.is_submitting.set(false);
-			self.state.is_submit_successful.set(false);
-			self.rebuild_path_default_values();
-			self.clear_errors();
-			self.values_signal.set(defaults);
-			self.sync_observed_values();
-			self.reset_connected_actions();
+		let _ = self.in_owner_scope(|| {
+			crate::reactive::batch(|| {
+				let _guard = self.suppress_signal_sync();
+				self.form.runtime_reset_state();
+				self.submit_generation
+					.set(self.submit_generation.get().wrapping_add(1));
+				let defaults = self.default_values.borrow().clone();
+				self.form.runtime_apply_values(&defaults);
+				self.touched_fields.borrow_mut().clear();
+				self.touched_collections.borrow_mut().clear();
+				self.touched_paths.borrow_mut().clear();
+				self.state.is_touched.set(false);
+				self.state.is_dirty.set(false);
+				self.state.is_submitting.set(false);
+				self.state.is_submit_successful.set(false);
+				self.rebuild_path_default_values();
+				self.clear_errors();
+				self.values_signal.set(defaults);
+				self.sync_observed_values();
+				self.reset_connected_actions();
+			});
 		});
 	}
 
@@ -1770,24 +1778,35 @@ where
 		outcome
 	}
 
-	fn begin_submit_lifecycle(&self) -> UseFormSubmitOutcome {
-		if self.state.is_submitting.get() {
+	pub(crate) fn begin_submit_lifecycle(&self) -> UseFormSubmitOutcome {
+		let Ok(is_submitting) = self.state.is_submitting.try_get_untracked() else {
+			return UseFormSubmitOutcome::AlreadyPending;
+		};
+		if is_submitting {
 			return UseFormSubmitOutcome::AlreadyPending;
 		}
 
-		self.state.is_submitting.set(true);
-		self.state.is_submit_successful.set(false);
-		self.state.submit_error.set(None);
+		if self.state.is_submitting.try_set(true).is_err()
+			|| self.state.is_submit_successful.try_set(false).is_err()
+			|| self.state.submit_error.try_set(None).is_err()
+		{
+			return UseFormSubmitOutcome::AlreadyPending;
+		}
 		let _ = self.in_owner_scope(|| {
 			self.notify(FormEvent::SubmitStarted);
 			if let Some(callback) = &self.on_submit_start {
 				callback(self);
 			}
 		});
+		if self.state.is_submitting.try_get_untracked().is_err() {
+			return UseFormSubmitOutcome::AlreadyPending;
+		}
 
 		let validation_failed = enter_scope(self.scope, || self.trigger().is_err()).unwrap_or(true);
 		if validation_failed {
-			self.state.is_submitting.set(false);
+			if self.state.is_submitting.try_set(false).is_err() {
+				return UseFormSubmitOutcome::AlreadyPending;
+			}
 			let _ = self.in_owner_scope(|| {
 				if let Some(callback) = &self.on_submit_error {
 					callback(self);
@@ -1796,11 +1815,14 @@ where
 			});
 			return UseFormSubmitOutcome::ValidationFailed;
 		}
+		if enter_scope(self.scope, || ()).is_err() {
+			return UseFormSubmitOutcome::AlreadyPending;
+		}
 
 		UseFormSubmitOutcome::Submitted
 	}
 
-	fn complete_submit_success(&self) {
+	pub(crate) fn complete_submit_success(&self) {
 		let _ = self.in_owner_scope(|| {
 			self.state.is_submitting.set(false);
 			self.state.is_submit_successful.set(true);
@@ -1810,6 +1832,34 @@ where
 				callback(self);
 			}
 			self.notify(FormEvent::Submitted);
+		});
+	}
+
+	// Native dispatch returns before the WASM-only validation path calls this helper.
+	#[cfg_attr(not(wasm), allow(dead_code))]
+	pub(crate) fn complete_mutation_validation_error(
+		&self,
+		error: FormValidationError<Form::Field>,
+	) {
+		self.apply_validation_result(&Err(error));
+		self.state.is_submitting.set(false);
+		let _ = self.in_owner_scope(|| {
+			if let Some(callback) = &self.on_submit_error {
+				callback(self);
+			}
+			self.notify(FormEvent::SubmitFailed);
+		});
+	}
+
+	pub(crate) fn complete_mutation_server_error(&self, error: &ServerFnError) {
+		let _ = self.in_owner_scope(|| {
+			self.apply_server_error(error);
+			self.state.is_submitting.set(false);
+			self.state.is_submit_successful.set(false);
+			if let Some(callback) = &self.on_submit_error {
+				callback(self);
+			}
+			self.notify(FormEvent::SubmitFailed);
 		});
 	}
 
@@ -1922,13 +1972,7 @@ where
 				if !is_live {
 					return Ok(UseFormAsyncSubmitOutcome::Submitted(output));
 				}
-				let _ = self.in_owner_scope(|| {
-					self.state.is_submit_successful.set(true);
-					if let Some(callback) = &self.on_submit_success {
-						callback(self);
-					}
-					self.notify(FormEvent::Submitted);
-				});
+				self.complete_submit_success();
 				Ok(UseFormAsyncSubmitOutcome::Submitted(output))
 			}
 			Err(error) => {
@@ -2543,20 +2587,20 @@ impl Drop for SignalSyncGuard {
 	}
 }
 
-struct SubmitPendingGuard {
+pub(crate) struct SubmitPendingGuard {
 	is_submitting: Signal<bool>,
 	active: bool,
 }
 
 impl SubmitPendingGuard {
-	fn new(is_submitting: Signal<bool>) -> Self {
+	pub(crate) fn new(is_submitting: Signal<bool>) -> Self {
 		Self {
 			is_submitting,
 			active: true,
 		}
 	}
 
-	fn disarm(&mut self) {
+	pub(crate) fn disarm(&mut self) {
 		self.active = false;
 	}
 }
@@ -2674,7 +2718,7 @@ mod tests {
 	use super::{
 		CollectionItem, CollectionItemKey, CollectionState, ControlBinding, ControlKind,
 		FieldError, FieldPathState, FormRuntimeSource, ResetOnDeps, RuntimeControlBindingRequest,
-		ServerFnError, SubmitPendingGuard, use_form, use_form_action,
+		ServerFnError, SubmitPendingGuard, UseFormSubmitOutcome, use_form, use_form_action,
 	};
 	use crate::reactive::Signal;
 	use reinhardt_core::reactive::ReactiveScope;
@@ -2844,6 +2888,95 @@ mod tests {
 		assert_eq!(
 			submit.as_mut().poll(&mut context),
 			Poll::Ready(Ok(super::UseFormAsyncSubmitOutcome::AlreadyPending))
+		);
+	}
+
+	#[test]
+	#[serial(reactive_runtime)]
+	fn stale_server_fn_submit_is_rejected_without_reading_disposed_state() {
+		let scope = Rc::new(ReactiveScope::new());
+		let form = scope.enter(|| RetainedScopeForm {
+			scope: Rc::clone(&scope),
+			value: Signal::new("initial".to_string()),
+			reset_log: Rc::new(RefCell::new(Vec::new())),
+		});
+		let runtime = use_form(&form).build();
+
+		scope.dispose();
+
+		let mut submit = Box::pin(
+			runtime.submit_server_fn(|| async { Ok::<_, crate::server_fn::ServerFnError>(()) }),
+		);
+		let mut context = Context::from_waker(Waker::noop());
+		assert_eq!(
+			submit.as_mut().poll(&mut context),
+			Poll::Ready(Ok(super::UseFormAsyncSubmitOutcome::AlreadyPending))
+		);
+	}
+
+	#[test]
+	#[serial(reactive_runtime)]
+	fn submit_start_disposal_stops_before_post_callback_validation() {
+		let scope = Rc::new(ReactiveScope::new());
+		let form = scope.enter(|| RetainedScopeForm {
+			scope: Rc::clone(&scope),
+			value: Signal::new("initial".to_string()),
+			reset_log: Rc::new(RefCell::new(Vec::new())),
+		});
+		let callback_scope = Rc::clone(&scope);
+		let runtime = use_form(&form)
+			.on_submit_start(move |_| callback_scope.dispose())
+			.build();
+
+		assert_eq!(
+			runtime.begin_submit_lifecycle(),
+			UseFormSubmitOutcome::AlreadyPending
+		);
+	}
+
+	#[test]
+	#[serial(reactive_runtime)]
+	fn validated_event_disposal_stops_before_submit_completion() {
+		let scope = Rc::new(ReactiveScope::new());
+		let form = scope.enter(|| RetainedScopeForm {
+			scope: Rc::clone(&scope),
+			value: Signal::new("initial".to_string()),
+			reset_log: Rc::new(RefCell::new(Vec::new())),
+		});
+		let runtime = use_form(&form).build();
+		let callback_scope = Rc::clone(&scope);
+		let _subscription = runtime.subscribe(move |event| {
+			if matches!(event, super::FormEvent::Validated) {
+				callback_scope.dispose();
+			}
+		});
+
+		assert_eq!(
+			runtime.begin_submit_lifecycle(),
+			UseFormSubmitOutcome::AlreadyPending
+		);
+	}
+
+	#[test]
+	#[serial(reactive_runtime)]
+	fn late_server_error_is_ignored_after_form_scope_disposal() {
+		let scope = Rc::new(ReactiveScope::new());
+		let form = scope.enter(|| RetainedScopeForm {
+			scope: Rc::clone(&scope),
+			value: Signal::new("initial".to_string()),
+			reset_log: Rc::new(RefCell::new(Vec::new())),
+		});
+		let runtime = use_form(&form).build();
+		scope.dispose();
+
+		let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			runtime.complete_mutation_server_error(&crate::server_fn::ServerFnError::application(
+				"late error",
+			));
+		}));
+		assert!(
+			result.is_ok(),
+			"disposed forms must ignore late server errors"
 		);
 	}
 

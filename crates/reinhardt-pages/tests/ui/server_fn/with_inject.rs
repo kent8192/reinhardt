@@ -7,6 +7,7 @@
 
 use reinhardt_pages_macros::server_fn;
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 
 // Mock types for testing
 #[derive(Clone, Deserialize)]
@@ -19,9 +20,7 @@ struct Wrapper<T>(T);
 
 #[async_trait::async_trait]
 impl reinhardt_di::Injectable for Database {
-	async fn inject(
-		_ctx: &reinhardt_di::InjectionContext,
-	) -> reinhardt_di::DiResult<Self> {
+	async fn inject(_ctx: &reinhardt_di::InjectionContext) -> reinhardt_di::DiResult<Self> {
 		Ok(Self {
 			connection_string: String::new(),
 		})
@@ -30,9 +29,7 @@ impl reinhardt_di::Injectable for Database {
 
 #[async_trait::async_trait]
 impl reinhardt_di::Injectable for Wrapper<Database> {
-	async fn inject(
-		_ctx: &reinhardt_di::InjectionContext,
-	) -> reinhardt_di::DiResult<Self> {
+	async fn inject(_ctx: &reinhardt_di::InjectionContext) -> reinhardt_di::DiResult<Self> {
 		Ok(Self(Database {
 			connection_string: String::new(),
 		}))
@@ -121,7 +118,31 @@ async fn update_wrapped(
 	Ok(())
 }
 
+fn assert_one<F, Fut>(_: F)
+where
+	F: Fn(u32) -> Fut,
+	Fut: Future<Output = Result<User, ServerFnError>>,
+{
+}
+
+fn assert_tuple<F, Fut>(_: F)
+where
+	F: Fn((String, String)) -> Fut,
+	Fut: Future<Output = Result<User, ServerFnError>>,
+{
+}
+
+fn assert_zero<F, Fut>(_: F)
+where
+	F: Fn(()) -> Fut,
+	Fut: Future<Output = Result<(), ServerFnError>>,
+{
+}
+
 fn main() {
 	// This test file is used by trybuild to verify macro expansion
 	// It should compile successfully with DI parameter detection
+	assert_one(get_user::mutation());
+	assert_tuple(create_user::mutation());
+	assert_zero(update_database::mutation());
 }

@@ -14,9 +14,7 @@ use reinhardt_pages::control_binding::__private::{
 	CheckboxBinding, NumberBinding, RadioBinding, SelectOneBinding, TextBinding,
 	into_control_binding,
 };
-use reinhardt_pages::{
-	FormRuntimeSource, RuntimeControlBindingRequest, form, server_fn::ServerFnMetadata, use_form,
-};
+use reinhardt_pages::{FormRuntimeSource, RuntimeControlBindingRequest, form, use_form};
 use rstest::rstest;
 
 struct BindingRecord;
@@ -148,6 +146,8 @@ impl BindingRecordFormSchema {
 	}
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(bound = "")]
 struct BindingRecordModelFormData<P: ModelFormPolicy> {
 	values: std::collections::HashMap<String, serde_json::Value>,
 	_policy: PhantomData<P>,
@@ -204,26 +204,11 @@ impl<P: ModelFormPolicy> NativeModelFormPayload for BindingRecordModelFormData<P
 	}
 }
 
+#[reinhardt_pages::server_fn::server_fn(model_form = true)]
 async fn save_binding_record(
 	_payload: BindingRecordModelFormData<BindingRecordPolicy>,
 ) -> Result<(), reinhardt_pages::ServerFnError> {
 	Ok(())
-}
-
-mod save_binding_record {
-	use super::ServerFnMetadata;
-
-	#[allow(
-		non_camel_case_types,
-		reason = "Generated server-function markers use the lower-case marker name."
-	)]
-	pub(crate) struct marker;
-
-	impl ServerFnMetadata for marker {
-		const PATH: &'static str = "/api/server_fn/save_binding_record";
-		const NAME: &'static str = "save_binding_record";
-		const IS_JSON_CODEC: bool = true;
-	}
 }
 
 macro_rules! binding_form {

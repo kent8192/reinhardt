@@ -17,7 +17,7 @@ use crate::reactive::Signal;
 use crate::reactive::pages_arena::{PageNodeKey, PageNodeKind, allocate_page_node, with_page_node};
 use reinhardt_core::reactive::deps::Trackable;
 use reinhardt_core::reactive::scope::enter_scope;
-use reinhardt_core::reactive::{ScopeId, current_scope_id};
+use reinhardt_core::reactive::{ScopeId, current_scope_id, untracked};
 
 type ErrorCallback<E> = Rc<dyn Fn(&E)>;
 type SuccessCallback<T> = Rc<dyn Fn(&T)>;
@@ -84,6 +84,41 @@ struct ActionSlot<T: Clone + 'static, E: Clone + 'static> {
 	completion_guard: CompletionGuard,
 	next_dispatch_id: Rc<Cell<u64>>,
 	reset_on_success: Rc<Cell<bool>>,
+}
+
+// Only the dispatch that owns the pending phase may clear it on cancellation.
+struct ActionPendingGuard<T: Clone + 'static, E: Clone + 'static> {
+	state: Option<Signal<ActionPhase<T, E>>>,
+	dispatch_id: u64,
+	current_dispatch_id: Rc<Cell<u64>>,
+}
+
+impl<T: Clone + 'static, E: Clone + 'static> ActionPendingGuard<T, E> {
+	fn new(
+		state: Signal<ActionPhase<T, E>>,
+		dispatch_id: u64,
+		current_dispatch_id: Rc<Cell<u64>>,
+	) -> Self {
+		Self {
+			state: Some(state),
+			dispatch_id,
+			current_dispatch_id,
+		}
+	}
+
+	fn disarm(&mut self) {
+		self.state = None;
+	}
+}
+
+impl<T: Clone + 'static, E: Clone + 'static> Drop for ActionPendingGuard<T, E> {
+	fn drop(&mut self) {
+		if self.current_dispatch_id.get() == self.dispatch_id
+			&& let Some(state) = self.state
+		{
+			let _ = state.try_set(ActionPhase::Idle);
+		}
+	}
 }
 
 /// Represents the current phase of an async action.
@@ -209,6 +244,14 @@ impl<T: Clone + 'static, E: Clone + 'static> Action<T, E> {
 	/// Returns `true` if the action is pending.
 	pub fn is_pending(&self) -> bool {
 		self.phase().is_pending()
+	}
+
+	pub(crate) fn try_is_pending_untracked(&self) -> Option<bool> {
+		with_page_node::<ActionSlot<T, E>, _>(self.key, |slot| slot.state)
+			.ok()?
+			.try_get_untracked()
+			.ok()
+			.map(|phase| phase.is_pending())
 	}
 
 	/// Returns `true` if the action completed successfully.
@@ -665,13 +708,15 @@ where
 			}
 			let dispatch_id = next_dispatch_id_for_dispatch.get().wrapping_add(1);
 			next_dispatch_id_for_dispatch.set(dispatch_id);
+			let pending_guard = ActionPendingGuard::new(
+				state,
+				dispatch_id,
+				Rc::clone(&next_dispatch_id_for_dispatch),
+			);
 
 			let fut = match enter_scope(scope, || action_fn(*payload)) {
 				Ok(fut) => fut,
-				Err(_) => {
-					let _ = state.try_set(ActionPhase::Idle);
-					return;
-				}
+				Err(_) => return,
 			};
 
 			#[cfg(wasm)]
@@ -684,6 +729,7 @@ where
 				let completion_guard = Rc::clone(&completion_guard_for_dispatch);
 				let reset_on_success = Rc::clone(&reset_on_success_for_dispatch);
 				let fut = scope_action_future(scope, fut);
+				let mut pending_guard = pending_guard;
 				spawn_task(async move {
 					let Some(result) = fut.await else {
 						return;
@@ -695,6 +741,7 @@ where
 									let accepted = completion_guard.borrow()(dispatch_id)
 										&& state.try_set(ActionPhase::Success(val.clone())).is_ok();
 									if accepted {
+										pending_guard.disarm();
 										let on_success = on_success.borrow().clone();
 										on_success(&val);
 										let on_identified_success =
@@ -713,6 +760,7 @@ where
 									let accepted = completion_guard.borrow()(dispatch_id)
 										&& state.try_set(ActionPhase::Error(err.clone())).is_ok();
 									if accepted {
+										pending_guard.disarm();
 										let on_error = on_error.borrow().clone();
 										on_error(&err);
 										let on_identified_error =
@@ -736,7 +784,8 @@ where
 				let completion_guard = Rc::clone(&completion_guard_for_dispatch);
 				let reset_on_success = Rc::clone(&reset_on_success_for_dispatch);
 				let fut = scope_action_future(scope, fut);
-				let spawned = crate::platform::try_spawn_task(async move {
+				let mut pending_guard = pending_guard;
+				crate::platform::try_spawn_task(async move {
 					let Some(result) = fut.await else {
 						return;
 					};
@@ -749,6 +798,7 @@ where
 											.try_set(ActionPhase::Success(val.clone()))
 											.is_ok();
 									if accepted {
+										pending_guard.disarm();
 										let on_success = on_success.borrow().clone();
 										on_success(&val);
 										let on_identified_success =
@@ -769,6 +819,7 @@ where
 											.try_set(ActionPhase::Error(err.clone()))
 											.is_ok();
 									if accepted {
+										pending_guard.disarm();
 										let on_error = on_error.borrow().clone();
 										on_error(&err);
 										let on_identified_error =
@@ -780,9 +831,6 @@ where
 						}
 					}
 				});
-				if !spawned {
-					state.set(ActionPhase::Idle);
-				}
 			}
 		})
 	};
@@ -818,7 +866,7 @@ impl<T: Clone + 'static, E: Clone + 'static> Action<T, E> {
 		else {
 			return;
 		};
-		dispatch(Box::new(payload));
+		untracked(|| dispatch(Box::new(payload)));
 	}
 
 	pub(crate) fn next_dispatch_id(&self) -> u64 {
@@ -851,6 +899,24 @@ mod tests {
 			copied.dispatch(1);
 			assert_eq!(action.phase(), ActionPhase::Idle);
 		});
+	}
+
+	#[cfg(native)]
+	#[rstest]
+	fn synchronous_action_panic_restores_idle_phase() {
+		let scope = reinhardt_core::reactive::ReactiveScope::new();
+		let action = scope.enter(|| {
+			use_action(|_: ()| -> std::future::Ready<Result<(), String>> {
+				panic!("synchronous action panic")
+			})
+		});
+
+		let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			action.dispatch(());
+		}));
+
+		assert!(panic.is_err());
+		assert_eq!(action.phase(), ActionPhase::Idle);
 	}
 
 	#[rstest]
@@ -931,6 +997,106 @@ mod tests {
 		scope.dispose();
 
 		action.dispatch(());
+	}
+
+	#[rstest]
+	#[serial_test::serial(reactive_runtime)]
+	fn stale_action_pending_check_is_unavailable() {
+		let scope = reinhardt_core::reactive::ReactiveScope::new();
+		let action = scope.enter(|| use_action(|_: ()| async { Ok::<i32, String>(42) }));
+
+		scope.dispose();
+
+		assert_eq!(action.try_is_pending_untracked(), None);
+	}
+
+	#[rstest]
+	#[serial_test::serial(reactive_runtime)]
+	fn untracked_pending_check_does_not_subscribe() {
+		let scope = reinhardt_core::reactive::ReactiveScope::new();
+		let action = scope.enter(|| use_action(|_: ()| async { Ok::<(), String>(()) }));
+		let runs = Rc::new(std::cell::Cell::new(0));
+		let _effect = scope.enter(|| {
+			let action = action;
+			let runs = Rc::clone(&runs);
+			reinhardt_core::reactive::Effect::new(move || {
+				runs.set(runs.get() + 1);
+				assert_eq!(action.try_is_pending_untracked(), Some(false));
+			})
+		});
+
+		assert_eq!(runs.get(), 1);
+		action.force_success_for_test(());
+		reinhardt_core::reactive::with_runtime(|runtime| runtime.flush_updates());
+		assert_eq!(runs.get(), 1);
+	}
+
+	#[rstest]
+	#[serial_test::serial(reactive_runtime)]
+	fn dispatch_construction_does_not_subscribe_the_calling_effect() {
+		let scope = reinhardt_core::reactive::ReactiveScope::new();
+		let construction_reads = Rc::new(std::cell::Cell::new(0));
+		let effect_runs = Rc::new(std::cell::Cell::new(0));
+		let (source, _action, _effect) = scope.enter(|| {
+			let source = Signal::new("first".to_owned());
+			let source_for_action = source;
+			let construction_reads_for_action = Rc::clone(&construction_reads);
+			let action = use_action(move |_: ()| {
+				construction_reads_for_action.set(construction_reads_for_action.get() + 1);
+				let value = source_for_action.get();
+				async move { Ok::<String, String>(value) }
+			});
+			let action_for_effect = action;
+			let effect_runs_for_effect = Rc::clone(&effect_runs);
+			let effect = reinhardt_core::reactive::Effect::new(move || {
+				effect_runs_for_effect.set(effect_runs_for_effect.get() + 1);
+				action_for_effect.dispatch(());
+			});
+			(source, action, effect)
+		});
+
+		assert_eq!(effect_runs.get(), 1);
+		assert_eq!(construction_reads.get(), 1);
+
+		source.set("second".to_owned());
+		reinhardt_core::reactive::with_runtime(|runtime| runtime.flush_updates());
+
+		assert_eq!(effect_runs.get(), 1);
+		assert_eq!(construction_reads.get(), 1);
+	}
+
+	#[cfg(all(native, feature = "testing"))]
+	#[rstest]
+	#[serial_test::serial(reactive_runtime)]
+	fn dropping_older_action_task_preserves_newer_pending_phase() {
+		// Arrange
+		let queued = Rc::new(RefCell::new(std::collections::VecDeque::new()));
+		let queued_for_sink = Rc::clone(&queued);
+		let _task_sink = crate::platform::install_task_sink(move |task| {
+			queued_for_sink.borrow_mut().push_back(task);
+		});
+		let scope = reinhardt_core::reactive::ReactiveScope::new();
+		let action =
+			scope.enter(|| use_action(|value: i32| async move { Ok::<i32, String>(value) }));
+		action.dispatch(1);
+		action.dispatch(2);
+
+		// Act
+		let first = queued
+			.borrow_mut()
+			.pop_front()
+			.expect("first dispatch should queue a task");
+		drop(first);
+
+		// Assert
+		assert_eq!(action.phase(), ActionPhase::Pending);
+		let mut second = queued
+			.borrow_mut()
+			.pop_front()
+			.expect("second dispatch should queue a task");
+		let mut context = Context::from_waker(Waker::noop());
+		assert_eq!(second.as_mut().poll(&mut context), Poll::Ready(()));
+		assert_eq!(action.phase(), ActionPhase::Success(2));
 	}
 
 	#[cfg(all(native, feature = "testing"))]

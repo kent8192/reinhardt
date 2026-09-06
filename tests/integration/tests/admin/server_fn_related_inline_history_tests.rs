@@ -399,8 +399,8 @@ async fn related_inline_create_then_update_writes_canonical_per_object_history(
 		.expect("new related child identity must be returned by the database");
 	let parent_history = object_history(&context, PARENT_MODEL, &parent_id).await;
 	let updated_history = object_history(&context, CHILD_MODEL, &first_id).await;
-	let deleted_history = object_history_result(&context, CHILD_MODEL, &deleted_id).await;
-	let deleted_actions = history_actions(pool, CHILD_MODEL, &deleted_id).await;
+	let deleted_history_result = object_history_result(&context, CHILD_MODEL, &deleted_id).await;
+	let deleted_history = history_actions(pool, CHILD_MODEL, &deleted_id).await;
 	let created_history = object_history(&context, CHILD_MODEL, &created_id).await;
 	let deleted_history_count: i64 = sqlx::query_scalar(
 		"SELECT COUNT(*) FROM reinhardt_admin_history WHERE model_name = $1 AND object_id = $2",
@@ -453,8 +453,10 @@ async fn related_inline_create_then_update_writes_canonical_per_object_history(
 			("CREATE", &["name", "position"]),
 		],
 	);
-	assert_object_not_found(deleted_history.expect_err("deleted child history must be scoped out"));
-	assert_eq!(deleted_actions, ["DELETE", "CREATE"]);
+	assert_object_not_found(
+		deleted_history_result.expect_err("deleted child history must be scoped out"),
+	);
+	assert_eq!(deleted_history, ["DELETE", "CREATE"]);
 	assert_eq!(deleted_history_count, 2);
 	assert_history(
 		&created_history,

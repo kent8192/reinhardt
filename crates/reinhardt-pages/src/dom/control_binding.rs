@@ -289,10 +289,8 @@ impl NumberBindingRegistration {
 impl Drop for NumberBindingRegistration {
 	fn drop(&mut self) {
 		let registration_node: web_sys::Node = self.element.clone().unchecked_into();
-		let is_range = range_constraints(&self.element).is_some();
-		let survivors = ACTIVE_NUMBER_BINDINGS.with(|registered| {
-			let mut registered = registered.borrow_mut();
-			registered.retain(|candidate| {
+		ACTIVE_NUMBER_BINDINGS.with(|registered| {
+			registered.borrow_mut().retain(|candidate| {
 				candidate.target != self.target
 					|| !candidate
 						.element
@@ -300,25 +298,35 @@ impl Drop for NumberBindingRegistration {
 						.unchecked_into::<web_sys::Node>()
 						.is_same_node(Some(&registration_node))
 			});
-			registered
-				.iter()
-				.filter(|candidate| {
-					candidate.target == self.target
-						&& is_range && range_constraints(&candidate.element).is_some()
-				})
-				.filter_map(|candidate| candidate.effect)
-				.collect::<Vec<_>>()
 		});
-		// Reuse the queued effects after teardown releases its DOM owners. Full
-		// scope cleanup disposes these effects and removes their queued updates.
-		with_runtime(|runtime| {
-			for effect in survivors {
-				if runtime.has_node(self.target) && runtime.has_node(effect) {
-					runtime.schedule_update(effect);
-				}
-			}
-		});
+		if range_constraints(&self.element).is_some() {
+			schedule_range_peers(&self.element, self.target);
+		}
 	}
+}
+
+fn schedule_range_peers(element: &web_sys::Element, target: NodeId) {
+	let peers = ACTIVE_NUMBER_BINDINGS.with(|registered| {
+		registered
+			.borrow()
+			.iter()
+			.filter(|candidate| {
+				candidate.target == target
+					&& !candidate.element.is_same_node(Some(element))
+					&& range_constraints(&candidate.element).is_some()
+			})
+			.filter_map(|candidate| candidate.effect)
+			.collect::<Vec<_>>()
+	});
+	// Queue existing effects after releasing the registry borrow. Full scope
+	// cleanup disposes those effects and removes their queued updates.
+	with_runtime(|runtime| {
+		for effect in peers {
+			if runtime.has_node(target) && runtime.has_node(effect) {
+				runtime.schedule_update(effect);
+			}
+		}
+	});
 }
 
 struct SelectOptionObserver {
@@ -1470,6 +1478,10 @@ pub(crate) fn reconcile_control_binding(
 	let value = untracked(|| binding.read());
 	write_control_and_reconcile(element, binding, &value)?;
 	crate::component::into_page::initialize_control_default(element, binding);
+	if binding.kind() == ControlKind::Number {
+		// An unchanged local value can still make a peer's constraints compatible.
+		schedule_range_peers(element.as_web_sys(), binding.target());
+	}
 	Ok(())
 }
 

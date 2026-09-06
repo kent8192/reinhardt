@@ -213,6 +213,106 @@ fn range_reconciliation_updates_the_bound_value_as_the_step_base(
 }
 
 #[rstest]
+#[case::mount(false, false)]
+#[case::reactive_if(true, false)]
+#[case::hydrate(false, true)]
+#[case::hydrate_reactive_if(true, true)]
+#[wasm_bindgen_test]
+fn reactive_range_constraints_reconcile_shared_peers(
+	#[case] nested_in_reactive_if: bool,
+	#[case] hydrate: bool,
+) {
+	ReactiveScope::run(|| {
+		// Arrange
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let container = document.create_element("div").expect("container");
+		let _cleanup = AttachedRootCleanup(container.clone());
+		let value = Signal::new(100_i32);
+		let max = Signal::new(100_i32);
+		let first_range = move || {
+			PageElement::new("input")
+				.attr("id", "first")
+				.attr("type", "range")
+				.attr("min", "0")
+				.reactive_attr("max", move || Some(max.get().to_string().into()))
+				.control_binding(ControlBinding::number(value))
+				.into_page()
+		};
+		let first_range = if nested_in_reactive_if {
+			Page::reactive_if(|| true, first_range, || Page::Empty)
+		} else {
+			first_range()
+		};
+		let page = PageElement::new("div")
+			.child(first_range)
+			.child(
+				PageElement::new("input")
+					.attr("id", "second")
+					.attr("type", "range")
+					.attr("min", "200")
+					.attr("max", "300")
+					.control_binding(ControlBinding::number(value))
+					.into_page(),
+			)
+			.into_page();
+		let root = if hydrate {
+			container.set_inner_html(&page.render_to_string());
+			let root = Element::new(container.first_element_child().expect("SSR root"));
+			let _state = SsrStateElement::install(&document);
+			reinhardt_pages::hydration::hydrate(&HydratedControlPage(page), &root)
+				.expect("hydrate");
+			root
+		} else {
+			let root = Element::new(container);
+			page.mount(&root).expect("mount");
+			root
+		};
+		let first: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.query_selector("#first")
+			.expect("query")
+			.expect("first range")
+			.unchecked_into();
+		let second: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.query_selector("#second")
+			.expect("query")
+			.expect("second range")
+			.unchecked_into();
+		value.set(100);
+		with_runtime(|runtime| runtime.flush_updates());
+		assert_eq!(value.get(), 100);
+		assert_eq!(
+			(first.value(), second.value()),
+			("100".to_owned(), "200".to_owned())
+		);
+
+		// Act: only the already-representable control's constraints change.
+		max.set(300);
+		with_runtime(|runtime| runtime.flush_updates());
+		with_runtime(|runtime| runtime.flush_updates());
+
+		// Assert
+		assert_eq!(value.get(), 200);
+		assert_eq!(
+			(first.value(), second.value()),
+			("200".to_owned(), "200".to_owned())
+		);
+		assert!(
+			second.is_same_node(
+				root.as_web_sys()
+					.query_selector("#second")
+					.unwrap()
+					.as_deref()
+			)
+		);
+	});
+}
+
+#[rstest]
 #[wasm_bindgen_test]
 fn range_binding_canonicalizes_negative_zero() {
 	ReactiveScope::run(|| {

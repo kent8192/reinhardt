@@ -34,7 +34,7 @@ const UPLOAD_FIELDS: [ModelFormFieldDescriptor; 3] = [
 		nullable: false,
 		editable: true,
 		generated_relation_id: false,
-	trim: false,
+		trim: false,
 	},
 	ModelFormFieldDescriptor {
 		name: "document",
@@ -44,7 +44,7 @@ const UPLOAD_FIELDS: [ModelFormFieldDescriptor; 3] = [
 		nullable: false,
 		editable: true,
 		generated_relation_id: false,
-	trim: false,
+		trim: false,
 	},
 	ModelFormFieldDescriptor {
 		name: "avatar",
@@ -54,7 +54,7 @@ const UPLOAD_FIELDS: [ModelFormFieldDescriptor; 3] = [
 		nullable: true,
 		editable: true,
 		generated_relation_id: false,
-	trim: false,
+		trim: false,
 	},
 ];
 
@@ -162,7 +162,7 @@ impl<P: ModelFormPolicy> ModelFormValidatingPayload for UploadModelFormData<P> {
 	}
 }
 
-#[server_fn]
+#[server_fn(model_form_payload = "UploadModelFormData<UploadPolicy>")]
 async fn upload(
 	title: String,
 	document: reinhardt_core::parsers::UploadedFile,
@@ -172,7 +172,7 @@ async fn upload(
 	Ok(())
 }
 
-#[server_fn]
+#[server_fn(model_form_payload = "UploadModelFormData<UploadPolicy>")]
 async fn upload_wrong_types(
 	title: reinhardt_core::parsers::UploadedFile,
 	document: String,
@@ -182,11 +182,21 @@ async fn upload_wrong_types(
 	Ok(())
 }
 
-#[server_fn]
+#[server_fn(model_form_payload = "UploadModelFormData<UploadPolicy>")]
 async fn upload_wrong_requiredness(
 	title: String,
 	document: Option<reinhardt_core::parsers::UploadedFile>,
 	avatar: reinhardt_core::parsers::UploadedFile,
+) -> Result<(), ServerFnError> {
+	let _ = (title, document, avatar);
+	Ok(())
+}
+
+#[server_fn]
+async fn upload_unvalidated(
+	title: String,
+	document: reinhardt_core::parsers::UploadedFile,
+	avatar: Option<reinhardt_core::parsers::UploadedFile>,
 ) -> Result<(), ServerFnError> {
 	let _ = (title, document, avatar);
 	Ok(())

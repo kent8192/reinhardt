@@ -2043,7 +2043,6 @@ fn generate_model_form(
 				let argument_impls = fields.iter().enumerate().map(|(index, field)| {
 					let name = ident_to_wire_name(field);
 					quote! {
-						#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 						impl #pages_crate::form::ModelFormSelectionArgument<#index> for #selection_ident {
 							type Name = ();
 							const NAME: &'static str = #name;
@@ -2058,16 +2057,13 @@ fn generate_model_form(
 				(
 					quote!(#selection_ident),
 					quote! {
-						#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 						struct #selection_ident;
 
-						#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 						impl #pages_crate::form::ModelFormSelectionCount<#argument_count>
 							for #selection_ident {}
 
 						#(#argument_impls)*
 
-						#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 						impl #pages_crate::form::ModelFormSelectionPayload<
 							#schema_path,
 							#policy_ident,
@@ -2108,15 +2104,8 @@ fn generate_model_form(
 				#policy_ident,
 			>();
 	};
-	let model_form_selection_check = if contract.is_some() {
-		quote! {
-			const _: () = { #selection_check_body };
-		}
-	} else {
-		quote! {
-			#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-			const _: () = { #selection_check_body };
-		}
+	let model_form_selection_check = quote! {
+		const _: () = { #selection_check_body };
 	};
 	let model_form_response_type = quote! {
 		<#server_fn::marker as #pages_crate::form::ModelFormServerFn<

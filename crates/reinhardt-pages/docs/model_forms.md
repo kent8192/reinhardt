@@ -214,7 +214,7 @@ schema, or the server-side field policy.
 
 When an explicit model-field selection includes a `File` or `Image` field,
 `form!` renders a multipart form and calls a normal function-like
-`#[server_fn]` directly. Use one client-visible server-function parameter for
+`#[server_fn(model_form_payload = "UploadModelFormData<UploadPolicy>")]` directly. Use one client-visible server-function parameter for
 each selected field, with the exact same field name, order, and count:
 
 ```rust
@@ -222,7 +222,7 @@ use reinhardt::core::parsers::UploadedFile;
 use reinhardt::pages::form;
 use reinhardt::pages::server_fn::{server_fn, ServerFnError};
 
-#[server_fn]
+#[server_fn(model_form_payload = "UploadModelFormData<UploadPolicy>")]
 async fn upload(
     title: String,
     document: UploadedFile,
@@ -240,6 +240,14 @@ let upload_form = form! {
     server_fn: upload,
 };
 ```
+
+The endpoint's `model_form_payload` binds the generated schema and server policy
+through its concrete payload type. Its HTTP adapter repeats scalar normalization,
+field constraints, and `#[form(validate = ...)]` before calling the upload function,
+including for direct multipart requests. Required files are checked by the typed
+multipart extractor; they are excluded from the scalar validation payload. The
+form's model and policy must produce exactly the declared endpoint payload type.
+Ordinary multipart endpoints without this binding cannot serve model-backed forms.
 
 Scalar fields are encoded as JSON multipart parts, while `File` and `Image`
 fields use `UploadedFile` or `Option<UploadedFile>`. The direct multipart

@@ -1,11 +1,14 @@
 use hyper::header;
+use reinhardt_core::model_form::{
+	ModelFormCleanedPayload, ModelFormPayload, ModelFormPolicy, ModelFormValidatingPayload,
+};
 use reinhardt_core::parsers::multipart::MultipartPart;
 use reinhardt_core::parsers::{MediaType, MultiPartParser, UploadedFile};
 use reinhardt_http::Request;
 use serde::de::DeserializeOwned;
 use std::collections::HashSet;
 
-use super::ServerFnError;
+use super::{ServerFnArgumentKind, ServerFnArgumentMetadata, ServerFnError};
 
 const INVALID_REQUEST_MESSAGE: &str = "Invalid server function request";
 
@@ -51,6 +54,71 @@ impl MultipartArguments {
 		}
 
 		Ok(Self { parts })
+	}
+
+	/// Revalidates model scalars before typed extraction and user-handler execution.
+	///
+	/// Only required file arguments are deferred to the multipart extractor.
+	/// The concrete payload binds the generated rules and server-owned policy.
+	pub fn validate_model_form<D, P>(
+		&mut self,
+		arguments: &[ServerFnArgumentMetadata],
+	) -> Result<(), ServerFnError>
+	where
+		D: Default + ModelFormPayload<P> + ModelFormValidatingPayload,
+		P: ModelFormPolicy,
+	{
+		for argument in arguments {
+			if !P::allows(argument.name) {
+				return Err(ServerFnError::validation([(
+					argument.name,
+					"This field is not allowed.",
+				)]));
+			}
+		}
+		let mut payload = D::default();
+		for part in &self.parts {
+			if let MultipartPart::Field { name, data } = part {
+				let value = serde_json::from_slice(data)
+					.map_err(|_| invalid_request("malformed_json", Some(name)))?;
+				payload.set_json(name, value).map_err(|error| {
+					ServerFnError::validation([(name.as_str(), error.to_string())])
+				})?;
+			}
+		}
+		let deferred_files = arguments
+			.iter()
+			.filter(|argument| argument.kind == ServerFnArgumentKind::File)
+			.map(|argument| argument.name)
+			.collect::<Vec<_>>();
+		let payload = payload
+			.clean_and_validate_with_deferred_required_fields(&deferred_files)?
+			.into_raw();
+		for argument in arguments {
+			if argument.kind != ServerFnArgumentKind::Json {
+				continue;
+			}
+			let value = payload.get_json(argument.name);
+			let part = self
+				.parts
+				.iter_mut()
+				.find(|part| part_name(part) == argument.name);
+			match (part, value) {
+				(Some(MultipartPart::Field { data, .. }), value) => {
+					*data = serde_json::to_vec(&value.unwrap_or(serde_json::Value::Null))
+						.map_err(|_| ServerFnError::server(500, "Internal server error"))?
+						.into();
+				}
+				(None, Some(value)) => self.parts.push(MultipartPart::Field {
+					name: argument.name.to_owned(),
+					data: serde_json::to_vec(&value)
+						.map_err(|_| ServerFnError::server(500, "Internal server error"))?
+						.into(),
+				}),
+				_ => {}
+			}
+		}
+		Ok(())
 	}
 
 	/// Removes and decodes one required JSON scalar part.

@@ -39,12 +39,14 @@ impl ModelFormSchema for QuestionFormSchema {
 }
 
 impl QuestionFormSchema {
-	fn title() -> &'static ModelFormFieldDescriptor {
+	const fn title() -> &'static ModelFormFieldDescriptor {
 		&QUESTION_FIELDS[0]
 	}
 }
 
-struct QuestionModelFormData<P: ModelFormPolicy>(PhantomData<P>);
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(bound = "")]
+struct QuestionModelFormData<P: ModelFormPolicy>(#[serde(skip)] PhantomData<P>);
 
 impl<P: ModelFormPolicy> QuestionModelFormData<P> {
 	fn empty() -> Self {
@@ -105,22 +107,19 @@ impl<P: ModelFormPolicy> ModelFormValidatingPayload for QuestionModelFormData<P>
 	}
 }
 
-async fn save_question<P: ModelFormPolicy>(
-	_payload: QuestionModelFormData<P>,
-) -> Result<(), reinhardt_pages::ServerFnError> {
-	Ok(())
+impl<P: ModelFormPolicy> reinhardt_core::model_form::NativeModelFormPayload
+	for QuestionModelFormData<P>
+{
+	fn from_native_form_value(value: serde_json::Value) -> Result<Self, serde_json::Error> {
+		serde_json::from_value(value)
+	}
 }
 
-mod save_question {
-	// Generated server-function markers use the lower-case `marker` name.
-	#[allow(non_camel_case_types)]
-	pub struct marker;
-
-	impl reinhardt_pages::server_fn::ServerFnMetadata for marker {
-		const PATH: &'static str = "/api/server_fn/save_question";
-		const NAME: &'static str = "save_question";
-		const IS_JSON_CODEC: bool = true;
-	}
+#[reinhardt_pages::server_fn::server_fn(model_form = true)]
+async fn save_question(
+	_payload: QuestionModelFormData<QuestionFields>,
+) -> Result<(), reinhardt_pages::ServerFnError> {
+	Ok(())
 }
 
 fn main() {

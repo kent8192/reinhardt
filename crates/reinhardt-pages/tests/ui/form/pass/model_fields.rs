@@ -19,14 +19,6 @@ impl ModelFormPolicy for QuestionFields {
 	}
 }
 
-struct QuestionSubmissionPolicy;
-
-impl ModelFormPolicy for QuestionSubmissionPolicy {
-	fn allows(field: &str) -> bool {
-		matches!(field, "title" | "owner_id")
-	}
-}
-
 struct QuestionFormSchema;
 
 const QUESTION_FIELDS: [ModelFormFieldDescriptor; 2] = [
@@ -68,18 +60,21 @@ impl ModelFormSchema for QuestionFormSchema {
 }
 
 impl QuestionFormSchema {
-	fn title() -> &'static ModelFormFieldDescriptor {
+	const fn title() -> &'static ModelFormFieldDescriptor {
 		&QUESTION_FIELDS[0]
 	}
 
-	fn owner_id() -> &'static ModelFormFieldDescriptor {
+	const fn owner_id() -> &'static ModelFormFieldDescriptor {
 		&QUESTION_FIELDS[1]
 	}
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(bound = "")]
 struct QuestionModelFormData<P: ModelFormPolicy> {
 	title: Option<String>,
 	owner_id: Option<i64>,
+	#[serde(skip)]
 	_policy: PhantomData<P>,
 }
 
@@ -189,22 +184,11 @@ impl<P: ModelFormPolicy> NativeModelFormPayload for QuestionModelFormData<P> {
 	}
 }
 
+#[reinhardt_pages::server_fn::server_fn(model_form = true)]
 async fn save_question(
-	_payload: QuestionModelFormData<QuestionSubmissionPolicy>,
+	_payload: QuestionModelFormData<QuestionFields>,
 ) -> Result<(), reinhardt_pages::ServerFnError> {
 	Ok(())
-}
-
-mod save_question {
-	// Generated server-function markers use the lower-case `marker` name.
-	#[allow(non_camel_case_types)]
-	pub struct marker;
-
-	impl reinhardt_pages::server_fn::ServerFnMetadata for marker {
-		const PATH: &'static str = "/api/server_fn/save_question";
-		const NAME: &'static str = "save_question";
-		const IS_JSON_CODEC: bool = true;
-	}
 }
 
 fn main() {

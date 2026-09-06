@@ -690,6 +690,12 @@ arguments remain scalar JSON parts, and the response codec remains JSON; do
 not add a multipart codec option. Raw Rust identifiers use their unraw part
 name, such as `type` for `r#type`.
 
+Endpoints used by a model-backed upload form must declare
+`#[server_fn(model_form_payload = "UploadModelFormData<UploadPolicy>")]`.
+The generated HTTP adapter normalizes and validates scalar arguments against
+that payload before running the function, including on direct multipart posts.
+See [model file and image forms](docs/model_forms.md#file-and-image-fields).
+
 ```rust,no_run
 use reinhardt_core::parsers::UploadedFile;
 use reinhardt_pages::server_fn::{server_fn, ServerFnError};

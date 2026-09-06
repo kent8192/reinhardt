@@ -8,7 +8,7 @@ use crate::component::{
 	ControlBinding, ControlBindingError, ControlKind, ControlValue, ControlWriteOutcome,
 };
 use crate::dom::{Element, EventHandle};
-use crate::reactive::{Effect, EffectTiming, batch, untracked};
+use crate::reactive::{Effect, EffectTiming, batch, untracked, with_runtime};
 use reinhardt_core::{reactive::runtime::NodeId, types::page::ControlBindingSnapshot};
 
 type HydrationSnapshotStore = Rc<RefCell<Vec<ControlBindingSnapshot>>>;
@@ -238,6 +238,7 @@ struct MountedNumberBinding {
 	target: NodeId,
 	element: web_sys::Element,
 	position: usize,
+	effect: Option<NodeId>,
 }
 
 struct NumberBindingRegistration {
@@ -264,6 +265,7 @@ impl NumberBindingRegistration {
 				target: binding.target(),
 				element: element.as_web_sys().clone(),
 				position,
+				effect: None,
 			});
 			Some(Self {
 				target: binding.target(),
@@ -272,13 +274,25 @@ impl NumberBindingRegistration {
 			})
 		})
 	}
+
+	fn set_effect(&self, effect: Effect) {
+		ACTIVE_NUMBER_BINDINGS.with(|registered| {
+			if let Some(registration) = registered.borrow_mut().iter_mut().find(|candidate| {
+				candidate.target == self.target && candidate.position == self.position
+			}) {
+				registration.effect = Some(effect.id());
+			}
+		});
+	}
 }
 
 impl Drop for NumberBindingRegistration {
 	fn drop(&mut self) {
 		let registration_node: web_sys::Node = self.element.clone().unchecked_into();
-		ACTIVE_NUMBER_BINDINGS.with(|registered| {
-			registered.borrow_mut().retain(|candidate| {
+		let is_range = range_constraints(&self.element).is_some();
+		let survivors = ACTIVE_NUMBER_BINDINGS.with(|registered| {
+			let mut registered = registered.borrow_mut();
+			registered.retain(|candidate| {
 				candidate.target != self.target
 					|| !candidate
 						.element
@@ -286,6 +300,23 @@ impl Drop for NumberBindingRegistration {
 						.unchecked_into::<web_sys::Node>()
 						.is_same_node(Some(&registration_node))
 			});
+			registered
+				.iter()
+				.filter(|candidate| {
+					candidate.target == self.target
+						&& is_range && range_constraints(&candidate.element).is_some()
+				})
+				.filter_map(|candidate| candidate.effect)
+				.collect::<Vec<_>>()
+		});
+		// Reuse the queued effects after teardown releases its DOM owners. Full
+		// scope cleanup disposes these effects and removes their queued updates.
+		with_runtime(|runtime| {
+			for effect in survivors {
+				if runtime.has_node(self.target) && runtime.has_node(effect) {
+					runtime.schedule_update(effect);
+				}
+			}
 		});
 	}
 }
@@ -443,6 +474,9 @@ impl ControlBindingController {
 		};
 		let option_observer = install_select_option_observer(&element, &binding);
 		let effect = install_effect(element, binding, true, state);
+		if let Some(registration) = &number_binding_registration {
+			registration.set_effect(effect);
+		}
 		Ok((
 			Self {
 				effect,
@@ -470,6 +504,9 @@ impl ControlBindingController {
 		);
 		let option_observer = install_select_option_observer(&element, &binding);
 		let effect = install_effect(element, binding, skip_first_write, state);
+		if let Some(registration) = &number_binding_registration {
+			registration.set_effect(effect);
+		}
 		Ok(Self {
 			effect,
 			_listeners: listeners,
@@ -583,11 +620,16 @@ fn install_effect(
 	skip_first_write: bool,
 	state: Rc<RefCell<CompositionState>>,
 ) -> Effect {
-	let first_run = Rc::new(std::cell::Cell::new(skip_first_write));
+	let mut first_run = true;
 	Effect::new_with_timing(
 		move || {
+			let initial_run = std::mem::take(&mut first_run);
+			// A queued survivor update may outlive the separately owned signal scope.
+			if !initial_run && !with_runtime(|runtime| runtime.has_node(binding.target())) {
+				return;
+			}
 			let value = binding.read();
-			if first_run.replace(false) {
+			if initial_run && skip_first_write {
 				return;
 			}
 			{

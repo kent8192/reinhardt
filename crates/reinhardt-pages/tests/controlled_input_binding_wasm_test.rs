@@ -261,6 +261,107 @@ fn shared_ranges_with_different_step_grids_keep_their_local_projection() {
 }
 
 #[rstest]
+#[case::remove_one(true, false)]
+#[case::dispose_signal_before_queued_reconciliation(true, true)]
+#[case::unmount_all(false, false)]
+#[case::dispose_signal_before_unmount(false, true)]
+#[wasm_bindgen_test]
+fn shared_range_removal_reconciles_only_live_surviving_controls(
+	#[case] remove_one: bool,
+	#[case] dispose_signal: bool,
+) {
+	ReactiveScope::run(|| {
+		// Arrange
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_root = document.create_element("div").expect("root");
+		let cleanup = AttachedRootCleanup(raw_root.clone());
+		let root = Element::new(raw_root);
+		let signal_scope = ReactiveScope::new();
+		let value = signal_scope.enter(|| Signal::new(100_i32));
+		let show_first = Signal::new(true);
+		Page::Fragment(vec![
+			Page::reactive_if(
+				move || show_first.get(),
+				move || {
+					PageElement::new("input")
+						.attr("type", "range")
+						.attr("min", "0")
+						.attr("max", "100")
+						.control_binding(ControlBinding::number(value))
+						.into_page()
+				},
+				|| Page::Empty,
+			),
+			PageElement::new("input")
+				.attr("type", "range")
+				.attr("min", "200")
+				.attr("max", "300")
+				.control_binding(ControlBinding::number(value))
+				.into_page(),
+		])
+		.mount(&root)
+		.expect("mount");
+		let first: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("first range")
+			.unchecked_into();
+		let survivor: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.last_element_child()
+			.expect("surviving range")
+			.unchecked_into();
+		let effects = with_runtime(|runtime| runtime.debug_subscribers(value.id()));
+		assert_eq!(value.get(), 100);
+		assert_eq!(
+			(first.value(), survivor.value()),
+			("100".to_owned(), "200".to_owned())
+		);
+
+		// Act
+		if remove_one {
+			show_first.set(false);
+		}
+		if dispose_signal {
+			signal_scope.dispose();
+		}
+		if remove_one {
+			with_runtime(|runtime| runtime.flush_updates());
+			assert!(survivor.is_same_node(root.as_web_sys().first_element_child().as_deref()));
+			assert_eq!(survivor.value(), "200");
+		}
+		let expected_value = if remove_one { 200 } else { 100 };
+		if !dispose_signal {
+			assert_eq!(value.get(), expected_value);
+		}
+		drop(cleanup);
+		with_runtime(|runtime| runtime.flush_updates());
+
+		// Assert: full teardown cancels reconciliation and all removed control effects.
+		assert_eq!(
+			with_runtime(|runtime| runtime.subscriber_count(value.id())),
+			0
+		);
+		assert!(
+			effects
+				.iter()
+				.all(|effect| !with_runtime(|runtime| runtime.has_node(*effect)))
+		);
+		if !dispose_signal {
+			assert_eq!(value.get(), expected_value);
+			value.set(250);
+		}
+		assert_eq!(
+			(first.value(), survivor.value()),
+			("100".to_owned(), "200".to_owned())
+		);
+	});
+}
+
+#[rstest]
 #[case(false)]
 #[case(true)]
 #[wasm_bindgen_test]

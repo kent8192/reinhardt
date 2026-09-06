@@ -249,10 +249,25 @@ field constraints, and `#[form(validate = ...)]` before calling the upload funct
 including for direct multipart requests. Both field and application validation use
 the intersection of that policy and the endpoint's declared arguments. Required
 fields outside the selection do not block submission, and requests containing
-unselected arguments are rejected. Required files are checked by the typed
-multipart extractor; they are excluded from the scalar validation payload. The
-form's model and policy must produce exactly the declared endpoint payload type.
+unselected arguments are rejected. File argument kinds and required uploads are
+checked before application validation. The form's model and policy must produce
+exactly the declared endpoint payload type.
 Ordinary multipart endpoints without this binding cannot serve model-backed forms.
+
+Generated cleaned file and image getters return
+`Option<ModelFormFileValue<'_, FileField>>` or the corresponding `ImageField`
+candidate. `Stored` contains an existing or server-defaulted storage reference;
+`Uploaded` contains the pending upload's field name, original filename, declared
+content type, and byte size. Missing files and nullable clears both return `None`.
+For example, a validator can require a caption whenever `payload.avatar().is_some()`
+and match `ModelFormFileValue::Uploaded(upload)` to inspect upload metadata.
+
+Browser preflight and the HTTP adapter supply this metadata separately from JSON
+scalar values, before running the generated application callback. A JSON object
+cannot claim that a file was uploaded. Filenames and content types remain
+client-provided metadata; they do not become trusted storage paths or prove image
+validity. Upload metadata is discarded by `into_raw()`. The handler receives the
+original upload bytes and performs storage validation and persistence explicitly.
 
 Scalar fields are encoded as JSON multipart parts, while `File` and `Image`
 fields use `UploadedFile` or `Option<UploadedFile>`. The direct multipart

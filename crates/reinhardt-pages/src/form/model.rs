@@ -662,8 +662,30 @@ where
 			.filter(|descriptor| descriptor.required && is_file_kind(descriptor.kind))
 			.map(|descriptor| descriptor.name)
 			.collect::<Vec<_>>();
+		#[cfg(wasm)]
+		let uploads = self
+			.selected_descriptors()
+			.iter()
+			.filter(|descriptor| is_file_kind(descriptor.kind))
+			.filter_map(|descriptor| {
+				let file = self.selected_files.get(descriptor.name)?;
+				let filename = file.name();
+				if filename.is_empty() && file.size() == 0.0 {
+					return None;
+				}
+				let content_type = file.type_();
+				Some(reinhardt_core::model_form::ModelFormUpload {
+					name: descriptor.name,
+					filename: Some(filename),
+					content_type: (!content_type.is_empty()).then_some(content_type),
+					size: file.size() as u64,
+				})
+			})
+			.collect::<Vec<_>>();
+		#[cfg(not(wasm))]
+		let uploads = Vec::new();
 		let validated = raw
-			.clean_and_validate_with_deferred_required_fields(&deferred_required_fields)
+			.clean_and_validate_with_uploads(&deferred_required_fields, &uploads)
 			.map(ModelFormCleanedPayload::into_raw);
 		if conversion_errors.is_empty() {
 			return validated;

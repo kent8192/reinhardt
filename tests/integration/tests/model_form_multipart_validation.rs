@@ -2,7 +2,9 @@
 
 use bytes::Bytes;
 use reinhardt_core::macros::model;
-use reinhardt_core::model_form::ModelFormPolicy;
+use reinhardt_core::model_form::{
+	ModelFormFileValue, ModelFormPolicy, ModelFormUpload, ModelFormValidatingPayload,
+};
 use reinhardt_core::parsers::UploadedFile;
 use reinhardt_core::validators::{ValidationError, ValidationErrors};
 use reinhardt_db::orm::{FileField, ImageField};
@@ -64,6 +66,28 @@ fn validate_upload<P: ModelFormPolicy>(
 		);
 		return Err(errors);
 	}
+	if payload.avatar().is_some() && payload.note().and_then(Option::as_deref).is_none() {
+		let mut errors = ValidationErrors::new();
+		errors.add(
+			"note",
+			ValidationError::Custom("An avatar requires a caption".to_owned()),
+		);
+		return Err(errors);
+	}
+	if payload.title().map(String::as_str) == Some("require-file")
+		&& !matches!(payload.document(), Some(ModelFormFileValue::Uploaded(upload))
+			if upload.name == "document"
+				&& upload.filename.as_deref() == Some("note.txt")
+				&& upload.content_type.as_deref() == Some("text/plain")
+				&& upload.size == 4)
+	{
+		let mut errors = ValidationErrors::new();
+		errors.add(
+			"document",
+			ValidationError::Custom("The uploaded document must be present".to_owned()),
+		);
+		return Err(errors);
+	}
 	if payload.title() == payload.category() {
 		let mut errors = ValidationErrors::new();
 		errors.add(
@@ -116,6 +140,14 @@ async fn upload_selected(
 }
 
 fn multipart_request(fields: &[(&str, serde_json::Value)], document: bool) -> Request {
+	multipart_request_with_avatar(fields, document, None)
+}
+
+fn multipart_request_with_avatar(
+	fields: &[(&str, serde_json::Value)],
+	document: bool,
+	avatar: Option<(&str, &[u8])>,
+) -> Request {
 	let mut body = String::new();
 	for (name, value) in fields {
 		body.push_str(&format!(
@@ -126,7 +158,13 @@ fn multipart_request(fields: &[(&str, serde_json::Value)], document: bool) -> Re
 	if document {
 		body.push_str("--upload\r\nContent-Disposition: form-data; name=\"document\"; filename=\"note.txt\"\r\nContent-Type: text/plain\r\n\r\nfile\r\n");
 	}
-	body.push_str("--upload--\r\n");
+	let mut body = body.into_bytes();
+	if let Some((filename, data)) = avatar {
+		body.extend_from_slice(format!("--upload\r\nContent-Disposition: form-data; name=\"avatar\"; filename=\"{filename}\"\r\nContent-Type: image/png\r\n\r\n").as_bytes());
+		body.extend_from_slice(data);
+		body.extend_from_slice(b"\r\n");
+	}
+	body.extend_from_slice(b"--upload--\r\n");
 	Request::builder()
 		.method(hyper::Method::POST)
 		.uri("/api/server_fn/upload")
@@ -306,5 +344,147 @@ async fn selected_multipart_enforces_selected_required_fields_and_argument_allow
 
 	// Assert
 	assert_eq!(error.status(), Some(status));
+	assert_eq!(UPLOAD_CALLS.load(Ordering::SeqCst), 0);
+}
+
+#[rstest]
+#[case::optional_image_requires_caption(
+	"report", None, Some("avatar.png"), Some(("note", "An avatar requires a caption"))
+)]
+#[case::optional_image_accepts_caption("report", Some("  caption  "), Some("avatar.png"), None)]
+#[case::named_empty_image_requires_caption(
+	"report", None, Some("empty.png"), Some(("note", "An avatar requires a caption"))
+)]
+#[case::named_empty_image_accepts_caption("report", Some("caption"), Some("empty.png"), None)]
+#[case::empty_browser_image_is_absent("report", None, Some(""), None)]
+#[case::required_file_is_visible("require-file", None, None, None)]
+#[tokio::test]
+#[serial(model_form_multipart_validation)]
+async fn multipart_cross_field_validation_observes_uploaded_files_before_handler(
+	#[case] title: &str,
+	#[case] caption: Option<&str>,
+	#[case] avatar_filename: Option<&str>,
+	#[case] expected_error: Option<(&str, &str)>,
+) {
+	// Arrange
+	UPLOAD_CALLS.store(0, Ordering::SeqCst);
+	let mut image = std::io::Cursor::new(Vec::new());
+	if avatar_filename == Some("avatar.png") {
+		image::DynamicImage::new_rgba8(1, 1)
+			.write_to(&mut image, image::ImageFormat::Png)
+			.expect("test image should encode");
+	}
+	let image = image.into_inner();
+	let request = multipart_request_with_avatar(
+		&[
+			("title", serde_json::json!(title)),
+			("category", serde_json::json!("documents")),
+			("note", serde_json::json!(caption)),
+		],
+		true,
+		avatar_filename.map(|filename| (filename, image.as_slice())),
+	);
+
+	// Act
+	let result = upload::marker::handle(request).await;
+
+	// Assert
+	if let Some((field, message)) = expected_error {
+		let body = result.expect_err("file-dependent validation must reject before dispatch");
+		let error: ServerFnError = serde_json::from_slice(&body).unwrap();
+		assert_eq!(error, ServerFnError::validation([(field, message)]));
+		assert_eq!(UPLOAD_CALLS.load(Ordering::SeqCst), 0);
+	} else {
+		let body = result.expect("valid file-dependent input should reach the handler");
+		assert_eq!(
+			serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+			serde_json::json!([
+				title,
+				"documents",
+				"draft",
+				caption.map(str::trim),
+				4,
+				avatar_filename
+					.filter(|filename| !filename.is_empty())
+					.map(|_| image.len()),
+			]),
+		);
+		assert_eq!(UPLOAD_CALLS.load(Ordering::SeqCst), 1);
+	}
+}
+
+#[rstest]
+fn uploaded_candidate_does_not_create_a_stored_file_reference() {
+	// Arrange
+	let mut payload = UploadModelFormData::<UploadPolicy>::empty();
+	payload.set_title("report".to_owned()).unwrap();
+	payload.set_category("documents".to_owned()).unwrap();
+	let upload = ModelFormUpload {
+		name: "document",
+		filename: Some("note.txt".to_owned()),
+		content_type: Some("text/plain".to_owned()),
+		size: 4,
+	};
+
+	// Act
+	let cleaned = payload
+		.clean_and_validate_with_uploads(&["document"], std::slice::from_ref(&upload))
+		.expect("pending upload should satisfy submission validation");
+	let raw = cleaned.clone().into_raw();
+	let model = cleaned
+		.clone()
+		.into_model(UploadModelFormServerContext::new().organization_id(42));
+	let mut form =
+		reinhardt_forms::model_form::ModelForm::<Upload, UploadPolicy>::from_payload(raw.clone());
+	let form_model = form.build_instance();
+
+	// Assert
+	assert_eq!(
+		cleaned.document(),
+		Some(ModelFormFileValue::Uploaded(&upload))
+	);
+	assert_eq!(raw.document(), None);
+	assert_eq!(raw.avatar(), None);
+	assert_eq!(
+		model.unwrap_err(),
+		reinhardt_forms::model_form::ModelFormError::MissingModelField { field: "document" },
+	);
+	assert_eq!(
+		form_model.unwrap_err(),
+		reinhardt_forms::model_form::ModelFormError::FieldValidation {
+			errors: std::collections::HashMap::from([(
+				"document".to_owned(),
+				vec!["This field is required.".to_owned()],
+			)]),
+		},
+	);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(model_form_multipart_validation)]
+async fn multipart_json_cannot_claim_uploaded_file_presence() {
+	// Arrange
+	UPLOAD_CALLS.store(0, Ordering::SeqCst);
+	let request = multipart_request(
+		&[
+			("title", serde_json::json!("report")),
+			("category", serde_json::json!("documents")),
+			(
+				"avatar",
+				serde_json::json!({"path": "avatar.png", "storage": "default"}),
+			),
+		],
+		true,
+	);
+
+	// Act
+	let body = upload::marker::handle(request)
+		.await
+		.expect_err("JSON cannot represent a new upload");
+	let error: ServerFnError = serde_json::from_slice(&body).unwrap();
+
+	// Assert
+	assert_eq!(error.status(), Some(400));
 	assert_eq!(UPLOAD_CALLS.load(Ordering::SeqCst), 0);
 }

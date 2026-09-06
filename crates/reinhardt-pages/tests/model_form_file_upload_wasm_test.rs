@@ -7,6 +7,7 @@ use std::rc::Rc;
 
 use gloo_timers::future::TimeoutFuture;
 use js_sys::{Function, Reflect};
+use reinhardt_core::model_form::ModelFormFileValue;
 use reinhardt_macros::model;
 use reinhardt_pages::component::{PageExt, cleanup_reactive_nodes};
 use reinhardt_pages::dom::Element;
@@ -62,6 +63,98 @@ async fn save_normalized_mutation(
 	payload: NormalizedMutationFormData,
 ) -> Result<(), ServerFnError> {
 	let _ = payload;
+	Ok(())
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq)]
+struct FileField {
+	path: String,
+	storage: String,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq)]
+struct ImageField {
+	path: String,
+	storage: String,
+}
+
+#[reinhardt_macros::model(
+	app_label = "pages",
+	table_name = "caption_upload_records",
+	form = true,
+	info = false
+)]
+#[derive(Debug, Clone, PartialEq, reinhardt_macros::Model)]
+#[form(validate = validate_caption_upload)]
+struct CaptionUploadRecord {
+	#[field(primary_key = true)]
+	id: i64,
+	#[field(max_length = 120)]
+	title: String,
+	#[field(max_length = 240)]
+	caption: Option<String>,
+	#[field(upload_to = "documents")]
+	document: FileField,
+	#[field(upload_to = "images")]
+	avatar: Option<ImageField>,
+}
+
+fn validate_caption_upload<P: ModelFormPolicy>(
+	payload: &CleanedCaptionUploadRecordModelFormData<P>,
+) -> Result<(), ValidationErrors> {
+	let mut errors = ValidationErrors::new();
+	if let Some(ModelFormFileValue::Uploaded(document)) = payload.document() {
+		assert_eq!(document.name, "document");
+		assert_eq!(document.filename.as_deref(), Some("report.pdf"));
+		assert_eq!(document.content_type.as_deref(), Some("text/plain"));
+		assert_eq!(document.size, 7);
+	} else {
+		errors.add(
+			"document",
+			ValidationError::Custom("Document upload must be visible to validation".to_owned()),
+		);
+	}
+	if let Some(avatar) = payload.avatar() {
+		let ModelFormFileValue::Uploaded(avatar) = avatar else {
+			panic!("a selected avatar must expose upload metadata");
+		};
+		assert_eq!(avatar.name, "avatar");
+		assert_eq!(avatar.filename.as_deref(), Some("avatar.png"));
+		assert_eq!(avatar.content_type.as_deref(), Some("text/plain"));
+		if payload
+			.caption()
+			.and_then(Option::as_deref)
+			.is_none_or(str::is_empty)
+		{
+			errors.add(
+				"caption",
+				ValidationError::Custom("An uploaded image requires a caption".to_owned()),
+			);
+		}
+	}
+	if errors.is_empty() {
+		Ok(())
+	} else {
+		Err(errors)
+	}
+}
+
+struct CaptionUploadPolicy;
+
+impl ModelFormPolicy for CaptionUploadPolicy {
+	fn allows(field: &str) -> bool {
+		matches!(field, "title" | "caption" | "document" | "avatar")
+	}
+}
+
+#[server_fn(model_form_payload = "CaptionUploadRecordModelFormData<CaptionUploadPolicy>")]
+async fn upload_captioned(
+	title: String,
+	caption: Option<String>,
+	document: reinhardt_core::parsers::UploadedFile,
+	avatar: Option<reinhardt_core::parsers::UploadedFile>,
+) -> Result<(), ServerFnError> {
+	let _ = (title, caption, document, avatar);
 	Ok(())
 }
 
@@ -191,6 +284,12 @@ impl MultipartFetchGuard {
 			&JsValue::NULL,
 		)
 		.expect("clear payload error");
+		Reflect::set(
+			js_sys::global().as_ref(),
+			&JsValue::from_str("__reinhardtModelUploadCaption"),
+			&JsValue::NULL,
+		)
+		.expect("clear expected caption");
 		let form_data_constructor =
 			Reflect::get(js_sys::global().as_ref(), &JsValue::from_str("FormData"))
 				.expect("FormData constructor");
@@ -232,6 +331,8 @@ impl MultipartFetchGuard {
 				globalThis.__reinhardtModelUploadRequests += 1;
 				return request.formData().then((formData) => {
 					let payloadError = globalThis.__reinhardtModelUploadPayloadError;
+					const expectedCaption = globalThis.__reinhardtModelUploadCaption;
+					if (expectedCaption !== null && formData.get('caption') !== expectedCaption) payloadError = 'caption was not JSON encoded';
 					if (formData.get('title') !== '"Report"') payloadError = 'title was not JSON encoded';
 					if (!formData.has('document')) payloadError = 'document File was omitted';
 					const expectedAvatar = globalThis.__reinhardtModelUploadAvatar;
@@ -296,6 +397,15 @@ impl MultipartFetchGuard {
 		)
 		.expect("set expected avatar");
 	}
+
+	fn set_expected_caption(&self, caption: Option<&str>) {
+		Reflect::set(
+			js_sys::global().as_ref(),
+			&JsValue::from_str("__reinhardtModelUploadCaption"),
+			&JsValue::from_str(&serde_json::to_string(&caption).expect("caption serializes")),
+		)
+		.expect("set expected caption");
+	}
 }
 
 impl Drop for MultipartFetchGuard {
@@ -316,6 +426,7 @@ impl Drop for MultipartFetchGuard {
 			"__reinhardtModelUploadStatus",
 			"__reinhardtModelUploadRequests",
 			"__reinhardtModelUploadPayloadError",
+			"__reinhardtModelUploadCaption",
 		] {
 			let _ = Reflect::delete_property(js_sys::global().as_ref(), &JsValue::from_str(key));
 		}
@@ -323,11 +434,19 @@ impl Drop for MultipartFetchGuard {
 }
 
 fn browser_file(name: &str) -> web_sys::File {
+	browser_file_with_content(name, "content")
+}
+
+fn browser_file_with_content(name: &str, content: &str) -> web_sys::File {
 	Function::new_with_args(
-		"name",
-		"return new File(['content'], name, { type: 'text/plain' });",
+		"name, content",
+		"return new File([content], name, { type: 'text/plain' });",
 	)
-	.call1(&JsValue::NULL, &JsValue::from_str(name))
+	.call2(
+		&JsValue::NULL,
+		&JsValue::from_str(name),
+		&JsValue::from_str(content),
+	)
 	.expect("create browser file")
 	.dyn_into::<web_sys::File>()
 	.expect("created value is a File")
@@ -495,6 +614,128 @@ async fn model_form_submit_routes_snapshot_errors_without_fetch(#[case] use_muta
 	);
 	assert_eq!(title.value(), "Rejected by validation");
 	assert!(same_file(&selected_file(&document), &document_file));
+}
+
+#[rstest]
+#[case::absent_optional(None)]
+#[case::named_empty_optional(Some(""))]
+#[case::optional_image(Some("content"))]
+#[serial(model_form_file_upload_globals)]
+#[test_attr(wasm_bindgen_test)]
+async fn model_form_uploaded_files_validate_before_dispatch_and_survive_retry(
+	#[case] avatar_contents: Option<&str>,
+) {
+	// Arrange
+	let root = BodyRoot::new();
+	let document_file = browser_file("report.pdf");
+	let avatar_file = browser_file_with_content("avatar.png", avatar_contents.unwrap_or(""));
+	let fetch = MultipartFetchGuard::install(&document_file, &avatar_file);
+	if avatar_contents.is_none() {
+		fetch.set_expected_avatar(None);
+	}
+	fetch.set_expected_caption(None);
+	let scope = ReactiveScope::new();
+	let (form, runtime, mutation) = scope.enter(|| {
+		let form = form! {
+			name: UploadForm,
+			model: CaptionUploadRecord,
+			policy: CaptionUploadPolicy,
+			fields: [title, caption, document, avatar],
+			server_fn: upload_captioned,
+		};
+		form.clone()
+			.into_page()
+			.mount(&Element::new(root.0.clone()))
+			.expect("model form mounts");
+		let runtime = use_form(&form).build();
+		let mutation = form.server_mutation(&runtime).build();
+		(form, runtime, mutation)
+	});
+	let title = query_input(&root.0, "upload-form-title");
+	title.set_value("Report");
+	title
+		.dispatch_event(&web_sys::Event::new("input").expect("input event"))
+		.expect("dispatch title input");
+	select_file(
+		&query_input(&root.0, "upload-form-document"),
+		&document_file,
+	);
+	if avatar_contents.is_some() {
+		select_file(&query_input(&root.0, "upload-form-avatar"), &avatar_file);
+	}
+	defer_yield().await;
+
+	// Act: optional uploads, including named empty files, require a caption.
+	if let Some(contents) = avatar_contents {
+		assert_eq!(avatar_file.size(), contents.len() as f64);
+		assert_eq!(
+			mutation.dispatch(),
+			MutationDispatchOutcome::ValidationFailed
+		);
+		assert!(!mutation.is_pending());
+		wait_for_error(|| {
+			runtime
+				.get_field_state(form.caption_field())
+				.error
+				.is_some()
+		})
+		.await;
+		assert_eq!(fetch.requests(), 0);
+		assert_eq!(
+			runtime
+				.get_field_state(form.caption_field())
+				.error
+				.as_ref()
+				.map(FieldError::message),
+			Some("An uploaded image requires a caption")
+		);
+		assert!(same_file(
+			&selected_file(&query_input(&root.0, "upload-form-document")),
+			&document_file
+		));
+		assert!(same_file(
+			&selected_file(&query_input(&root.0, "upload-form-avatar")),
+			&avatar_file
+		));
+		let caption = query_input(&root.0, "upload-form-caption");
+		caption.set_value("An upload caption");
+		caption
+			.dispatch_event(&web_sys::Event::new("input").expect("input event"))
+			.expect("dispatch caption input");
+		fetch.set_expected_caption(Some("An upload caption"));
+		defer_yield().await;
+	}
+
+	// Assert: validation sees required upload metadata, and a failed request preserves files.
+	assert_eq!(mutation.dispatch(), MutationDispatchOutcome::Dispatched);
+	wait_for_requests(&fetch, 1).await;
+	wait_for_error(|| mutation.error().is_some()).await;
+	assert_eq!(fetch.payload_error(), None);
+	assert!(same_file(
+		&selected_file(&query_input(&root.0, "upload-form-document")),
+		&document_file
+	));
+	let avatar = query_input(&root.0, "upload-form-avatar");
+	if avatar_contents.is_some() {
+		assert!(same_file(&selected_file(&avatar), &avatar_file));
+	} else {
+		assert_eq!(file_count(&avatar), 0);
+	}
+
+	fetch.set_status(200.0);
+	assert_eq!(mutation.dispatch(), MutationDispatchOutcome::Dispatched);
+	wait_for_requests(&fetch, 2).await;
+	wait_for_files_to_clear(&root.0).await;
+	assert!(
+		mutation.is_success(),
+		"mutation failed: {:?}",
+		mutation.error()
+	);
+	assert_eq!(fetch.requests(), 2);
+	assert_eq!(fetch.payload_error(), None);
+	assert_eq!(file_count(&query_input(&root.0, "upload-form-document")), 0);
+	assert_eq!(file_count(&query_input(&root.0, "upload-form-avatar")), 0);
+	assert_eq!(query_input(&root.0, "upload-form-title").value(), "Report");
 }
 
 #[rstest]

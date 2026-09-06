@@ -145,7 +145,7 @@ fn validate_merged_candidate<P: ModelFormPolicy>(
 mod tests {
 	use super::*;
 	use reinhardt_core::model_form::{
-		AllEditableModelFields, ModelFormPayload, ModelFormUpdatingPayload,
+		AllEditableModelFields, ModelFormFileValue, ModelFormPayload, ModelFormUpdatingPayload,
 		ModelFormValidatingPayload,
 	};
 
@@ -378,8 +378,14 @@ mod tests {
 		let cleaned = data.clean_and_validate().unwrap();
 
 		// Assert
-		assert_eq!(cleaned.document(), Some(&default_file()));
-		assert_eq!(cleaned.image(), Some(&default_image()));
+		assert_eq!(
+			cleaned.document(),
+			Some(ModelFormFileValue::Stored(&default_file()))
+		);
+		assert_eq!(
+			cleaned.image(),
+			Some(ModelFormFileValue::Stored(&default_image()))
+		);
 		let raw = cleaned.into_raw();
 		assert_eq!(raw.is_defaulted("document"), true);
 		assert_eq!(raw.is_defaulted("image"), true);

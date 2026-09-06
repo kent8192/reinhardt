@@ -1,6 +1,7 @@
 use hyper::header;
 use reinhardt_core::model_form::{
-	ModelFormCleanedPayload, ModelFormPayload, ModelFormPolicy, ModelFormValidatingPayload,
+	ModelFormCleanedPayload, ModelFormPayload, ModelFormPolicy, ModelFormUpload,
+	ModelFormValidatingPayload,
 };
 use reinhardt_core::parsers::multipart::MultipartPart;
 use reinhardt_core::parsers::{MediaType, MultiPartParser, UploadedFile};
@@ -64,9 +65,9 @@ impl MultipartArguments {
 		Ok(Self { parts })
 	}
 
-	/// Revalidates model scalars before typed extraction and user-handler execution.
+	/// Revalidates model scalars and upload metadata before user-handler execution.
 	///
-	/// Only required file arguments are deferred to the multipart extractor.
+	/// File argument kinds and required uploads are checked before model validation.
 	/// The concrete payload binds the generated rules and server-owned policy;
 	/// trusted endpoint metadata narrows validation to its selected arguments.
 	pub fn validate_model_form<D, P, M>(&mut self) -> Result<(), ServerFnError>
@@ -83,8 +84,33 @@ impl MultipartArguments {
 					"This field is not allowed.",
 				)]));
 			}
+			let part = self
+				.parts
+				.iter()
+				.find(|part| part_name(part) == argument.name);
+			match (argument.kind, part) {
+				(ServerFnArgumentKind::File, Some(MultipartPart::File(file))) => {
+					if is_empty_file_input(file) {
+						return Err(invalid_request("empty_required_file", Some(argument.name)));
+					}
+				}
+				(ServerFnArgumentKind::File, None) => {
+					return Err(invalid_request("missing_argument", Some(argument.name)));
+				}
+				(
+					ServerFnArgumentKind::File | ServerFnArgumentKind::OptionalFile,
+					Some(part @ MultipartPart::Field { .. }),
+				) => {
+					return Err(kind_mismatch(argument.name, "file", part));
+				}
+				(ServerFnArgumentKind::Json, Some(part @ MultipartPart::File(_))) => {
+					return Err(kind_mismatch(argument.name, "json", part));
+				}
+				_ => {}
+			}
 		}
 		let mut payload = D::default();
+		let mut uploads = Vec::new();
 		for part in &self.parts {
 			let name = part_name(part);
 			if !P::allows(name) {
@@ -93,15 +119,24 @@ impl MultipartArguments {
 					"This field is not allowed.",
 				)]));
 			}
-			if !MultipartArgumentPolicy::<M>::allows(name) {
+			let Some(argument) = arguments.iter().find(|argument| argument.name == name) else {
 				return Err(invalid_request("unexpected_argument", Some(name)));
-			}
+			};
 			if let MultipartPart::Field { name, data } = part {
 				let value = serde_json::from_slice(data)
 					.map_err(|_| invalid_request("malformed_json", Some(name)))?;
 				payload.set_json(name, value).map_err(|error| {
 					ServerFnError::validation([(name.as_str(), error.to_string())])
 				})?;
+			} else if let MultipartPart::File(file) = part
+				&& !is_empty_file_input(file)
+			{
+				uploads.push(ModelFormUpload {
+					name: argument.name,
+					filename: file.filename.clone(),
+					content_type: file.content_type.clone(),
+					size: file.data.len() as u64,
+				});
 			}
 		}
 		let deferred_files = arguments
@@ -110,7 +145,10 @@ impl MultipartArguments {
 			.map(|argument| argument.name)
 			.collect::<Vec<_>>();
 		let payload = payload
-			.clean_and_validate_for_multipart::<MultipartArgumentPolicy<M>>(&deferred_files)?
+			.clean_and_validate_for_multipart::<MultipartArgumentPolicy<M>>(
+				&deferred_files,
+				&uploads,
+			)?
 			.into_raw();
 		for argument in arguments {
 			if argument.kind != ServerFnArgumentKind::Json {

@@ -3363,6 +3363,8 @@ fn generate_model_form_support(
 			"set_normalized_json",
 			"clean_and_validate",
 			"clean_and_validate_for_update",
+			"clean_and_validate_with_uploads",
+			"__reinhardt_uploads",
 			"clone",
 			"default",
 			"empty",
@@ -3899,10 +3901,27 @@ fn generate_model_form_support(
 		.iter()
 		.map(|field_ty| quote!(#field_ty: ::core::clone::Clone))
 		.collect();
-	let cleaned_getters = field_names
-		.iter()
-		.zip(&field_types)
-		.map(|(field_name, field_ty)| {
+	let cleaned_getters = editable_fields.iter().map(|field| {
+		let field_name = &field.name;
+		let field_ty = &field.ty;
+		if storage_field_kind(field_ty).is_some() {
+			let literal = LitStr::new(&ident_to_wire_name(field_name), field_name.span());
+			let (optional, inner_ty) = extract_option_type(field_ty);
+			let stored = if optional {
+				quote!(self.#field_name.as_ref().and_then(::core::option::Option::as_ref))
+			} else {
+				quote!(self.#field_name.as_ref())
+			};
+			quote! {
+				#[doc = "Returns a stored file or pending upload; absent and cleared files return None."]
+				#[doc = "This P2 accessor exposes the same validation candidate on native and WASM targets."]
+				pub fn #field_name(&self) -> ::core::option::Option<#core_crate::model_form::ModelFormFileValue<'_, #inner_ty>> {
+					self.__reinhardt_uploads.iter().find(|upload| upload.name == #literal)
+						.map(#core_crate::model_form::ModelFormFileValue::Uploaded)
+						.or_else(|| #stored.map(#core_crate::model_form::ModelFormFileValue::Stored))
+				}
+			}
+		} else {
 			quote! {
 				#[doc = "Returns the normalized supplied value or evaluated model default."]
 				#[doc = "This P2 cleaned-value accessor has equivalent semantics on native and WASM targets."]
@@ -3910,7 +3929,8 @@ fn generate_model_form_support(
 					self.#field_name.as_ref()
 				}
 			}
-		});
+		}
+	});
 	let merge_existing_into_cleaned: Vec<_> = field_names
 		.iter()
 		.map(|field_name| {
@@ -4267,6 +4287,7 @@ fn generate_model_form_support(
 			#(#field_names: ::core::option::Option<#field_types>,)*
 			forbidden_fields: ::std::vec::Vec<&'static str>,
 			__reinhardt_defaulted_fields: ::std::vec::Vec<&'static str>,
+			__reinhardt_uploads: ::std::vec::Vec<#core_crate::model_form::ModelFormUpload>,
 			_policy: ::core::marker::PhantomData<P>,
 		}
 
@@ -4276,6 +4297,7 @@ fn generate_model_form_support(
 					#(#field_names: data.#field_names,)*
 					forbidden_fields: data.forbidden_fields,
 					__reinhardt_defaulted_fields: data.__reinhardt_defaulted_fields,
+					__reinhardt_uploads: ::std::vec::Vec::new(),
 					_policy: ::core::marker::PhantomData,
 				}
 			}
@@ -4304,6 +4326,7 @@ fn generate_model_form_support(
 					#(#clone_fields,)*
 					forbidden_fields: self.forbidden_fields.clone(),
 					__reinhardt_defaulted_fields: self.__reinhardt_defaulted_fields.clone(),
+					__reinhardt_uploads: self.__reinhardt_uploads.clone(),
 					_policy: ::core::marker::PhantomData,
 				}
 			}
@@ -4367,17 +4390,27 @@ fn generate_model_form_support(
 				}
 
 				fn clean_and_validate_with_deferred_required_fields(
+					self,
+					deferred_fields: &[&str],
+				) -> ::core::result::Result<Self::Cleaned, #core_crate::validators::ValidationErrors> {
+					<Self as #core_crate::model_form::ModelFormValidatingPayload>::clean_and_validate_with_uploads(self, deferred_fields, &[])
+				}
+
+				fn clean_and_validate_with_uploads(
 					mut self,
 					deferred_fields: &[&str],
+					uploads: &[#core_crate::model_form::ModelFormUpload],
 				) -> ::core::result::Result<
 					Self::Cleaned,
 					#core_crate::validators::ValidationErrors,
 				> {
+					#core_crate::model_form::validate_uploaded_fields::<#schema_name, P>(uploads)?;
 					#forms_crate::model_form::clean_generated_payload_with_deferred_required_fields::<#schema_name, P, _>(
 						&mut self,
 						deferred_fields,
 					)?;
-					let cleaned = #cleaned_payload_name::from_validated_raw(self);
+					let mut cleaned = #cleaned_payload_name::from_validated_raw(self);
+					cleaned.__reinhardt_uploads = uploads.to_vec();
 					#validator_call
 					::core::result::Result::Ok(cleaned)
 				}
@@ -4385,6 +4418,7 @@ fn generate_model_form_support(
 				fn clean_and_validate_for_multipart<Q: #core_crate::model_form::ModelFormPolicy>(
 					self,
 					deferred_files: &[&str],
+					uploads: &[#core_crate::model_form::ModelFormUpload],
 				) -> ::core::result::Result<
 					Self::Cleaned,
 					#core_crate::validators::ValidationErrors,
@@ -4405,14 +4439,16 @@ fn generate_model_form_support(
 						__reinhardt_defaulted_fields: self.__reinhardt_defaulted_fields,
 						_policy: ::core::marker::PhantomData,
 					};
-					let cleaned = #core_crate::model_form::ModelFormValidatingPayload::clean_and_validate_with_deferred_required_fields(
+					let cleaned = #core_crate::model_form::ModelFormValidatingPayload::clean_and_validate_with_uploads(
 						selected,
 						deferred_files,
+						uploads,
 					)?;
 					::core::result::Result::Ok(#cleaned_payload_name {
 						#(#field_names: cleaned.#field_names,)*
 						forbidden_fields: cleaned.forbidden_fields,
 						__reinhardt_defaulted_fields: cleaned.__reinhardt_defaulted_fields,
+						__reinhardt_uploads: cleaned.__reinhardt_uploads,
 						_policy: ::core::marker::PhantomData,
 					})
 				}
@@ -4899,10 +4935,19 @@ fn generate_model_form_support(
 				fn clean_and_validate_with_deferred_required_fields(
 					self,
 					deferred_fields: &[&str],
+				) -> ::core::result::Result<Self::Cleaned, #core_crate::validators::ValidationErrors> {
+					<Self as #core_crate::model_form::ModelFormValidatingPayload>::clean_and_validate_with_uploads(self, deferred_fields, &[])
+				}
+
+				fn clean_and_validate_with_uploads(
+					self,
+					deferred_fields: &[&str],
+					uploads: &[#core_crate::model_form::ModelFormUpload],
 				) -> ::core::result::Result<
 					Self::Cleaned,
 					#core_crate::validators::ValidationErrors,
 				> {
+					#core_crate::model_form::validate_uploaded_fields::<#schema_name, P>(uploads)?;
 					let mut errors = #core_crate::validators::ValidationErrors::new();
 					for &field in deferred_fields {
 						if !<#schema_name as #core_crate::model_form::ModelFormSchema>::fields()
@@ -4928,7 +4973,10 @@ fn generate_model_form_support(
 					if !errors.is_empty() {
 						return ::core::result::Result::Err(errors);
 					}
-					self.__reinhardt_clean_and_validate(true, true, deferred_fields, None)
+					let mut cleaned = self.__reinhardt_clean_and_validate(true, false, deferred_fields, None)?;
+					cleaned.__reinhardt_uploads = uploads.to_vec();
+					#validator_call
+					::core::result::Result::Ok(cleaned)
 				}
 		}
 
@@ -6122,6 +6170,18 @@ pub(crate) fn generate_named_model_form_contract(
 			fn clean_and_validate(self) -> ::core::result::Result<Self::Cleaned, #core_crate::validators::ValidationErrors> {
 				<#legacy_data_name<#policy_name> as #core_crate::model_form::ModelFormValidatingPayload>::clean_and_validate(
 					self.__reinhardt_into_legacy(),
+				).map(#cleaned_data_name)
+			}
+
+			fn clean_and_validate_with_uploads(
+				self,
+				deferred_fields: &[&str],
+				uploads: &[#core_crate::model_form::ModelFormUpload],
+			) -> ::core::result::Result<Self::Cleaned, #core_crate::validators::ValidationErrors> {
+				<#legacy_data_name<#policy_name> as #core_crate::model_form::ModelFormValidatingPayload>::clean_and_validate_with_uploads(
+					self.__reinhardt_into_legacy(),
+					deferred_fields,
+					uploads,
 				).map(#cleaned_data_name)
 			}
 

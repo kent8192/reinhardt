@@ -893,7 +893,12 @@ mod tests {
 		let cleaned = existing_document
 			.clean_and_validate_for_update(&existing_with_document)
 			.expect("the existing stored file reference should be trusted");
-		assert_eq!(cleaned.document(), Some(&existing_with_document.document));
+		assert_eq!(
+			cleaned.document(),
+			Some(reinhardt_core::model_form::ModelFormFileValue::Stored(
+				&existing_with_document.document
+			))
+		);
 
 		let mut document = FormProjectModelFormData::<AllEditableModelFields>::empty();
 		document

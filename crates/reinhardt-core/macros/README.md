@@ -240,6 +240,11 @@ Provides compile-time code generation for common patterns.
     retain these values across snapshots and persistence.
   - Existing file references are read by Rust field name; model serde renaming
     or skipped serialization does not change storage-reference validation
+  - Cleaned file/image getters return `Option<ModelFormFileValue<'_, T>>`:
+    `Stored` exposes a validated storage reference and `Uploaded` exposes pending
+    upload metadata during browser and multipart validation. Missing files and
+    nullable clears return `None`; scalar getters retain their typed values.
+    Upload metadata is excluded when converting the candidate into a raw payload.
   - Example: `#[model(app_label = "polls", form(name = QuestionCreateForm,
     fields(text)))]` generates `QuestionCreateForm`,
     `QuestionCreateFormData`, `QuestionCreateFormSchema`, and

@@ -3,7 +3,8 @@ use std::marker::PhantomData;
 use reinhardt_core::{
 	model_form::{
 		ModelFormCleanedPayload, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload,
-		ModelFormPayloadError, ModelFormPolicy, ModelFormSchema, ModelFormValidatingPayload,
+		ModelFormPayloadError, ModelFormPolicy, ModelFormSchema, ModelFormUpload,
+		ModelFormValidatingPayload,
 	},
 	validators::{ValidationError, ValidationErrors},
 };
@@ -144,6 +145,16 @@ impl<P: ModelFormPolicy> ModelFormCleanedPayload for CleanedUploadModelFormData<
 
 impl<P: ModelFormPolicy> ModelFormValidatingPayload for UploadModelFormData<P> {
 	type Cleaned = CleanedUploadModelFormData<P>;
+
+	fn clean_and_validate_with_uploads(
+		self,
+		_deferred_fields: &[&str],
+		_uploads: &[ModelFormUpload],
+	) -> Result<Self::Cleaned, ValidationErrors> {
+		// This manual fixture validates only the title; generated payload tests
+		// separately exercise validation that depends on selected upload metadata.
+		self.clean_and_validate()
+	}
 
 	fn clean_and_validate(self) -> Result<Self::Cleaned, ValidationErrors> {
 		if self.title.as_deref() == Some("Rejected by validation") {

@@ -1,0 +1,5 @@
+error: named model form fields `foo_bar` and `foo__bar` both generate field variant `FooBar`
+ --> tests/ui/model/fail/named_form_field_variant_collision.rs:7:50
+  |
+7 |     form(name = DocumentCreateForm, fields(foo_bar, foo__bar))
+  |                                                     ^^^^^^^^

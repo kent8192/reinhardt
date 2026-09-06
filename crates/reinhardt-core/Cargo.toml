@@ -22,7 +22,7 @@ reinhardt-macros = { workspace = true, optional = true }
 reinhardt-event-catalog = { workspace = true, optional = true }
 
 # External dependencies for re-export
-serde = { workspace = true, features = ["derive"], optional = true}
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 async-trait = { workspace = true }
 inventory = "0.3"
@@ -141,7 +141,7 @@ std = []
 json = []
 xml = ["dep:quick-xml", "dep:serde-xml-rs"]
 yaml = ["dep:serde_yaml"]
-serde = ["dep:serde"]
+serde = []
 jsonschema = ["dep:jsonschema"]
 parallel = ["dep:rayon"]
 i18n = ["dep:fluent-bundle", "dep:unic-langid"]

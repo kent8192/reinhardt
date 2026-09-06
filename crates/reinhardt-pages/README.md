@@ -50,14 +50,19 @@ selector whitespace.
 - **Action State Helpers**: `use_action_state` and `Action::dispatching*` reduce async mutation boilerplate
 - **Headless UI Primitives**: `reinhardt_pages::ui::{ActionButton, ActionResultPanel, ResourcePanel}` compose typed action and resource states without imposing visual styles
 - **Controlled Form Elements**: `bind:` synchronizes typed signals with string-valued, checkbox, radio, numeric, and select controls
-- **Model-backed Forms**: `#[model(form = true)]` supplies typed fields and one
-  policy-safe payload to `form!` on native and WASM targets
+- **Model-backed Forms**: legacy `#[model(form = true)]` remains supported;
+  `#[model(form(name = Contract, fields(...)))]` supplies one named,
+  target-neutral payload contract to `form!` on native and WASM targets
 
 For a React concept mapping, see
 [Reinhardt Pages for React developers](docs/react_to_reinhardt.md).
 
 For route-level loaders, prepare/commit navigation, prefetch, cancellation, and
 SSR hydration, see [Route-level data loaders](docs/route_loaders.md).
+
+For asynchronous route access checks across navigation, loaders, prefetch,
+SSR, hydration, and authentication invalidation, see
+[Asynchronous navigation guards](docs/navigation_guards.md).
 
 ## Headless UI primitives
 
@@ -465,9 +470,10 @@ structured field errors into the same runtime state.
 
 For model-derived controls, explicit field allowlists, display overrides,
 trusted server setters, and native async persistence, see
-[Model-backed Pages forms](docs/model_forms.md). Model mode submits one
-model-generated generic payload. The form-specific policy and data alias remain
-internal to the `form!` expression and cannot be named by callers.
+[Model-backed Pages forms](docs/model_forms.md). Legacy model mode submits one
+generic payload whose policy and data alias are internal to the `form!`
+expression. Named contracts instead expose a concrete payload and use
+`model_form: Contract` as the single model-form selection source.
 
 Create the form with `form!`, then attach runtime behavior to that generated
 form:
@@ -674,7 +680,8 @@ The function-like `#[server_fn]` API infers multipart transport when a
 client-visible argument is exactly `UploadedFile` or `Option<UploadedFile>`.
 Argument identifiers become multipart part names. All other client-visible
 arguments remain scalar JSON parts, and the response codec remains JSON; do
-not add a multipart codec option.
+not add a multipart codec option. Raw Rust identifiers use their unraw part
+name, such as `type` for `r#type`.
 
 ```rust,no_run
 use reinhardt_core::parsers::UploadedFile;
@@ -1402,8 +1409,8 @@ fn counter() -> View {
 | `static` | Static file serving |
 | `urls` | URL routing integration |
 | `debug-hooks` | Debug hooks for development |
-| `uuid` | UUID type support |
-| `chrono` | Chrono date/time type support |
+| `uuid` | Compatibility marker; UUID types are always available for named model-form contracts |
+| `chrono` | Compatibility marker; Chrono types are always available for named model-form contracts |
 | `ast` | AST processing support |
 | `web-sys-full` | All required web-sys features for WASM applications |
 

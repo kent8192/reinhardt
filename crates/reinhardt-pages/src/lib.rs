@@ -302,6 +302,22 @@
 //! - [`static_resolver`]: Static file URL resolution (collectstatic support)
 //! - [`mod@style`]: Scoped class composition and typed runtime CSS values
 //!
+//! ## Asynchronous navigation guards
+//!
+//! Use `#[navigation_guard]` with [`NavigationContext`] and
+//! [`NavigationDecision`] to gate a route tree before its loaders and again
+//! before commit. Guards use the existing [`QueryClient`] for fresh,
+//! deduplicated reads, and the same contract applies to SPA navigation,
+//! prefetch, SSR, and initial hydration. Navigation guards control rendering
+//! and navigation UX; endpoint authentication and authorization remain
+//! mandatory server-side checks.
+//!
+//! The existing HTTP `Guard<P>`/`guard!`, synchronous
+//! `ClientRoute::with_guard`, and render-time `guard()`/`guard_or()` APIs are
+//! unchanged. See [Asynchronous navigation guards](docs/navigation_guards.md)
+//! for the complete lifecycle, SSR status mapping, redirect semantics, and
+//! authentication invalidation contract.
+//!
 //! ## Structured server-function errors
 //!
 //! [`ServerFnError`] carries a versioned error envelope with a stable kind,
@@ -1011,8 +1027,13 @@ pub use router::loader::{
 	LoaderStoreScope, RouteLoader, RouteLoaderError, active_loader_store, canonical_loader_inputs,
 	enter_loader_store, loader_cache_id, with_loader_store,
 };
+pub use router::{
+	NavigationContext, NavigationDecision, NavigationGuard, NavigationGuardError,
+	NavigationGuardExecutor, NavigationGuardFuture, NavigationGuardRegistration,
+	NavigationGuardRegistry, NavigationKind, execute_navigation_guards,
+};
+pub use router::{NavigationGuardId, Path, Query, RouteLoaderId};
 pub use router::{NavigationType, navigate, navigate_named, navigate_or_reload};
-pub use router::{Path, Query, RouteLoaderId};
 pub use server_fn::{
 	ServerFn, ServerFnError, ServerFnErrorKind, ServerFnErrorPayload, ServerFnFieldError,
 };
@@ -1039,6 +1060,7 @@ pub use reinhardt_pages_macros::form;
 pub use reinhardt_pages_macros::head;
 pub use reinhardt_pages_macros::layout;
 pub use reinhardt_pages_macros::loader;
+pub use reinhardt_pages_macros::navigation_guard;
 pub use reinhardt_pages_macros::page;
 pub use reinhardt_pages_macros::style;
 pub use reinhardt_pages_macros::style_def;

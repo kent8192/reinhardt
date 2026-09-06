@@ -1,0 +1,21 @@
+error[E0271]: type mismatch resolving `<ModelFormPayloadSelection<QuestionCreateFormData, QuestionCreateFormPolicy> as ModelFormSelectionPayload<QuestionCreateFormSchema, QuestionCreateFormPolicy>>::Payload == DifferentPayload`
+  --> tests/ui/form/fail/model_contract_payload_mismatch.rs:48:14
+   |
+48 |       let _form = form! {
+   |  _________________^
+49 | |         name: QuestionForm,
+50 | |         model_form: QuestionCreateForm,
+51 | |         server_fn: save_different,
+52 | |     };
+   | |_____^ expected `DifferentPayload`, found `QuestionCreateFormData`
+   |
+note: required for `save_different::marker` to implement `reinhardt_pages::form::ModelFormServerFn<reinhardt_pages::form::ModelFormPayloadSelection<support::QuestionCreateFormData, QuestionCreateFormPolicy>, QuestionCreateFormSchema, QuestionCreateFormPolicy>`
+  --> tests/ui/form/fail/model_contract_payload_mismatch.rs:42:1
+   |
+42 | #[server_fn(model_form = true)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: associated types for the current `impl` cannot be restricted in `where` clauses
+   = note: associated types for the current `impl` cannot be restricted in `where` clauses
+   = note: associated types for the current `impl` cannot be restricted in `where` clauses
+   = note: associated types for the current `impl` cannot be restricted in `where` clauses
+   = note: this error originates in the macro `form` which comes from the expansion of the attribute macro `server_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

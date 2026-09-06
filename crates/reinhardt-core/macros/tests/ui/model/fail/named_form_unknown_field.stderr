@@ -1,0 +1,5 @@
+error: named model form field `missing` does not exist on `Cluster`
+ --> tests/ui/model/fail/named_form_unknown_field.rs:7:40
+  |
+7 |     form(name = ClusterCreateForm, fields(missing))
+  |                                           ^^^^^^^

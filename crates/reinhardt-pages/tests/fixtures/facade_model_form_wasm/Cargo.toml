@@ -1,0 +1,28 @@
+[package]
+name = "reinhardt-pages-facade-model-form-wasm-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+reinhardt = { path = "../../../../../", package = "reinhardt-web", default-features = false, features = ["pages"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+web-sys = { version = "0.3", features = [
+	"console",
+	"Document",
+	"Element",
+	"HtmlFormElement",
+	"HtmlInputElement",
+	"HtmlTextAreaElement",
+	"HtmlSelectElement",
+	"HtmlOptionElement",
+	"Event",
+	"EventTarget",
+	"File",
+	"FileList",
+	"FormData",
+	"Window",
+] }

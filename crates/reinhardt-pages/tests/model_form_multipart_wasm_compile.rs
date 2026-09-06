@@ -55,3 +55,59 @@ mod json {
 		let _ = form.field("title");
 	}
 }
+
+mod generated_contract {
+	use reinhardt_macros::model;
+	use reinhardt_pages::form;
+	use reinhardt_pages::server_fn::{ServerFnError, server_fn};
+
+	#[model(
+		app_label = "clusters",
+		table_name = "clusters",
+		form(name = PageClusterCreateForm, fields(r#type)),
+		info = false
+	)]
+	pub(crate) struct PageCluster {
+		#[field(primary_key = true)]
+		pub id: i64,
+		#[field(max_length = 100)]
+		pub r#type: String,
+	}
+
+	#[derive(Debug, serde::Deserialize, serde::Serialize)]
+	pub(crate) struct PageClusterResponse {
+		pub token: String,
+	}
+
+	#[server_fn(model_form = true)]
+	pub(crate) async fn save_page_cluster(
+		payload: PageClusterCreateFormData,
+	) -> Result<PageClusterResponse, ServerFnError> {
+		let _ = payload;
+		Ok(PageClusterResponse {
+			token: "saved".to_owned(),
+		})
+	}
+
+	#[test]
+	fn generated_named_model_form_dispatch_compiles_for_wasm() {
+		let form = form! {
+			name: PageClusterForm,
+			model_form: PageClusterCreateForm,
+			server_fn: save_page_cluster,
+			overrides: {
+				r#type: {
+					widget: TextArea,
+				},
+			},
+		};
+		let _payload: PageClusterCreateFormData = form.data().expect("empty payload is valid");
+		let _typed_submit = async {
+			let response = form
+				.submit_response()
+				.await
+				.expect("the generated response type is concrete");
+			let _: PageClusterResponse = response;
+		};
+	}
+}

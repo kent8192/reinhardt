@@ -65,7 +65,7 @@ pub(super) struct QueryBrowser {
 	timer: RefCell<Option<BrowserTimerGuard>>,
 	_listener: Option<VisibilityListenerGuard>,
 	counts: Rc<BrowserResourceCounts>,
-	#[cfg(feature = "testing")]
+	#[cfg(any(feature = "testing", test))]
 	visibility_override: Cell<Option<bool>>,
 }
 
@@ -112,7 +112,7 @@ impl QueryBrowser {
 			timer: RefCell::new(None),
 			_listener: listener,
 			counts,
-			#[cfg(feature = "testing")]
+			#[cfg(any(feature = "testing", test))]
 			visibility_override: Cell::new(None),
 		}
 	}
@@ -169,7 +169,7 @@ impl QueryBrowser {
 	}
 
 	pub(super) fn document_is_visible(&self) -> bool {
-		#[cfg(feature = "testing")]
+		#[cfg(any(feature = "testing", test))]
 		if let Some(visible) = self.visibility_override.get() {
 			return visible;
 		}
@@ -178,17 +178,17 @@ impl QueryBrowser {
 			.is_none_or(|document| document.visibility_state() != web_sys::VisibilityState::Hidden)
 	}
 
-	#[cfg(feature = "testing")]
+	#[cfg(any(feature = "testing", test))]
 	pub(super) fn set_visibility_for_test(&self, visible: bool) {
 		self.visibility_override.set(Some(visible));
 	}
 
-	#[cfg(feature = "testing")]
+	#[cfg(any(feature = "testing", test))]
 	pub(super) fn resource_counts(&self) -> (usize, usize) {
 		(self.counts.listeners.get(), self.counts.timers.get())
 	}
 
-	#[cfg(feature = "testing")]
+	#[cfg(any(feature = "testing", test))]
 	pub(super) fn resource_probe(&self) -> QueryBrowserResourceProbe {
 		QueryBrowserResourceProbe {
 			counts: Rc::downgrade(&self.counts),
@@ -211,27 +211,27 @@ impl QueryBrowser {
 
 	pub(super) fn schedule(&self, _deadline_ms: Option<u64>, _now_ms: u64) {}
 
-	#[cfg(feature = "testing")]
+	#[cfg(any(feature = "testing", test))]
 	pub(super) fn set_visibility_for_test(&self, _visible: bool) {}
 
-	#[cfg(feature = "testing")]
+	#[cfg(any(feature = "testing", test))]
 	pub(super) fn resource_counts(&self) -> (usize, usize) {
 		(0, 0)
 	}
 
-	#[cfg(feature = "testing")]
+	#[cfg(any(feature = "testing", test))]
 	pub(super) fn resource_probe(&self) -> QueryBrowserResourceProbe {
 		QueryBrowserResourceProbe
 	}
 }
 
 /// Weak testing view of browser resources owned by a query client.
-#[cfg(all(feature = "testing", wasm))]
+#[cfg(all(any(feature = "testing", test), wasm))]
 pub struct QueryBrowserResourceProbe {
 	counts: Weak<BrowserResourceCounts>,
 }
 
-#[cfg(all(feature = "testing", wasm))]
+#[cfg(all(any(feature = "testing", test), wasm))]
 impl QueryBrowserResourceProbe {
 	/// Returns active visibility listeners and query maintenance timers.
 	pub fn counts(&self) -> (usize, usize) {
@@ -242,10 +242,10 @@ impl QueryBrowserResourceProbe {
 }
 
 /// Weak testing view of browser resources owned by a query client.
-#[cfg(all(feature = "testing", not(wasm)))]
+#[cfg(all(any(feature = "testing", test), not(wasm)))]
 pub struct QueryBrowserResourceProbe;
 
-#[cfg(all(feature = "testing", not(wasm)))]
+#[cfg(all(any(feature = "testing", test), not(wasm)))]
 impl QueryBrowserResourceProbe {
 	/// Returns active visibility listeners and query maintenance timers.
 	pub fn counts(&self) -> (usize, usize) {

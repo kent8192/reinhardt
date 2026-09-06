@@ -134,6 +134,15 @@ pub trait FromRequest: Sized {
 	/// Returns [`ExtractError`] when a required parameter is missing
 	/// or fails to parse.
 	fn from_request(ctx: &RouteContext) -> Result<Self, ExtractError>;
+
+	/// Returns route metadata generated for a component props type.
+	#[doc(hidden)]
+	fn component_route_metadata() -> Option<(
+		Option<super::loader::RouteLoaderId>,
+		Option<super::navigation_guard::NavigationGuardId>,
+	)> {
+		None
+	}
 }
 
 /// Extractor for a single named path parameter, parsed via [`FromStr`].

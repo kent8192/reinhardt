@@ -29,7 +29,7 @@ use super::retry::{
 };
 use super::runtime::{ScopedQueryFuture, duration_ms, now_ms, spawn_query_task};
 use super::state::{QueryDefaults, QueryOptions};
-#[cfg(any(wasm, test))]
+#[cfg(any(native, wasm, test))]
 use super::state::{QueryHydrationSnapshot, QueryHydrationState};
 use crate::cancellation::{AbortableTaskGuard, CancellationSource, scope_cancellation};
 use crate::reactive::entity::{
@@ -297,6 +297,8 @@ pub(super) struct QueryClientInner {
 	consumed_hydration_families: RefCell<HashSet<&'static str>>,
 	#[cfg(any(wasm, test))]
 	hydration_table_installed: Cell<bool>,
+	#[cfg(any(wasm, test))]
+	hydration_blocked: Cell<bool>,
 	families: RefCell<HashMap<&'static str, QueryFamilyMetadata>>,
 	deadlines: RefCell<BinaryHeap<Reverse<ClientDeadline>>>,
 	next_deadline_sequence: Cell<u64>,
@@ -440,6 +442,8 @@ impl QueryClient {
 			consumed_hydration_families: RefCell::new(HashSet::new()),
 			#[cfg(any(wasm, test))]
 			hydration_table_installed: Cell::new(false),
+			#[cfg(any(wasm, test))]
+			hydration_blocked: Cell::new(false),
 			families: RefCell::new(HashMap::new()),
 			deadlines: RefCell::new(BinaryHeap::new()),
 			next_deadline_sequence: Cell::new(0),
@@ -579,7 +583,7 @@ impl QueryClient {
 
 	/// Observes a query without installing an application context.
 	#[doc(hidden)]
-	#[cfg(feature = "testing")]
+	#[cfg(any(feature = "testing", test))]
 	pub fn observe_for_test<T, E, R>(
 		&self,
 		descriptor: QueryDescriptor<T, E>,
@@ -627,6 +631,15 @@ impl QueryClient {
 
 	pub(super) fn same_instance(&self, other: &Self) -> bool {
 		Rc::ptr_eq(&self.inner, &other.inner)
+	}
+
+	pub(crate) fn hydration_is_blocked(&self) -> bool {
+		#[cfg(any(wasm, test))]
+		{
+			self.inner.hydration_blocked.get()
+		}
+		#[cfg(not(any(wasm, test)))]
+		false
 	}
 
 	#[cfg(native)]
@@ -2949,6 +2962,44 @@ impl<T: Clone + 'static, E: Clone + 'static> Future for QueryResultFuture<T, E> 
 }
 
 impl<T: Clone + 'static, E: Clone + 'static> QueryLease<T, E> {
+	#[cfg(native)]
+	pub(crate) fn hydration_key(&self) -> &str {
+		&self.inner.entry.hydration_id
+	}
+
+	#[cfg(native)]
+	pub(crate) fn hydration_snapshot_value(&self) -> Option<Value>
+	where
+		T: Serialize,
+		E: Serialize,
+	{
+		if self.inner.entry.is_normalized() {
+			return self
+				.inner
+				.entry
+				.normalized_hydration_snapshot(self.inner.policy.stale_time);
+		}
+		let manual_refetch_pending = self.inner.manual_refetch_pending.get();
+		let snapshot = match self.inner.entry.state.get() {
+			ResourceState::Success(data) => QueryHydrationSnapshot {
+				state: QueryHydrationState::Success(data),
+				refetch_error: self.inner.entry.refetch_error.get(),
+				is_fetching: self.inner.entry.is_fetching.get()
+					&& (self.inner.policy.enabled || manual_refetch_pending),
+				is_stale: self.inner.entry.is_stale(self.inner.policy.stale_time),
+			},
+			ResourceState::Error(error) => QueryHydrationSnapshot {
+				state: QueryHydrationState::Error(error),
+				refetch_error: None,
+				is_fetching: self.inner.entry.is_fetching.get()
+					&& (self.inner.policy.enabled || manual_refetch_pending),
+				is_stale: self.inner.entry.is_stale(self.inner.policy.stale_time),
+			},
+			ResourceState::Loading => panic!("query hydration requires a settled query"),
+		};
+		Some(serde_json::to_value(snapshot).expect("query snapshots must serialize for hydration"))
+	}
+
 	pub(crate) fn is_evicted(&self) -> bool {
 		self.inner.entry.evicted.get()
 	}
@@ -3032,7 +3083,7 @@ impl QueryClient {
 		self.acquire_with_options(descriptor, options, QueryOptions::default())
 	}
 
-	pub(super) fn acquire_with_options<T, E, R>(
+	pub(crate) fn acquire_with_options<T, E, R>(
 		&self,
 		descriptor: QueryDescriptor<T, E>,
 		options: QueryAcquireOptions,
@@ -3064,6 +3115,10 @@ impl QueryClient {
 		T: Clone + Serialize + DeserializeOwned + 'static,
 		E: Clone + Serialize + DeserializeOwned + 'static,
 	{
+		#[cfg(any(wasm, test))]
+		if self.inner.hydration_blocked.get() {
+			return Ok(());
+		}
 		let hydrated_state = serde_json::from_value(serialized.clone())?;
 		self.register_descriptor_family(
 			key.family_id(),
@@ -3106,6 +3161,9 @@ impl QueryClient {
 		T: Clone + Serialize + DeserializeOwned + 'static,
 		E: Clone + Serialize + DeserializeOwned + 'static,
 	{
+		if self.inner.hydration_blocked.get() {
+			return Ok(());
+		}
 		if self
 			.inner
 			.consumed_hydration_families
@@ -3186,6 +3244,9 @@ impl QueryClient {
 		T: Clone + Serialize + DeserializeOwned + 'static,
 		E: Clone + Serialize + DeserializeOwned + 'static,
 	{
+		if self.inner.hydration_blocked.get() {
+			return Ok(());
+		}
 		let (key, _fetcher, _ssr_prefetch, family_types, normalization) =
 			descriptor.clone().into_parts();
 		let Some(normalization) = normalization else {
@@ -3382,6 +3443,25 @@ impl QueryClient {
 		self.inner.entities.reset_hydration();
 	}
 
+	pub(crate) fn clear_for_authentication_change(&self) {
+		#[cfg(any(wasm, test))]
+		{
+			self.inner.hydration_blocked.set(true);
+			self.inner.hydration_table_installed.set(true);
+		}
+		let removed = std::mem::take(&mut *self.inner.entries.borrow_mut())
+			.into_values()
+			.collect::<Vec<_>>();
+		for cached in removed {
+			(cached.cancel)();
+			(cached.evict)();
+		}
+		self.inner.entity_dependents.borrow_mut().clear();
+		self.inner.deadlines.borrow_mut().clear();
+		self.inner.entities.clear_for_authentication_change();
+		self.inner.refresh_browser_timer();
+	}
+
 	/// Evicts one exact typed query and clears any active handles of its cached entry.
 	pub fn remove<T, E>(&self, key: &QueryKey<T, E>) {
 		self.validate_registered_family_types(key.family_id(), key.family_types());
@@ -3467,19 +3547,19 @@ pub(crate) fn hydration_id(identity: &QueryIdentity) -> String {
 }
 
 /// Overrides document visibility for browser query lifecycle tests.
-#[cfg(feature = "testing")]
+#[cfg(any(feature = "testing", test))]
 pub fn set_query_visibility_for_test(client: &QueryClient, visible: bool) {
 	client.inner.browser.set_visibility_for_test(visible);
 }
 
 /// Returns active visibility listeners and query maintenance timers for a query client.
-#[cfg(feature = "testing")]
+#[cfg(any(feature = "testing", test))]
 pub fn query_browser_resource_counts(client: &QueryClient) -> (usize, usize) {
 	client.inner.browser.resource_counts()
 }
 
 /// Captures a weak view of browser resources for final-client-drop tests.
-#[cfg(feature = "testing")]
+#[cfg(any(feature = "testing", test))]
 pub fn query_browser_resource_probe_for_test(
 	client: &QueryClient,
 ) -> super::browser::QueryBrowserResourceProbe {

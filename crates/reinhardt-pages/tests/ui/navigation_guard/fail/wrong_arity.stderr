@@ -1,0 +1,14 @@
+error: #[navigation_guard] functions must accept exactly one NavigationContext
+ --> tests/ui/navigation_guard/fail/wrong_arity.rs:5:2
+  |
+5 | /     _left: NavigationContext,
+6 | |     _right: NavigationContext,
+  | |______________________________^
+
+warning: unused imports: `NavigationContext`, `NavigationDecision`, and `NavigationGuardError`
+ --> tests/ui/navigation_guard/fail/wrong_arity.rs:1:23
+  |
+1 | use reinhardt_pages::{NavigationContext, NavigationDecision, NavigationGuardError, navigation_guard};
+  |                       ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

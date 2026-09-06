@@ -1,0 +1,5 @@
+error: `form = true` cannot be combined with `form(...)`
+ --> tests/ui/model/fail/named_form_conflicts_with_legacy.rs:8:2
+  |
+8 |     form(name = ClusterCreateForm, fields(name))
+  |     ^^^^

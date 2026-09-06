@@ -1,0 +1,5 @@
+error: form! `model_form` cannot be combined with legacy model-form keys
+ --> tests/ui/form/fail/model_form_mixed_source.rs:7:3
+  |
+7 |         name: CreateClusterForm,
+  |         ^^^^

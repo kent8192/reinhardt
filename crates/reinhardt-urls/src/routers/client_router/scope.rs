@@ -118,11 +118,12 @@ impl RouteScope {
 		let own_params = extract_param_names(own_path);
 		self.validate_param_chain(&full_pattern, &own_params)?;
 		let pattern = compile_pattern(&full_pattern)?;
-		let route = ClientRoute::from_route_handler(
+		let mut route = ClientRoute::from_route_handler(
 			Some(P::name().to_string()),
 			pattern,
 			from_request_handler(handler, full_pattern.clone()),
 		);
+		route.set_navigation_guard_id(P::navigation_guard_id());
 		let metadata = ResolvedRouteMetadata::new(
 			Some(P::name().to_string()),
 			own_path,
@@ -131,6 +132,7 @@ impl RouteScope {
 			Some(P::function_name().to_string()),
 			Some(P::props_type_name().to_string()),
 			P::loader_id(),
+			P::navigation_guard_id(),
 			RouteMetadata::default(),
 		);
 		self.register_leaf(LeafRegistration {
@@ -175,11 +177,12 @@ impl RouteScope {
 		}
 		let child_nodes = child_scope.nodes;
 
-		let route = ClientRoute::from_layout_handler(
+		let mut route = ClientRoute::from_layout_handler(
 			Some(P::name().to_string()),
 			pattern,
 			from_layout_request_handler(handler, full_pattern.clone()),
 		);
+		route.set_navigation_guard_id(P::navigation_guard_id());
 		let metadata = ResolvedRouteMetadata::new(
 			Some(P::name().to_string()),
 			own_path,
@@ -188,6 +191,7 @@ impl RouteScope {
 			Some(P::function_name().to_string()),
 			Some(P::props_type_name().to_string()),
 			P::loader_id(),
+			P::navigation_guard_id(),
 			RouteMetadata::default(),
 		);
 		self.nodes.push(RouteNode::new(
@@ -226,11 +230,12 @@ impl RouteScope {
 		self.has_index = true;
 		let full_pattern = self.prefix.clone();
 		let pattern = compile_pattern(&full_pattern)?;
-		let route = ClientRoute::from_route_handler(
+		let mut route = ClientRoute::from_route_handler(
 			Some(P::name().to_string()),
 			pattern,
 			from_request_handler(handler, full_pattern.clone()),
 		);
+		route.set_navigation_guard_id(P::navigation_guard_id());
 		let metadata = ResolvedRouteMetadata::new(
 			Some(P::name().to_string()),
 			"",
@@ -239,6 +244,7 @@ impl RouteScope {
 			Some(P::function_name().to_string()),
 			Some(P::props_type_name().to_string()),
 			P::loader_id(),
+			P::navigation_guard_id(),
 			RouteMetadata::default(),
 		);
 		self.register_leaf(LeafRegistration {
@@ -284,6 +290,7 @@ impl RouteScope {
 			Some(name.to_string()),
 			path,
 			full_pattern.clone(),
+			None,
 			None,
 			None,
 			None,
@@ -348,6 +355,7 @@ impl RouteScope {
 			None,
 			None,
 			None,
+			None,
 			RouteMetadata::default(),
 		);
 		self.nodes.push(RouteNode::new(
@@ -393,6 +401,7 @@ impl RouteScope {
 			Some(name.to_string()),
 			"",
 			full_pattern.clone(),
+			None,
 			None,
 			None,
 			None,

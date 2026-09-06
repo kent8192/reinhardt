@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- *(model-form)* preserve UTC datetime values and fractional seconds in typed runtime updates
+- *(pages)* keep uuid and chrono available for named model-form contracts
+
+### Testing
+
+- *(pages)* remove obsolete tinyvec version pins from isolated consumer fixtures
+
 ## [0.4.0-alpha.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.4.0-alpha.12...reinhardt-pages@v0.4.0-alpha.13) - 2026-09-02
 
 ### Fixed

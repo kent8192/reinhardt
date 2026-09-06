@@ -8,8 +8,9 @@ use serde::{Deserialize, Serialize};
 include!("ui/model/support.rs");
 
 use model_form::{
-	AllEditableModelFields, ModelFormFieldKind, ModelFormPayload, ModelFormPolicy,
-	ModelFormPrimaryKeyFields, ModelFormSchema, NativeModelFormPayload,
+	AllEditableModelFields, ModelFormContract, ModelFormContractField, ModelFormContractSchema,
+	ModelFormFieldKind, ModelFormPayload, ModelFormPolicy, ModelFormPrimaryKeyFields,
+	ModelFormSchema, NativeModelFormPayload,
 };
 
 #[model(app_label = "forms", form = true)]
@@ -67,6 +68,77 @@ struct BooleanDocument {
 	published: bool,
 }
 
+#[model(app_label = "forms")]
+#[derive(Clone, Deserialize, Serialize)]
+struct ClusterOrganization {
+	#[field(primary_key = true)]
+	id: i64,
+}
+
+#[model(
+	app_label = "forms",
+	form(name = ClusterCreateForm, fields(name, api_url))
+)]
+#[derive(Clone, Deserialize, Serialize)]
+struct Cluster {
+	#[field(primary_key = true)]
+	id: i64,
+	#[field(editable = false)]
+	#[rel(foreign_key)]
+	organization: db::associations::ForeignKeyField<ClusterOrganization>,
+	#[field(min_length = 1, max_length = 63)]
+	name: String,
+	#[field(url = true, max_length = 2048, null = true)]
+	api_url: Option<String>,
+	#[field(max_length = 64)]
+	secret: String,
+}
+
+#[model(
+	app_label = "forms",
+	form(name = BooleanCreateForm, fields(published))
+)]
+#[derive(Clone, Deserialize, Serialize)]
+struct NamedBooleanDocument {
+	#[field(primary_key = true)]
+	id: i64,
+	published: bool,
+}
+
+#[model(
+	app_label = "forms",
+	form(name = RawIdentifierCreateForm, fields(r#type))
+)]
+#[derive(Clone, Deserialize, Serialize)]
+struct RawIdentifierDocument {
+	#[field(primary_key = true)]
+	id: i64,
+	#[field(max_length = 32)]
+	r#type: String,
+}
+
+#[model(
+	app_label = "forms",
+	form(
+		name = SupportedScalarCreateForm,
+		fields(count, ratio, price, external_id, day, time, aware_at, naive_at, metadata)
+	)
+)]
+#[derive(Clone, Deserialize, Serialize)]
+struct SupportedScalarDocument {
+	#[field(primary_key = true)]
+	id: i64,
+	count: i32,
+	ratio: f64,
+	price: rust_decimal::Decimal,
+	external_id: uuid::Uuid,
+	day: chrono::NaiveDate,
+	time: chrono::NaiveTime,
+	aware_at: chrono::DateTime<chrono::Utc>,
+	naive_at: chrono::NaiveDateTime,
+	metadata: serde_json::Value,
+}
+
 struct TitleOnly;
 
 impl ModelFormPolicy for TitleOnly {
@@ -94,6 +166,131 @@ fn native_form_payload_defaults_an_omitted_boolean_without_changing_json_deseria
 	let json: BooleanDocumentModelFormData<PublishedOnly> =
 		serde_json::from_value(serde_json::json!({})).expect("JSON payload should decode");
 	assert_eq!(json.published(), None);
+}
+
+#[test]
+fn named_contract_is_strict_and_preserves_selected_field_order() {
+	assert_eq!(
+		<ClusterCreateFormSchema as ModelFormContractSchema>::contract_fields()
+			.iter()
+			.map(|field| field.name)
+			.collect::<Vec<_>>(),
+		["name", "api_url"]
+	);
+	assert_eq!(
+		<ClusterCreateForm as ModelFormContract>::fields(),
+		[ClusterCreateFormField::Name, ClusterCreateFormField::ApiUrl,]
+	);
+	assert_eq!(ClusterCreateFormField::Name.name(), "name");
+	assert_eq!(ClusterCreateForm::name().name, "name");
+
+	let mut payload = ClusterCreateFormData::default();
+	assert_eq!(payload.name(), None);
+	assert_eq!(payload.api_url(), None);
+	payload.set_name("cluster-a".to_owned());
+	payload.set_api_url(None);
+	assert_eq!(payload.name(), Some(&"cluster-a".to_owned()));
+	assert_eq!(payload.api_url(), Some(&None));
+	assert_eq!(
+		serde_json::to_value(&payload).expect("named payload should serialize"),
+		serde_json::json!({ "name": "cluster-a", "api_url": null })
+	);
+	assert_eq!(payload.supplied_fields(), ["name", "api_url"]);
+	assert!(payload.forbidden_fields().is_empty());
+	assert_eq!(payload.get_json("secret"), None);
+
+	let omitted: ClusterCreateFormData = serde_json::from_value(serde_json::json!({}))
+		.expect("selected fields may be omitted before validation");
+	assert_eq!(omitted.api_url(), None);
+	let explicit_null: ClusterCreateFormData =
+		serde_json::from_value(serde_json::json!({ "api_url": null }))
+			.expect("nullable selected fields should accept null");
+	assert_eq!(explicit_null.api_url(), Some(&None));
+
+	for value in [
+		serde_json::json!({ "secret": "server-owned" }),
+		serde_json::json!({ "organization_id": 42 }),
+		serde_json::json!({ "name": 42 }),
+	] {
+		assert!(serde_json::from_value::<ClusterCreateFormData>(value).is_err());
+	}
+	let error = serde_json::from_str::<ClusterCreateFormData>(
+		r#"{"name":"first","name":"second","api_url":"https://example.com"}"#,
+	)
+	.expect_err("duplicate fields must be rejected");
+	assert!(error.to_string().contains("duplicate field `name`"));
+}
+
+#[test]
+fn named_contract_native_payload_reuses_checkbox_normalization() {
+	let native = <BooleanCreateFormData as NativeModelFormPayload>::from_native_form_value(
+		serde_json::json!({}),
+	)
+	.expect("native form payload should decode");
+	assert_eq!(native.published(), Some(&false));
+
+	let json: BooleanCreateFormData =
+		serde_json::from_value(serde_json::json!({})).expect("JSON payload should decode");
+	assert_eq!(json.published(), None);
+}
+
+#[test]
+fn named_contract_normalizes_raw_identifiers_across_native_and_wire_surfaces() {
+	assert_eq!(
+		<RawIdentifierCreateFormSchema as ModelFormContractSchema>::contract_fields()
+			.iter()
+			.map(|field| field.name)
+			.collect::<Vec<_>>(),
+		["type"]
+	);
+	assert_eq!(RawIdentifierCreateFormField::Type.name(), "type");
+	assert_eq!(RawIdentifierCreateForm::r#type().name, "type");
+	assert_eq!(
+		<RawIdentifierDocument as db::orm::Model>::field_metadata()
+			.into_iter()
+			.map(|field| field.name)
+			.collect::<Vec<_>>(),
+		["id", "type"]
+	);
+
+	let mut payload = RawIdentifierCreateFormData::default();
+	payload.set_type("json".to_owned());
+	assert_eq!(payload.r#type(), Some(&"json".to_owned()));
+	assert_eq!(
+		serde_json::to_value(&payload).expect("raw identifier payload should serialize"),
+		serde_json::json!({ "type": "json" })
+	);
+}
+
+#[test]
+fn named_contract_supports_wire_safe_scalar_types() {
+	let kinds = <SupportedScalarCreateFormSchema as ModelFormContractSchema>::contract_fields()
+		.iter()
+		.map(|field| field.kind)
+		.collect::<Vec<_>>();
+	assert_eq!(
+		kinds,
+		[
+			ModelFormFieldKind::Integer {
+				min: None,
+				max: None
+			},
+			ModelFormFieldKind::Float {
+				min: None,
+				max: None
+			},
+			ModelFormFieldKind::Decimal {
+				min: None,
+				max: None
+			},
+			ModelFormFieldKind::Uuid,
+			ModelFormFieldKind::Date,
+			ModelFormFieldKind::Time,
+			ModelFormFieldKind::DateTime,
+			ModelFormFieldKind::NaiveDateTime,
+			ModelFormFieldKind::Json,
+		]
+	);
 }
 
 #[test]

@@ -1,0 +1,43 @@
+error[E0308]: mismatched types
+  --> tests/ui/model/fail/named_form_shadowed_string.rs:27:1
+   |
+27 | / #[model(
+28 | |     app_label = "documents",
+29 | |     form(name = DocumentCreateForm, fields(name))
+30 | | )]
+   | |  ^
+   | |  |
+   | |__expected fn pointer, found closure
+   |    expected because of the type of the constant
+   |
+   = note: expected fn pointer `fn(ShadowString)`
+                 found closure `{closure@$DIR/tests/ui/model/fail/named_form_shadowed_string.rs:27:1: 30:3}`
+   = note: closure has signature: `fn(std::string::String)`
+   = note: this error originates in the attribute macro `model` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+  --> tests/ui/model/fail/named_form_shadowed_string.rs:27:1
+   |
+27 | / #[model(
+28 | |     app_label = "documents",
+29 | |     form(name = DocumentCreateForm, fields(name))
+30 | | )]
+   | |  ^
+   | |  |
+   | |__expected `ShadowString`, found `String`
+   |    arguments to this enum variant are incorrect
+   |
+help: the type constructed contains `std::string::String` due to the type of the argument passed
+  --> tests/ui/model/fail/named_form_shadowed_string.rs:27:1
+   |
+27 | / #[model(
+28 | |     app_label = "documents",
+29 | |     form(name = DocumentCreateForm, fields(name))
+30 | | )]
+   | |__^ this argument influences the type of `Some`
+note: tuple variant defined here
+  --> $RUST/core/src/option.rs
+   |
+   |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+   |     ^^^^
+   = note: this error originates in the derive macro `::reinhardt_core::macros::Model` (in Nightly builds, run with -Z macro-backtrace for more info)

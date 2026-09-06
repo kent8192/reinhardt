@@ -1,0 +1,5 @@
+error: named model form field `external_id` has unsupported Rust type `Uuid`
+ --> tests/ui/model/fail/named_form_same_name_custom_type.rs:9:41
+  |
+9 |     form(name = DocumentCreateForm, fields(external_id))
+  |                                            ^^^^^^^^^^^

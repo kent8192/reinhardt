@@ -270,6 +270,7 @@ pub struct SsrRenderer {
 	marker_id_counter: Rc<Cell<usize>>,
 	active_reactive_scope: Rc<RefCell<Option<Rc<ReactiveScope>>>>,
 	query_client: Option<QueryClient>,
+	route_redirect_location: Option<String>,
 }
 
 struct SsrHeadCollector {
@@ -353,6 +354,7 @@ impl Clone for SsrRenderer {
 				self.active_reactive_scope.borrow().clone(),
 			)),
 			query_client: None,
+			route_redirect_location: self.route_redirect_location.clone(),
 		}
 	}
 }
@@ -514,6 +516,7 @@ impl SsrRenderer {
 			marker_id_counter: Rc::new(Cell::new(0)),
 			active_reactive_scope: Rc::new(RefCell::new(None)),
 			query_client: None,
+			route_redirect_location: None,
 		}
 	}
 
@@ -535,6 +538,7 @@ impl SsrRenderer {
 			marker_id_counter: Rc::new(Cell::new(0)),
 			active_reactive_scope: Rc::new(RefCell::new(None)),
 			query_client: None,
+			route_redirect_location: None,
 		}
 	}
 
@@ -552,6 +556,15 @@ impl SsrRenderer {
 		&mut self.state
 	}
 
+	/// Returns the location selected by the most recent guarded route redirect.
+	pub fn route_redirect_location(&self) -> Option<&str> {
+		self.route_redirect_location.as_deref()
+	}
+
+	pub(crate) fn set_route_redirect_location(&mut self, location: String) {
+		self.route_redirect_location = Some(location);
+	}
+
 	/// Returns the configured timeout used by entry-blocking route loaders.
 	pub(crate) fn route_loader_timeout(&self) -> Duration {
 		self.options.resource_timeout
@@ -560,6 +573,7 @@ impl SsrRenderer {
 	/// Clears resource state before a route render installs its loader payload.
 	pub(crate) fn begin_route_loader_render(&mut self) {
 		self.begin_render(true);
+		self.route_redirect_location = None;
 	}
 
 	pub(crate) fn request_query_client(&self) -> QueryClient {

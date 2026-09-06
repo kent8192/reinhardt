@@ -171,6 +171,43 @@ fn initial_range_reconciliation_uses_the_bound_value_as_the_step_base(
 }
 
 #[rstest]
+#[wasm_bindgen_test]
+fn range_binding_canonicalizes_negative_zero() {
+	ReactiveScope::run(|| {
+		// Arrange
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_root = document.create_element("div").expect("root");
+		let _cleanup = AttachedRootCleanup(raw_root.clone());
+		let root = Element::new(raw_root);
+		let value = Signal::new(-0.0_f64);
+		PageElement::new("input")
+			.attr("type", "range")
+			.attr("step", "any")
+			.control_binding(ControlBinding::number(value))
+			.into_page()
+			.mount(&root)
+			.expect("mount");
+		let input: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("range")
+			.unchecked_into();
+		assert_eq!(input.value(), "0");
+		assert_eq!(value.get().to_bits(), 0.0_f64.to_bits());
+
+		// Act
+		value.set(-0.0);
+
+		// Assert
+		assert_eq!(input.value(), "0");
+		assert_eq!(value.get().to_bits(), 0.0_f64.to_bits());
+	});
+}
+
+#[rstest]
 #[case(false)]
 #[case(true)]
 #[wasm_bindgen_test]

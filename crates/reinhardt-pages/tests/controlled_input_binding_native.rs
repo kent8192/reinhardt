@@ -1155,6 +1155,31 @@ fn native_text_binding_applies_browser_value_sanitization(reactive_scope: Reacti
 }
 
 #[rstest]
+#[tokio::test]
+async fn native_range_binding_canonicalizes_negative_zero(reactive_scope: ReactiveScope) {
+	// Arrange
+	let value = signal_in_scope(&reactive_scope, -0.0_f64);
+	let screen = render(
+		PageElement::new("input")
+			.attr("aria-label", "Continuous range")
+			.attr("type", "range")
+			.attr("step", "any")
+			.control_binding(ControlBinding::number(value)),
+	);
+	let input = screen.get_by_label("Continuous range");
+	assert_eq!(value.get().to_bits(), 0.0_f64.to_bits());
+	assert_eq!(input.value().as_deref(), Some("0"));
+
+	// Act
+	value.set(-0.0);
+	screen.settle().await;
+
+	// Assert
+	assert_eq!(value.get().to_bits(), 0.0_f64.to_bits());
+	assert_eq!(input.value().as_deref(), Some("0"));
+}
+
+#[rstest]
 #[case("date", "2026-02-28", "2026-02-30")]
 #[case("datetime-local", "2026-02-28T10:30", "2026-02-30T10:30")]
 #[case("month", "2026-02", "2026-13")]

@@ -1381,7 +1381,7 @@ fn normalize_native_control_value(
 			}
 		}
 	};
-	let normalized = normalized.to_string();
+	let normalized = if normalized == 0.0 { 0.0 } else { normalized }.to_string();
 	if normalized == raw {
 		ControlValue::Text(raw)
 	} else {

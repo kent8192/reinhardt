@@ -76,6 +76,7 @@ This crate provides the following modules:
 
 - **Parsers**: Request body parsing
   - JSON, XML, YAML, Form, MultiPart parsers
+  - XML input must be valid UTF-8
   - File upload handling
   - Content-type negotiation
 

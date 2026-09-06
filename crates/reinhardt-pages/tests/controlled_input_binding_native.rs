@@ -12,7 +12,7 @@ use reinhardt_pages::prelude::spawn_task;
 use reinhardt_pages::reactive::hooks::use_layout_effect;
 use reinhardt_pages::reactive::{ReactiveScope, Signal};
 use reinhardt_pages::testing::component::{EventError, EventFixture, render};
-use reinhardt_pages::{IntoPage, Page, PageElement, deps, page};
+use reinhardt_pages::{IntoPage, Page, PageElement, deps, form, page, use_form};
 use rstest::{fixture, rstest};
 use serial_test::serial;
 
@@ -23,6 +23,25 @@ fn reactive_scope() -> ReactiveScope {
 
 fn signal_in_scope<T: 'static>(scope: &ReactiveScope, value: T) -> Signal<T> {
 	scope.enter(|| Signal::new(value))
+}
+
+#[rstest]
+fn source_preferred_hydration_predicate_is_observable(reactive_scope: ReactiveScope) {
+	// Arrange
+	let value = signal_in_scope(&reactive_scope, "server".to_owned());
+	let prefer_source = signal_in_scope(&reactive_scope, false);
+	let ordinary = ControlBinding::text(signal_in_scope(&reactive_scope, "live".to_owned()));
+	let binding = ControlBinding::text(value).prefer_source_on_hydration({
+		let prefer_source = prefer_source.clone();
+		move || prefer_source.get()
+	});
+
+	// Act
+	prefer_source.set(true);
+
+	// Assert
+	assert!(!ordinary.source_preferred_on_hydration());
+	assert!(binding.source_preferred_on_hydration());
 }
 
 #[rstest]
@@ -1019,11 +1038,8 @@ fn binding_failures_are_structured_event_errors(reactive_scope: ReactiveScope) {
 
 #[rstest]
 #[case("search")]
-#[case("email")]
 #[case("file")]
 #[case("range")]
-#[case("password")]
-#[case("url")]
 fn text_binding_rejects_non_text_input_types(
 	#[case] input_type: &str,
 	reactive_scope: ReactiveScope,
@@ -1061,8 +1077,11 @@ fn text_binding_rejects_non_text_input_types(
 #[rstest]
 #[case(PageElement::new("input"))]
 #[case(PageElement::new("input").attr("type", "text"))]
+#[case(PageElement::new("input").attr("type", "email"))]
+#[case(PageElement::new("input").attr("type", "url"))]
+#[case(PageElement::new("input").attr("type", "password"))]
 #[case(PageElement::new("textarea"))]
-fn text_binding_accepts_exact_text_controls(
+fn text_binding_accepts_supported_text_controls(
 	#[case] element: PageElement,
 	reactive_scope: ReactiveScope,
 ) {
@@ -1081,6 +1100,70 @@ fn text_binding_accepts_exact_text_controls(
 	// Assert
 	assert_eq!(value.get(), "edited");
 	assert_eq!(input.value().as_deref(), Some("edited"));
+}
+
+#[rstest]
+#[tokio::test]
+async fn generated_text_widgets_reset_existing_controls(reactive_scope: ReactiveScope) {
+	// Arrange
+	let (profile, runtime) = reactive_scope.enter(|| {
+		let profile = form! {
+			name: TextWidgetProfileForm,
+			action: "/profile",
+			fields: {
+				email: EmailField {
+					label: "Email",
+					initial: "ada@example.com",
+				}
+				website: UrlField {
+					label: "Website",
+					initial: "https://example.com/ada",
+				}
+				password: PasswordField {
+					label: "Password",
+					initial: "original-password",
+				}
+			}
+		};
+		let runtime = use_form(&profile).build();
+		(profile, runtime)
+	});
+	let email_signal = *profile.email();
+	let website_signal = *profile.website();
+	let password_signal = *profile.password();
+	let screen = render(move || profile.into_page());
+	let email = screen.get_by_label("Email");
+	let website = screen.get_by_label("Website");
+	let password = screen.get_by_label("Password");
+
+	// Act
+	email.input("grace@example.com");
+	website.input("https://example.com/grace");
+	password.input("edited-password");
+	screen.settle().await;
+	assert_eq!(email_signal.get(), "grace@example.com");
+	assert_eq!(website_signal.get(), "https://example.com/grace");
+	assert_eq!(password_signal.get(), "edited-password");
+	assert_eq!(email.value().as_deref(), Some("grace@example.com"));
+	assert_eq!(
+		website.value().as_deref(),
+		Some("https://example.com/grace")
+	);
+	assert_eq!(password.value().as_deref(), Some("edited-password"));
+	assert!(runtime.form_state().is_dirty.get());
+	runtime.reset();
+	screen.settle().await;
+
+	// Assert
+	assert_eq!(email_signal.get(), "ada@example.com");
+	assert_eq!(website_signal.get(), "https://example.com/ada");
+	assert_eq!(password_signal.get(), "original-password");
+	// Retained handles fail when a reactive update replaces their DOM nodes.
+	assert_eq!(email.value().as_deref(), Some("ada@example.com"));
+	assert_eq!(website.value().as_deref(), Some("https://example.com/ada"));
+	assert_eq!(password.value().as_deref(), Some("original-password"));
+	assert!(!runtime.form_state().is_dirty.get());
+	assert!(!runtime.form_state().is_touched.get());
 }
 
 #[rstest]

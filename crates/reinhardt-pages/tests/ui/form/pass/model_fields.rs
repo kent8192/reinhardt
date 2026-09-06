@@ -7,7 +7,7 @@ use reinhardt_core::model_form::{
 	ModelFormPayloadError, ModelFormPolicy, ModelFormSchema, ModelFormValidatingPayload,
 	NativeModelFormPayload,
 };
-use reinhardt_pages::form;
+use reinhardt_pages::{form, page, use_form};
 
 struct Question;
 
@@ -210,5 +210,23 @@ fn main() {
 		let _: QuestionModelFormData<QuestionFields> = form
 			.data()
 			.expect("selected fields produce the endpoint payload type");
+		assert_eq!(form.title_field().name(), "title");
+		let runtime = use_form(&form).build();
+		let _ = page!({
+			input {
+				a11y: off,
+				bind: runtime.field(form.title_field())
+			}
+			input {
+				a11y: off,
+				type: "radio",
+				value: "published",
+				bind: runtime.field(form.title_field())
+			}
+			select {
+				a11y: off,
+				bind: runtime.field(form.title_field())
+			}
+		});
 	});
 }

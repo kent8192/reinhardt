@@ -84,6 +84,15 @@ impl NumberParseError {
 		}
 	}
 
+	/// Reconstructs an error from a submitted value and its classification.
+	#[doc(hidden)]
+	pub fn from_raw_kind(raw: impl Into<String>, kind: NumberParseErrorKind) -> Self {
+		Self {
+			raw: raw.into(),
+			kind,
+		}
+	}
+
 	/// Returns the unmodified input text.
 	pub fn raw(&self) -> &str {
 		&self.raw
@@ -173,6 +182,7 @@ type ReadValue = Shared<dyn Fn() -> ControlValue + 'static>;
 type WriteValue =
 	Shared<dyn Fn(ControlValue) -> Result<ControlWriteOutcome, ControlBindingError> + 'static>;
 type SnapshotValue = Shared<dyn Fn() -> ControlBindingSnapshot + 'static>;
+type HydrationPreference = Shared<dyn Fn() -> bool + 'static>;
 
 /// Restores the signals mutated by a control binding unless the snapshot is committed.
 #[doc(hidden)]
@@ -204,6 +214,7 @@ pub struct ControlBinding {
 	read: ReadValue,
 	write: WriteValue,
 	snapshot: SnapshotValue,
+	hydration_preference: Option<HydrationPreference>,
 }
 
 impl fmt::Debug for ControlBinding {
@@ -238,6 +249,7 @@ impl ControlBinding {
 				actual => Err(value_kind_mismatch(ControlKind::Checkbox, &actual)),
 			}),
 			snapshot,
+			hydration_preference: None,
 		}
 	}
 
@@ -261,6 +273,7 @@ impl ControlBinding {
 				actual => Err(value_kind_mismatch(ControlKind::Radio, &actual)),
 			}),
 			snapshot,
+			hydration_preference: None,
 		}
 	}
 
@@ -286,6 +299,7 @@ impl ControlBinding {
 				actual => Err(value_kind_mismatch(ControlKind::SelectMany, &actual)),
 			}),
 			snapshot,
+			hydration_preference: None,
 		}
 	}
 
@@ -334,6 +348,44 @@ impl ControlBinding {
 		(self.snapshot)()
 	}
 
+	/// Creates a type-erased binding from its control operations.
+	#[doc(hidden)]
+	pub fn from_parts(
+		kind: ControlKind,
+		radio_value: Option<String>,
+		target: NodeId,
+		read: impl Fn() -> ControlValue + 'static,
+		write: impl Fn(ControlValue) -> Result<ControlWriteOutcome, ControlBindingError> + 'static,
+		snapshot_restore: impl Fn() -> Box<dyn FnOnce() + 'static> + 'static,
+	) -> Self {
+		Self {
+			kind,
+			radio_value,
+			target,
+			read: Shared::new(read),
+			write: Shared::new(write),
+			snapshot: Shared::new(move || ControlBindingSnapshot {
+				restore: Some(snapshot_restore()),
+			}),
+			hydration_preference: None,
+		}
+	}
+
+	/// Sets the predicate deciding whether source values win during hydration.
+	#[doc(hidden)]
+	pub fn prefer_source_on_hydration(mut self, predicate: impl Fn() -> bool + 'static) -> Self {
+		self.hydration_preference = Some(Shared::new(predicate));
+		self
+	}
+
+	/// Returns whether source values are currently preferred during hydration.
+	#[doc(hidden)]
+	pub fn source_preferred_on_hydration(&self) -> bool {
+		self.hydration_preference
+			.as_ref()
+			.is_some_and(|predicate| predicate())
+	}
+
 	fn string_value(kind: ControlKind, signal: Signal<String>) -> Self {
 		let read_signal = signal;
 		let snapshot = signal_snapshot(signal);
@@ -350,6 +402,7 @@ impl ControlBinding {
 				actual => Err(value_kind_mismatch(kind, &actual)),
 			}),
 			snapshot,
+			hydration_preference: None,
 		}
 	}
 
@@ -412,6 +465,7 @@ impl ControlBinding {
 					})),
 				}
 			}),
+			hydration_preference: None,
 		}
 	}
 }
@@ -859,6 +913,71 @@ mod tests {
 			// Assert
 			assert_eq!(binding.read(), ControlValue::Text("new".to_owned()));
 			assert_eq!(signal.get(), "new");
+		});
+	}
+
+	#[test]
+	fn closure_binding_restores_its_snapshot() {
+		ReactiveScope::run(|| {
+			let state = Rc::new(RefCell::new(String::from("before")));
+			let read_state = Rc::clone(&state);
+			let write_state = Rc::clone(&state);
+			let snapshot_state = Rc::clone(&state);
+			let binding = ControlBinding::from_parts(
+				ControlKind::Text,
+				None,
+				crate::reactive::runtime::NodeId::new(),
+				move || ControlValue::Text(read_state.borrow().clone()),
+				move |control_value| match control_value {
+					ControlValue::Text(text) => {
+						*write_state.borrow_mut() = text;
+						Ok(ControlWriteOutcome::Committed)
+					}
+					actual => Err(value_kind_mismatch(ControlKind::Text, &actual)),
+				},
+				move || {
+					let previous = snapshot_state.borrow().clone();
+					let restore_state = Rc::clone(&snapshot_state);
+					Box::new(move || *restore_state.borrow_mut() = previous)
+				},
+			);
+			assert_eq!(binding.read(), ControlValue::Text(String::from("before")));
+			let snapshot = binding.snapshot();
+
+			let outcome = binding
+				.write(ControlValue::Text(String::from("after")))
+				.unwrap();
+			assert_eq!(outcome, ControlWriteOutcome::Committed);
+			assert_eq!(binding.read(), ControlValue::Text(String::from("after")));
+			drop(snapshot);
+
+			assert_eq!(binding.read(), ControlValue::Text(String::from("before")));
+
+			let snapshot = binding.snapshot();
+			binding
+				.write(ControlValue::Text(String::from("committed")))
+				.unwrap();
+			snapshot.commit();
+			assert_eq!(
+				binding.read(),
+				ControlValue::Text(String::from("committed"))
+			);
+		});
+	}
+
+	#[test]
+	fn hydration_source_preference_is_opt_in() {
+		ReactiveScope::run(|| {
+			let binding = ControlBinding::text(Signal::new(String::new()));
+			assert!(!binding.source_preferred_on_hydration());
+
+			let reset = Rc::new(std::cell::Cell::new(false));
+			let binding = binding.prefer_source_on_hydration({
+				let reset = Rc::clone(&reset);
+				move || reset.get()
+			});
+			reset.set(true);
+			assert!(binding.source_preferred_on_hydration());
 		});
 	}
 

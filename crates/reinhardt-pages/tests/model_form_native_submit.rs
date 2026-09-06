@@ -5,7 +5,9 @@ include!("ui/form/model_json_support.rs");
 #[cfg(feature = "model-server-fnset")]
 use std::collections::HashMap;
 
-use reinhardt_pages::{FieldError, form, server_fn::ServerFnErrorKind, use_form};
+use reinhardt_pages::{
+	FieldError, FormRuntimeSource, form, server_fn::ServerFnErrorKind, use_form,
+};
 use rstest::rstest;
 
 #[cfg(feature = "model-server-fnset")]
@@ -80,6 +82,42 @@ impl Model for ConstraintQuestion {
 			_ => None,
 		}
 	}
+}
+
+#[rstest]
+fn native_submit_maps_payload_errors_to_validation() {
+	reinhardt_core::reactive::ReactiveScope::run(|| {
+		// Arrange
+		let form = form! {
+			name: QuestionPayloadMappingForm,
+			model: Question,
+			policy: QuestionPolicy,
+			fields: [title],
+			server_fn: save_question,
+		};
+		form.set_value("title", serde_json::json!("Rejected by payload mapping"))
+			.expect("control state accepts a valid title");
+
+		// Act
+		let payload_error = form
+			.data()
+			.expect_err("payload mapping must reject the title");
+		let submit_error = tokio_test::block_on(form.submit())
+			.expect_err("native submit must preserve validation");
+
+		// Assert
+		assert_eq!(
+			payload_error,
+			ModelFormPayloadError::InvalidValue {
+				field: "title".to_owned(),
+				message: "payload mapping rejected title".to_owned(),
+			}
+		);
+		assert_eq!(
+			submit_error,
+			ServerFnError::validation([("title", "payload mapping rejected title")])
+		);
+	});
 }
 
 #[rstest]
@@ -506,5 +544,31 @@ fn generated_runtime_setter_rejects_descriptor_type_mismatch_before_storage() {
 		);
 		assert!(!runtime.get_field_state(form.title_field()).is_dirty);
 		assert_eq!(form.value("title"), None);
+	});
+}
+
+#[rstest]
+fn model_form_reset_clears_generated_submission_state() {
+	reinhardt_core::reactive::ReactiveScope::run(|| {
+		// Arrange
+		let form = form! {
+			name: QuestionResetForm,
+			model: Question,
+			policy: QuestionPolicy,
+			fields: [title],
+			server_fn: save_question,
+		};
+		form.loading().set(true);
+		form.error().set(Some("stale error".to_owned()));
+		form.success().set(true);
+
+		// Act
+		form.runtime_reset_state();
+
+		// Assert
+		assert!(!form.loading().get());
+		assert_eq!(form.error().get(), None);
+		assert!(!form.success().get());
+		assert_eq!(form.title_field().name(), "title");
 	});
 }

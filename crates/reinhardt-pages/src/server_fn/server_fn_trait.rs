@@ -337,12 +337,11 @@ impl std::error::Error for ServerFnError {}
 impl From<ValidationErrors> for ServerFnError {
 	fn from(errors: ValidationErrors) -> Self {
 		let field_errors = errors
-			.field_errors()
-			.iter()
+			.ordered_field_errors()
 			.flat_map(|(field, errors)| {
-				errors.iter().map(|error| match error {
-					ValidationError::Custom(message) => (field.as_ref(), message.clone()),
-					_ => (field.as_ref(), error.to_string()),
+				errors.iter().map(move |error| match error {
+					ValidationError::Custom(message) => (field, message.clone()),
+					_ => (field, error.to_string()),
 				})
 			})
 			.collect::<Vec<_>>();
@@ -524,14 +523,37 @@ mod tests {
 		assert_eq!(error.kind(), ServerFnErrorKind::Validation);
 		assert_eq!(error.status(), Some(422));
 		assert_eq!(error.field_errors().len(), 3);
-		assert_eq!(error.field_errors()[0].field(), "email");
+		assert_eq!(error.field_errors()[0].field(), "name");
 		assert_eq!(error.field_errors()[1].field(), "name");
-		assert_eq!(error.field_errors()[2].field(), "name");
-		assert_eq!(error.field_errors()[0].message(), "Email is invalid");
+		assert_eq!(error.field_errors()[2].field(), "email");
 		assert_eq!(
-			error.field_errors()[1].message(),
+			error.field_errors()[0].message(),
 			"Length too short: 0 (minimum: 1)"
 		);
-		assert_eq!(error.field_errors()[2].message(), "Name is required");
+		assert_eq!(error.field_errors()[1].message(), "Name is required");
+		assert_eq!(error.field_errors()[2].message(), "Email is invalid");
+	}
+
+	#[rstest]
+	fn validation_errors_preserve_insertion_order() {
+		let mut validation = ValidationErrors::new();
+		validation.add("name", ValidationError::TooShort { length: 0, min: 1 });
+		validation.add(
+			"api_url",
+			ValidationError::InvalidUrl("invalid".to_string()),
+		);
+		validation.add(
+			"_all",
+			ValidationError::Custom("Invalid combination".to_string()),
+		);
+
+		let error: ServerFnError = validation.into();
+		let fields = error
+			.field_errors()
+			.iter()
+			.map(ServerFnFieldError::field)
+			.collect::<Vec<_>>();
+
+		assert_eq!(fields, ["name", "api_url", "_all"]);
 	}
 }

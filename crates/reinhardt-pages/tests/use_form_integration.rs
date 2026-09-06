@@ -1959,8 +1959,10 @@ async fn submit_server_fn_returns_submitted_outcome() {
 	);
 }
 
+#[rstest::rstest]
 #[tokio::test]
 async fn submit_server_fn_routes_typed_server_errors() {
+	// Arrange
 	let profile = form! {
 		name: TypedAsyncServerErrorForm,
 		action: "/profile",
@@ -1972,15 +1974,17 @@ async fn submit_server_fn_routes_typed_server_errors() {
 	};
 	let runtime = use_form(&profile).build();
 
+	// Act
 	let result = runtime
 		.submit_server_fn(|| async {
-			Err::<(), _>(ServerFnError::validation_with_message(
-				"Validation failed",
-				[("display_name", "Display name is already used")],
-			))
+			Err::<(), _>(ServerFnError::validation([(
+				"display_name",
+				"Display name is already used",
+			)]))
 		})
 		.await;
 
+	// Assert
 	assert!(matches!(result, Err(error) if error.kind() == ServerFnErrorKind::Validation));
 	assert_eq!(
 		runtime

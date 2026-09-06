@@ -1,15 +1,17 @@
 use std::marker::PhantomData;
 
 use reinhardt_core::model_form::{
-	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError,
-	ModelFormPolicy, ModelFormSchema, NativeModelFormPayload,
+	ModelFormCleanedPayload, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload,
+	ModelFormPayloadError, ModelFormPolicy, ModelFormSchema, ModelFormValidatingPayload,
+	NativeModelFormPayload,
+};
+use reinhardt_core::validators::{
+	MaxLengthValidator, MinLengthValidator, ValidationError, ValidationErrors, Validator,
 };
 use reinhardt_pages::component::{Component, IntoPage, Page, PageElement};
 use reinhardt_pages::form;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
-use reinhardt_pages::{
-	ClientForm, QueryFamily, ServerMutation, use_form, use_server_mutation,
-};
+use reinhardt_pages::{ClientForm, QueryFamily, ServerMutation, use_form, use_server_mutation};
 use serde::{Deserialize, Serialize};
 
 pub const CLUSTER_MUTATIONS_READY_ID: &str = "cluster-mutations-ready";
@@ -64,6 +66,7 @@ const CLUSTER_CREATE_FIELDS: [ModelFormFieldDescriptor; 1] = [ModelFormFieldDesc
 	nullable: false,
 	editable: true,
 	generated_relation_id: false,
+	trim: false,
 }];
 
 impl ModelFormSchema for ClusterFormSchema {
@@ -143,6 +146,98 @@ impl<P: ModelFormPolicy> NativeModelFormPayload for ClusterModelFormData<P> {
 	fn from_native_form_value(value: serde_json::Value) -> Result<Self, serde_json::Error> {
 		serde_json::from_value(value)
 	}
+}
+
+pub struct CleanedClusterModelFormData<P: ModelFormPolicy>(ClusterModelFormData<P>);
+
+impl<P: ModelFormPolicy> ModelFormCleanedPayload for CleanedClusterModelFormData<P> {
+	type Raw = ClusterModelFormData<P>;
+
+	fn into_raw(self) -> Self::Raw {
+		self.0
+	}
+}
+
+impl<P: ModelFormPolicy> ModelFormValidatingPayload for ClusterModelFormData<P> {
+	type Cleaned = CleanedClusterModelFormData<P>;
+
+	fn clean_and_validate(self) -> Result<Self::Cleaned, ValidationErrors> {
+		let descriptor = ClusterFormSchema::name();
+		if P::allows(descriptor.name) {
+			let error = match self.name.as_deref() {
+				None | Some("") if descriptor.required => Some(ValidationError::Custom(
+					"This field is required.".to_owned(),
+				)),
+				Some(name) => {
+					let ModelFormFieldKind::Text {
+						min_length,
+						max_length,
+						..
+					} = descriptor.kind
+					else {
+						unreachable!("cluster name is a text field");
+					};
+					max_length
+						.and_then(|max| MaxLengthValidator::new(max).validate(name).err())
+						.or_else(|| {
+							min_length
+								.and_then(|min| MinLengthValidator::new(min).validate(name).err())
+						})
+				}
+				None => None,
+			};
+			if let Some(error) = error {
+				let mut errors = ValidationErrors::new();
+				errors.add(descriptor.name, error);
+				return Err(errors);
+			}
+		}
+		Ok(CleanedClusterModelFormData(self))
+	}
+}
+
+#[cfg(native)]
+#[rstest::rstest]
+fn cluster_payload_validation_preserves_policy_and_text_boundaries() {
+	for (name, message) in [
+		(None, Some("This field is required.")),
+		(Some(String::new()), Some("This field is required.")),
+		(
+			Some("界".repeat(201)),
+			Some("Length too long: 201 (maximum: 200)"),
+		),
+		(Some("界".repeat(200)), None),
+		(Some("  cluster  ".to_owned()), None),
+	] {
+		// Arrange
+		let payload = ClusterModelFormData::<ClusterCreatePolicy> {
+			name: name.clone(),
+			_policy: PhantomData,
+		};
+		let expected = message.map_or(Ok(name), |message| {
+			Err(ServerFnError::validation([("name", message)]))
+		});
+
+		// Act
+		let result = payload
+			.clean_and_validate()
+			.map(|cleaned| cleaned.into_raw().name)
+			.map_err(ServerFnError::from);
+
+		// Assert
+		assert_eq!(result, expected);
+	}
+
+	struct NoFields;
+	impl ModelFormPolicy for NoFields {
+		fn allows(_: &str) -> bool {
+			false
+		}
+	}
+	let unselected = ClusterModelFormData::<NoFields>::default()
+		.clean_and_validate()
+		.expect("unselected fields do not require a value");
+	assert_eq!(unselected.into_raw().name, None);
 }
 
 #[server_fn(model_form = true)]
@@ -231,7 +326,8 @@ impl Component for ClusterMutationComponent {
 	fn render(&self) -> Page {
 		let create_form = cluster_create_form!();
 		let create_runtime = use_form(&create_form).build();
-		let update_form = UpdateClusterRequestClientForm::new().with_defaults(default_update_request());
+		let update_form =
+			UpdateClusterRequestClientForm::new().with_defaults(default_update_request());
 		let update_runtime = use_form(&update_form).build();
 		let create = create_form.server_mutation(&create_runtime).build();
 		let update = update_form.server_mutation(&update_runtime).build();

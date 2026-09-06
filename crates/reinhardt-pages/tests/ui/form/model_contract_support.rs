@@ -1,7 +1,7 @@
 use reinhardt_core::model_form::{
-	ModelFormContract, ModelFormContractField, ModelFormContractSchema, ModelFormFieldDescriptor,
-	ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError, ModelFormPolicy,
-	NativeModelFormPayload,
+	ModelFormCleanedPayload, ModelFormContract, ModelFormContractField, ModelFormContractSchema,
+	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError,
+	ModelFormPolicy, ModelFormValidatingPayload, NativeModelFormPayload,
 };
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 
@@ -65,6 +65,36 @@ impl ModelFormPayload<QuestionCreateFormPolicy> for QuestionCreateFormData {
 	}
 }
 
+pub(crate) struct CleanedQuestionCreateFormData(QuestionCreateFormData);
+
+impl ModelFormCleanedPayload for CleanedQuestionCreateFormData {
+	type Raw = QuestionCreateFormData;
+
+	fn into_raw(self) -> Self::Raw {
+		self.0
+	}
+}
+
+impl ModelFormValidatingPayload for QuestionCreateFormData {
+	type Cleaned = CleanedQuestionCreateFormData;
+
+	fn clean_and_validate(
+		self,
+	) -> Result<Self::Cleaned, reinhardt_core::validators::ValidationErrors> {
+		if self.title.as_deref().is_none_or(str::is_empty) {
+			let mut errors = reinhardt_core::validators::ValidationErrors::new();
+			errors.add(
+				"title",
+				reinhardt_core::validators::ValidationError::Custom(
+					"This field is required.".to_owned(),
+				),
+			);
+			return Err(errors);
+		}
+		Ok(CleanedQuestionCreateFormData(self))
+	}
+}
+
 impl NativeModelFormPayload for QuestionCreateFormData {
 	fn from_native_form_value(value: serde_json::Value) -> Result<Self, serde_json::Error> {
 		serde_json::from_value(value)
@@ -85,6 +115,7 @@ const QUESTION_CREATE_FIELDS: [ModelFormFieldDescriptor; 1] = [ModelFormFieldDes
 	nullable: false,
 	editable: true,
 	generated_relation_id: false,
+	trim: false,
 }];
 
 impl ModelFormContractSchema for QuestionCreateFormSchema {

@@ -10,10 +10,11 @@ use std::str::FromStr;
 use std::sync::LazyLock;
 
 use reinhardt_core::model_form::{
-	ModelFormContractSchema, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload,
-	ModelFormPayloadError, ModelFormPolicy,
+	ModelFormCleanedPayload, ModelFormContractSchema, ModelFormFieldDescriptor, ModelFormFieldKind,
+	ModelFormPayload, ModelFormPayloadError, ModelFormPolicy, ModelFormValidatingPayload,
 };
 use reinhardt_core::types::page::{NumberParseError, NumberParseErrorKind, NumberValue};
+use reinhardt_core::validators::{UrlValidator, ValidationError, ValidationErrors, Validator};
 
 /// Hidden compile-time selection marker for one model-form argument.
 #[doc(hidden)]
@@ -233,13 +234,12 @@ where
 		}
 	}
 
-	/// Stores a control value after validating it against the generated schema.
-	/// An empty string clears a nullable field and removes other optional values.
+	/// Stores a raw control value after checking the generated form boundary.
 	///
 	/// # Errors
 	///
 	/// Returns a typed payload error when the field is unknown, forbidden by the
-	/// form policy, or cannot be converted according to its model field kind.
+	/// form policy, uses the file channel, or explicitly clears a non-nullable field.
 	pub fn set_value(
 		&mut self,
 		field: &str,
@@ -262,42 +262,14 @@ where
 				"file fields must be set with set_file",
 			));
 		}
-		if descriptor.nullable && value.is_null() {
-			self.values.insert(descriptor.name, serde_json::Value::Null);
-			return Ok(());
-		}
-		if !descriptor.required
-			&& matches!(&value, serde_json::Value::String(text) if text.is_empty())
+		if value.is_null()
+			&& !descriptor.nullable
+			&& !matches!(descriptor.kind, ModelFormFieldKind::Json)
 		{
-			if descriptor.nullable {
-				if descriptor.has_default && !self.values.contains_key(descriptor.name) {
-					return Ok(());
-				}
-				self.values.insert(descriptor.name, serde_json::Value::Null);
-				return Ok(());
-			}
-			if !matches!(
-				descriptor.kind,
-				ModelFormFieldKind::Text { .. }
-					| ModelFormFieldKind::Email { .. }
-					| ModelFormFieldKind::Url { .. }
-			) {
-				self.values.remove(descriptor.name);
-				return Ok(());
-			}
-			if descriptor.has_default {
-				self.values.remove(descriptor.name);
-				return Ok(());
-			}
+			return Err(invalid_value(field, "field does not allow null"));
 		}
-
-		match convert_control_value(descriptor, value) {
-			Ok(converted) => {
-				self.values.insert(descriptor.name, converted);
-				Ok(())
-			}
-			Err(error) => Err(error),
-		}
+		self.values.insert(descriptor.name, value);
+		Ok(())
 	}
 
 	/// Stores raw text emitted by a shared controlled text binding.
@@ -327,37 +299,49 @@ where
 		let descriptor = self
 			.binding_descriptor(field)
 			.map_err(|_| NumberParseError::from_raw_kind(raw, NumberParseErrorKind::OutOfRange))?;
-		if raw.is_empty() {
-			return self
-				.set_value(field, serde_json::Value::String(String::new()))
-				.map_err(|_| NumberParseError::from_raw_kind(raw, NumberParseErrorKind::Empty));
-		}
-		let value = match descriptor.kind {
-			ModelFormFieldKind::Integer { .. } if raw.starts_with('-') => {
-				let value = <i64 as NumberValue>::parse_control_value(raw)?;
-				serde_json::Value::from(value)
-			}
-			ModelFormFieldKind::Integer { .. } => {
-				let value = <u64 as NumberValue>::parse_control_value(raw)?;
-				serde_json::Value::from(value)
-			}
-			ModelFormFieldKind::Float { .. } => {
-				let value = <f64 as NumberValue>::parse_control_value(raw)?;
-				serde_json::Number::from_f64(value)
-					.map(serde_json::Value::Number)
-					.ok_or_else(|| {
-						NumberParseError::from_raw_kind(raw, NumberParseErrorKind::OutOfRange)
-					})?
-			}
-			_ => {
-				return Err(NumberParseError::from_raw_kind(
-					raw,
-					NumberParseErrorKind::OutOfRange,
-				));
+		let value = if raw.is_empty() {
+			serde_json::Value::String(String::new())
+		} else {
+			match descriptor.kind {
+				ModelFormFieldKind::Integer { .. } if raw.starts_with('-') => {
+					let value = <i64 as NumberValue>::parse_control_value(raw)?;
+					serde_json::Value::from(value)
+				}
+				ModelFormFieldKind::Integer { .. } => {
+					let value = <u64 as NumberValue>::parse_control_value(raw)?;
+					serde_json::Value::from(value)
+				}
+				ModelFormFieldKind::Float { .. } => {
+					let value = <f64 as NumberValue>::parse_control_value(raw)?;
+					serde_json::Number::from_f64(value)
+						.map(serde_json::Value::Number)
+						.ok_or_else(|| {
+							NumberParseError::from_raw_kind(raw, NumberParseErrorKind::OutOfRange)
+						})?
+				}
+				_ => {
+					return Err(NumberParseError::from_raw_kind(
+						raw,
+						NumberParseErrorKind::OutOfRange,
+					));
+				}
 			}
 		};
-		self.set_value(field, value)
-			.map_err(|_| NumberParseError::from_raw_kind(raw, NumberParseErrorKind::OutOfRange))
+		let value = convert_snapshot_value(descriptor, value).map_err(|_| {
+			NumberParseError::from_raw_kind(
+				raw,
+				if raw.is_empty() {
+					NumberParseErrorKind::Empty
+				} else {
+					NumberParseErrorKind::OutOfRange
+				},
+			)
+		})?;
+		match value {
+			Some(value) => self.values.insert(descriptor.name, value),
+			None => self.values.remove(descriptor.name),
+		};
+		Ok(())
 	}
 
 	/// Stores a typed runtime value after converting it to the model-form JSON representation.
@@ -366,6 +350,23 @@ where
 	where
 		T: Any + 'static,
 	{
+		let descriptor = S::contract_fields()
+			.iter()
+			.find(|descriptor| descriptor.name == field)
+			.ok_or_else(|| ModelFormPayloadError::UnknownField {
+				field: field.to_owned(),
+			})?;
+		if !P::allows(field) {
+			return Err(ModelFormPayloadError::ForbiddenField {
+				field: field.to_owned(),
+			});
+		}
+		if is_file_kind(descriptor.kind) {
+			return Err(invalid_value(
+				field,
+				"file fields must be set with set_file",
+			));
+		}
 		let value = any_value_to_json(value).ok_or_else(|| {
 			invalid_value(
 				field,
@@ -375,7 +376,10 @@ where
 				),
 			)
 		})?;
-		self.set_value(field, value)
+		match convert_snapshot_value(descriptor, value)? {
+			Some(value) => self.set_value(field, value),
+			None => self.clear_value(field),
+		}
 	}
 
 	/// Removes one model-form value and any selected file associated with it.
@@ -400,7 +404,7 @@ where
 		Ok(())
 	}
 
-	/// Returns the converted value stored for a model field.
+	/// Returns the raw control value stored for a model field.
 	pub fn value(&self, field: &str) -> Option<&serde_json::Value> {
 		self.values.get(field)
 	}
@@ -556,10 +560,11 @@ where
 				continue;
 			}
 			match self.values.get(descriptor.name) {
-				Some(serde_json::Value::Null) if descriptor.nullable => {}
 				Some(value) => {
-					let converted = convert_control_value(descriptor, value.clone())?;
-					validated.values.insert(descriptor.name, converted);
+					match convert_snapshot_value(descriptor, value.clone())? {
+						Some(value) => validated.values.insert(descriptor.name, value),
+						None => validated.values.remove(descriptor.name),
+					};
 				}
 				None if descriptor.required => {
 					return Err(invalid_value(descriptor.name, "is required"));
@@ -595,20 +600,143 @@ where
 	where
 		D: Default + ModelFormPayload<P>,
 	{
-		let mut payload = D::default();
+		self.build_payload_for_with_file_policy::<D, P>(false)
+	}
+
+	/// Builds, normalizes, and validates a submission snapshot.
+	///
+	/// **Parity: P2.** Native and WASM targets apply the same generated field
+	/// conversion and [`ModelFormValidatingPayload`] pipeline.
+	///
+	/// # Errors
+	///
+	/// Returns schema-ordered validation errors without changing raw control state.
+	pub fn build_validated_payload<D>(&self) -> Result<D, ValidationErrors>
+	where
+		D: Default + ModelFormPayload<P> + ModelFormValidatingPayload,
+		D::Cleaned: ModelFormCleanedPayload<Raw = D>,
+	{
+		self.build_validated_payload_for::<D, P>()
+	}
+
+	/// Builds, normalizes, and validates a snapshot using a nameable payload policy.
+	///
+	/// **Parity: P2.** Native and WASM targets apply the same generated field
+	/// conversion and [`ModelFormValidatingPayload`] pipeline.
+	///
+	/// Conversion failures are combined with generated validation errors. A
+	/// failed conversion takes precedence over errors caused by its absent value.
+	///
+	/// # Errors
+	///
+	/// Returns schema-ordered validation errors without changing raw control state.
+	pub fn build_validated_payload_for<D, Q>(&self) -> Result<D, ValidationErrors>
+	where
+		D: Default + ModelFormPayload<Q> + ModelFormValidatingPayload,
+		D::Cleaned: ModelFormCleanedPayload<Raw = D>,
+		Q: ModelFormPolicy,
+	{
+		let mut raw = D::default();
+		let mut conversion_errors = ValidationErrors::new();
 		for descriptor in self.selected_descriptors() {
 			if is_file_kind(descriptor.kind) {
 				continue;
 			}
 			if let Some(value) = self.values.get(descriptor.name) {
-				let value = match value {
-					serde_json::Value::Null if descriptor.nullable => value.clone(),
-					value => convert_control_value(descriptor, value.clone())?,
-				};
-				payload.set_json(descriptor.name, value)?;
+				match convert_snapshot_value(descriptor, value.clone()) {
+					Ok(Some(value)) => {
+						if let Err(error) = raw.set_json(descriptor.name, value) {
+							Self::append_payload_error_to_validation(&mut conversion_errors, error);
+						}
+					}
+					Ok(None) => {}
+					Err(error) => {
+						Self::append_payload_error_to_validation(&mut conversion_errors, error);
+					}
+				}
 			}
 		}
-		Ok(payload)
+		let deferred_required_fields = self
+			.selected_descriptors()
+			.iter()
+			.filter(|descriptor| descriptor.required && is_file_kind(descriptor.kind))
+			.map(|descriptor| descriptor.name)
+			.collect::<Vec<_>>();
+		#[cfg(wasm)]
+		let uploads = self
+			.selected_descriptors()
+			.iter()
+			.filter(|descriptor| is_file_kind(descriptor.kind))
+			.filter_map(|descriptor| {
+				let file = self.selected_files.get(descriptor.name)?;
+				let filename = file.name();
+				if filename.is_empty() && file.size() == 0.0 {
+					return None;
+				}
+				let content_type = file.type_();
+				Some(reinhardt_core::model_form::ModelFormUpload {
+					name: descriptor.name,
+					filename: Some(filename),
+					content_type: (!content_type.is_empty()).then_some(content_type),
+					size: file.size() as u64,
+				})
+			})
+			.collect::<Vec<_>>();
+		#[cfg(not(wasm))]
+		let uploads = Vec::new();
+		let validated = raw
+			.clean_and_validate_with_uploads(&deferred_required_fields, &uploads)
+			.map(ModelFormCleanedPayload::into_raw);
+		if conversion_errors.is_empty() {
+			return validated;
+		}
+		let mut by_field = conversion_errors.field_errors().clone();
+		if let Err(errors) = validated {
+			for (field, errors) in errors.ordered_field_errors() {
+				by_field
+					.entry(field.to_owned().into())
+					.or_insert_with(|| errors.to_vec());
+			}
+		}
+		let mut errors = ValidationErrors::new();
+		for descriptor in S::contract_fields() {
+			if let Some(field_errors) = by_field.remove(descriptor.name) {
+				for error in field_errors {
+					errors.add(descriptor.name, error);
+				}
+			}
+		}
+		for (field, field_errors) in by_field {
+			for error in field_errors {
+				errors.add(field.clone(), error);
+			}
+		}
+		Err(errors)
+	}
+
+	/// Converts one payload assembly failure into the structured validation contract.
+	///
+	/// **Parity: P2.** Native and WASM targets map payload assembly failures to
+	/// the same field and message.
+	#[doc(hidden)]
+	pub fn payload_error_to_validation(&self, error: ModelFormPayloadError) -> ValidationErrors {
+		let mut errors = ValidationErrors::new();
+		Self::append_payload_error_to_validation(&mut errors, error);
+		errors
+	}
+
+	fn append_payload_error_to_validation(
+		errors: &mut ValidationErrors,
+		error: ModelFormPayloadError,
+	) {
+		let (field, message) = match &error {
+			ModelFormPayloadError::UnknownField { field }
+			| ModelFormPayloadError::ForbiddenField { field } => (field.clone(), error.to_string()),
+			ModelFormPayloadError::InvalidValue { field, message } => {
+				(field.clone(), message.clone())
+			}
+		};
+		errors.add(field, ValidationError::Custom(message));
 	}
 
 	/// Builds a payload using a nameable policy while retaining this form's
@@ -651,8 +779,10 @@ where
 				}
 				continue;
 			}
-			if let Some(value) = self.values.get(descriptor.name) {
-				payload.set_json(descriptor.name, value.clone())?;
+			if let Some(value) = self.values.get(descriptor.name)
+				&& let Some(value) = convert_snapshot_value(descriptor, value.clone())?
+			{
+				payload.set_json(descriptor.name, value)?;
 			}
 		}
 		Ok(payload)
@@ -702,6 +832,35 @@ where
 		}
 		Ok(descriptor)
 	}
+}
+
+fn convert_snapshot_value(
+	descriptor: &ModelFormFieldDescriptor,
+	value: serde_json::Value,
+) -> Result<Option<serde_json::Value>, ModelFormPayloadError> {
+	if value.is_null() {
+		return if descriptor.nullable || matches!(descriptor.kind, ModelFormFieldKind::Json) {
+			Ok(Some(value))
+		} else {
+			Err(invalid_value(descriptor.name, "field does not allow null"))
+		};
+	}
+	if !descriptor.required && matches!(&value, serde_json::Value::String(text) if text.is_empty())
+	{
+		if descriptor.nullable {
+			return Ok((!descriptor.has_default).then_some(serde_json::Value::Null));
+		}
+		if descriptor.has_default
+			|| !matches!(
+				descriptor.kind,
+				ModelFormFieldKind::Text { .. }
+					| ModelFormFieldKind::Email { .. }
+					| ModelFormFieldKind::Url { .. }
+			) {
+			return Ok(None);
+		}
+	}
+	convert_control_value(descriptor, value).map(Some)
 }
 
 fn any_value_to_json<T>(value: T) -> Option<serde_json::Value>
@@ -892,7 +1051,12 @@ fn convert_control_value(
 			max_length,
 			..
 		} => {
-			let text = expect_string(descriptor.name, value)?.trim().to_owned();
+			let text = expect_string(descriptor.name, value)?;
+			let text = if descriptor.trim {
+				text.trim().to_owned()
+			} else {
+				text
+			};
 			if text.is_empty() && !descriptor.required {
 				return Ok(serde_json::Value::String(text));
 			}
@@ -925,7 +1089,12 @@ fn convert_control_value(
 			min_length,
 			max_length,
 		} => {
-			let text = expect_string(descriptor.name, value)?.trim().to_owned();
+			let text = expect_string(descriptor.name, value)?;
+			let text = if descriptor.trim {
+				text.trim().to_owned()
+			} else {
+				text
+			};
 			if text.is_empty() && !descriptor.required {
 				return Ok(serde_json::Value::String(text));
 			}
@@ -947,11 +1116,18 @@ fn convert_control_value(
 			}
 			let is_valid = match descriptor.kind {
 				ModelFormFieldKind::Email { .. } => is_email(&text),
-				ModelFormFieldKind::Url { .. } => is_url(&text),
+				ModelFormFieldKind::Url { .. } => {
+					UrlValidator::new().validate(text.as_str()).is_ok()
+				}
 				_ => unreachable!("email and URL fields are handled by this conversion branch"),
 			};
 			if !is_valid {
-				return Err(invalid_value(descriptor.name, "has an invalid format"));
+				let message = match descriptor.kind {
+					ModelFormFieldKind::Email { .. } => "Enter a valid email address",
+					ModelFormFieldKind::Url { .. } => "Enter a valid URL",
+					_ => unreachable!("email and URL fields are handled by this conversion branch"),
+				};
+				return Err(invalid_value(descriptor.name, message));
 			}
 			Ok(serde_json::Value::String(text))
 		}
@@ -1182,14 +1358,6 @@ fn is_email(value: &str) -> bool {
 	EMAIL_REGEX.is_match(value)
 }
 
-fn is_url(value: &str) -> bool {
-	static URL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-		Regex::new(r"^https?://(?:(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}|localhost|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?::\d+)?(?:/[^\s]*)?$")
-			.expect("native URL validation pattern is valid")
-	});
-	URL_REGEX.is_match(value)
-}
-
 fn is_date(value: &str) -> bool {
 	let bytes = value.as_bytes();
 	if !(bytes.len() == 10
@@ -1313,11 +1481,16 @@ fn normalize_datetime_local(value: &str, aware: bool) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-	use super::{ModelFormServerFn, ModelFormState, any_value_to_json, is_date};
-	use reinhardt_core::model_form::{
-		AllEditableModelFields, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload,
-		ModelFormPayloadError, ModelFormSchema,
+	use super::{
+		ModelFormServerFn, ModelFormState, any_value_to_json, convert_snapshot_value, is_date,
 	};
+	use reinhardt_core::model_form::{
+		AllEditableModelFields, ModelFormCleanedPayload, ModelFormFieldDescriptor,
+		ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError, ModelFormSchema,
+		ModelFormValidatingPayload,
+	};
+	use reinhardt_core::validators::{UrlValidator, ValidationErrors, Validator};
+	use rstest::rstest;
 
 	struct NullableBooleanSchema;
 	struct LegacyServerFn;
@@ -1425,6 +1598,7 @@ mod tests {
 				nullable: true,
 				editable: true,
 				generated_relation_id: false,
+				trim: false,
 			}];
 			&FIELDS
 		}
@@ -1455,20 +1629,27 @@ mod tests {
 				nullable: true,
 				editable: true,
 				generated_relation_id: false,
+				trim: false,
 			}];
 			&FIELDS
 		}
 	}
 
-	#[test]
+	#[rstest]
 	fn untouched_nullable_default_remains_omitted() {
+		// Arrange
 		let mut state = ModelFormState::<NullableDefaultSchema, AllEditableModelFields>::new();
 
+		// Act
 		state
 			.set_value("summary", serde_json::Value::String(String::new()))
 			.expect("an empty optional control should be accepted");
 
-		assert_eq!(state.value("summary"), None);
+		// Assert
+		assert_eq!(
+			state.value("summary"),
+			Some(&serde_json::Value::String(String::new()))
+		);
 	}
 
 	#[test]
@@ -1499,21 +1680,216 @@ mod tests {
 				nullable: false,
 				editable: true,
 				generated_relation_id: false,
+				trim: false,
 			}];
 			&FIELDS
 		}
 	}
 
-	#[test]
-	fn f32_fields_reject_values_that_would_narrow_to_infinity() {
+	#[rstest]
+	fn f32_fields_preserve_raw_values_that_fail_snapshot_conversion() {
+		// Arrange
 		let mut state = ModelFormState::<F32Schema, AllEditableModelFields>::new();
 
-		assert!(
+		// Act
+		state
+			.set_value("ratio", serde_json::Value::String("1e100".to_owned()))
+			.expect("raw finite f64 input should remain editable");
+		let error = convert_snapshot_value(
+			&F32Schema::fields()[0],
 			state
-				.set_value("ratio", serde_json::Value::String("1e100".to_owned()))
-				.is_err()
+				.value("ratio")
+				.expect("raw ratio should be stored")
+				.clone(),
+		)
+		.expect_err("out-of-range f32 input should fail snapshot conversion");
+
+		// Assert
+		assert_eq!(
+			error,
+			ModelFormPayloadError::InvalidValue {
+				field: "ratio".to_owned(),
+				message: format!("must be less than or equal to {}", f32::MAX as f64),
+			}
 		);
-		assert_eq!(state.value("ratio"), None);
+		assert_eq!(
+			state.value("ratio"),
+			Some(&serde_json::Value::String("1e100".to_owned()))
+		);
+	}
+
+	struct F32PairSchema;
+
+	impl ModelFormSchema for F32PairSchema {
+		type Model = ();
+
+		fn fields() -> &'static [ModelFormFieldDescriptor] {
+			const FIELDS: [ModelFormFieldDescriptor; 2] = [
+				ModelFormFieldDescriptor {
+					name: "first",
+					kind: ModelFormFieldKind::Float {
+						min: Some(f32::MIN as f64),
+						max: Some(f32::MAX as f64),
+					},
+					required: true,
+					has_default: false,
+					nullable: false,
+					editable: true,
+					generated_relation_id: false,
+					trim: false,
+				},
+				ModelFormFieldDescriptor {
+					name: "second",
+					kind: ModelFormFieldKind::Float {
+						min: Some(f32::MIN as f64),
+						max: Some(f32::MAX as f64),
+					},
+					required: true,
+					has_default: false,
+					nullable: false,
+					editable: true,
+					generated_relation_id: false,
+					trim: false,
+				},
+			];
+			&FIELDS
+		}
+	}
+
+	#[derive(Default)]
+	struct F32PairPayload(serde_json::Map<String, serde_json::Value>);
+
+	struct F32PairCleaned(F32PairPayload);
+
+	impl ModelFormCleanedPayload for F32PairCleaned {
+		type Raw = F32PairPayload;
+
+		fn into_raw(self) -> Self::Raw {
+			self.0
+		}
+	}
+
+	impl ModelFormPayload<AllEditableModelFields> for F32PairPayload {
+		fn supplied_fields(&self) -> Vec<&'static str> {
+			["first", "second"]
+				.into_iter()
+				.filter(|field| self.0.contains_key(*field))
+				.collect()
+		}
+
+		fn forbidden_fields(&self) -> &[&'static str] {
+			&[]
+		}
+
+		fn get_json(&self, field: &str) -> Option<serde_json::Value> {
+			self.0.get(field).cloned()
+		}
+
+		fn set_json(
+			&mut self,
+			field: &str,
+			value: serde_json::Value,
+		) -> Result<(), ModelFormPayloadError> {
+			if !["first", "second"].contains(&field) {
+				return Err(ModelFormPayloadError::UnknownField {
+					field: field.to_owned(),
+				});
+			}
+			self.0.insert(field.to_owned(), value);
+			Ok(())
+		}
+	}
+
+	impl ModelFormValidatingPayload for F32PairPayload {
+		type Cleaned = F32PairCleaned;
+
+		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+		fn clean_and_validate(mut self) -> Result<Self::Cleaned, ValidationErrors> {
+			reinhardt_forms::model_form::clean_generated_payload::<
+				F32PairSchema,
+				AllEditableModelFields,
+				_,
+			>(&mut self)?;
+			Ok(F32PairCleaned(self))
+		}
+
+		#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+		fn clean_and_validate(self) -> Result<Self::Cleaned, ValidationErrors> {
+			Ok(F32PairCleaned(self))
+		}
+	}
+
+	#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+	#[rstest]
+	#[case("first", "second")]
+	#[case("second", "first")]
+	fn snapshot_conversion_merges_missing_required_errors_in_schema_order(
+		#[case] invalid_field: &str,
+		#[case] missing_field: &str,
+	) {
+		// Arrange
+		let mut state = ModelFormState::<F32PairSchema, AllEditableModelFields>::new();
+		state
+			.set_value(invalid_field, serde_json::json!("1e100"))
+			.expect("raw input should remain editable");
+
+		// Act
+		let errors = match state.build_validated_payload::<F32PairPayload>() {
+			Ok(_) => panic!("conversion and generated validation must both fail"),
+			Err(errors) => errors,
+		};
+
+		// Assert
+		assert_eq!(
+			errors
+				.ordered_field_errors()
+				.map(|(field, _)| field)
+				.collect::<Vec<_>>(),
+			["first", "second"]
+		);
+		assert_eq!(
+			errors.field_errors()[invalid_field],
+			vec![reinhardt_core::validators::ValidationError::Custom(
+				format!("must be less than or equal to {}", f32::MAX as f64)
+			)]
+		);
+		assert_eq!(
+			errors.field_errors()[missing_field],
+			vec![reinhardt_core::validators::ValidationError::Custom(
+				"This field is required.".to_owned()
+			)]
+		);
+		assert_eq!(
+			state.value(invalid_field),
+			Some(&serde_json::json!("1e100"))
+		);
+		assert_eq!(state.value(missing_field), None);
+	}
+
+	#[rstest]
+	fn snapshot_conversion_reports_all_errors_in_schema_order() {
+		// Arrange
+		let mut state = ModelFormState::<F32PairSchema, AllEditableModelFields>::new();
+		for field in ["first", "second"] {
+			state
+				.set_value(field, serde_json::Value::String("1e100".to_owned()))
+				.expect("raw finite f64 input should remain editable");
+		}
+
+		// Act
+		let errors = match state.build_validated_payload::<F32PairPayload>() {
+			Ok(_) => panic!("all out-of-range fields should be reported"),
+			Err(errors) => errors,
+		};
+
+		// Assert
+		assert_eq!(
+			errors
+				.ordered_field_errors()
+				.map(|(field, _)| field)
+				.collect::<Vec<_>>(),
+			["first", "second"]
+		);
 	}
 
 	struct OptionalContactSchema;
@@ -1534,6 +1910,7 @@ mod tests {
 					nullable: false,
 					editable: true,
 					generated_relation_id: false,
+					trim: false,
 				},
 				ModelFormFieldDescriptor {
 					name: "website",
@@ -1546,6 +1923,7 @@ mod tests {
 					nullable: false,
 					editable: true,
 					generated_relation_id: false,
+					trim: false,
 				},
 			];
 			&FIELDS
@@ -1565,6 +1943,41 @@ mod tests {
 				Some(&serde_json::Value::String(String::new()))
 			);
 		}
+	}
+
+	#[rstest]
+	#[case::query("https://example.com?query=value", false, true)]
+	#[case::fragment("https://example.com#section", false, true)]
+	#[case::query_and_fragment("http://localhost:8080?query=value#section", false, true)]
+	#[case::trimmed_query(" https://example.com?query=value ", true, true)]
+	#[case::invalid_scheme("ftp://example.com?query=value", false, false)]
+	#[case::invalid_port("https://example.com:123456", false, false)]
+	fn url_snapshot_conversion_matches_canonical_validation(
+		#[case] value: &str,
+		#[case] trim: bool,
+		#[case] valid: bool,
+	) {
+		// Arrange
+		let descriptor = ModelFormFieldDescriptor {
+			trim,
+			..OptionalContactSchema::fields()[1]
+		};
+		let normalized = if trim { value.trim() } else { value };
+		let expected = if valid {
+			Ok(Some(serde_json::json!(normalized)))
+		} else {
+			Err(ModelFormPayloadError::InvalidValue {
+				field: "website".to_owned(),
+				message: "Enter a valid URL".to_owned(),
+			})
+		};
+
+		// Act
+		let converted = convert_snapshot_value(&descriptor, serde_json::json!(value));
+
+		// Assert
+		assert_eq!(UrlValidator::new().validate(normalized).is_ok(), valid);
+		assert_eq!(converted, expected);
 	}
 
 	#[test]
@@ -1594,6 +2007,7 @@ mod tests {
 					nullable: false,
 					editable: true,
 					generated_relation_id: false,
+					trim: false,
 				},
 				ModelFormFieldDescriptor {
 					name: "document",
@@ -1603,6 +2017,7 @@ mod tests {
 					nullable: false,
 					editable: true,
 					generated_relation_id: false,
+					trim: false,
 				},
 			];
 			&FIELDS

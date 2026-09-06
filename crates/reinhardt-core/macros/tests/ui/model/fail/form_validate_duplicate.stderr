@@ -1,0 +1,5 @@
+error: duplicate `validate` model form option
+ --> tests/ui/model/fail/form_validate_duplicate.rs:8:8
+  |
+8 | #[form(validate = validate_profile_again)]
+  |        ^^^^^^^^

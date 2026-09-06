@@ -882,6 +882,7 @@ pub fn user(args: TokenStream, input: TokenStream) -> TokenStream {
 		model,
 		model_config,
 		field,
+		form,
 		rel,
 		fk_id_field,
 		reinhardt_internal_relation_serde_skip

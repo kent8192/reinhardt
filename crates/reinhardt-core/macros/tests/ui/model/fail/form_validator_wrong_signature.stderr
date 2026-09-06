@@ -1,0 +1,47 @@
+error[E0308]: mismatched types
+  --> tests/ui/model/fail/form_validator_wrong_signature.rs:34:19
+   |
+32 | #[model(app_label = "accounts", form = true)]
+   | --------------------------------------------- expected due to this
+33 | #[derive(Clone)]
+34 | #[form(validate = validate_raw)]
+   |                   ^^^^^^^^^^^^ expected fn pointer, found fn item
+   |
+   = note: expected fn pointer `for<'a> fn(&'a CleanedRawProfileModelFormData<P>) -> std::result::Result<(), ValidationErrors>`
+                 found fn item `for<'a> fn(&'a RawProfileModelFormData<_>) -> std::result::Result<(), ValidationErrors> {validate_raw::<_>}`
+
+error[E0308]: mismatched types
+  --> tests/ui/model/fail/form_validator_wrong_signature.rs:44:19
+   |
+42 | #[model(app_label = "accounts", form = true)]
+   | --------------------------------------------- expected due to this
+43 | #[derive(Clone)]
+44 | #[form(validate = validate_return)]
+   |                   ^^^^^^^^^^^^^^^ expected fn pointer, found fn item
+   |
+   = note: expected fn pointer `for<'a> fn(&'a CleanedReturnProfileModelFormData<P>) -> std::result::Result<(), ValidationErrors>`
+                 found fn item `for<'a> fn(&'a CleanedReturnProfileModelFormData<_>) -> Vec<std::string::String> {validate_return::<_>}`
+
+error[E0308]: mismatched types
+  --> tests/ui/model/fail/form_validator_wrong_signature.rs:54:19
+   |
+52 | #[model(app_label = "accounts", form = true)]
+   | --------------------------------------------- expected due to this
+53 | #[derive(Clone)]
+54 | #[form(validate = validate_async)]
+   |                   ^^^^^^^^^^^^^^ expected fn pointer, found fn item
+   |
+   = note: expected fn pointer `for<'a> fn(&'a CleanedAsyncProfileModelFormData<P>) -> std::result::Result<(), ValidationErrors>`
+                 found fn item `for<'a> fn(&'a CleanedAsyncProfileModelFormData<_>) -> impl std::future::Future<Output = std::result::Result<(), ValidationErrors>> {validate_async::<_>}`
+
+error[E0308]: mismatched types
+  --> tests/ui/model/fail/form_validator_wrong_signature.rs:73:19
+   |
+71 | #[model(app_label = "accounts", form = true)]
+   | --------------------------------------------- expected due to this
+72 | #[derive(Clone)]
+73 | #[form(validate = validate_wrong_form)]
+   |                   ^^^^^^^^^^^^^^^^^^^ expected fn pointer, found fn item
+   |
+   = note: expected fn pointer `for<'a> fn(&'a CleanedWrongFormProfileModelFormData<P>) -> std::result::Result<(), ValidationErrors>`
+                 found fn item `for<'a> fn(&'a CleanedOtherProfileModelFormData<_>) -> std::result::Result<(), ValidationErrors> {validate_wrong_form::<_>}`

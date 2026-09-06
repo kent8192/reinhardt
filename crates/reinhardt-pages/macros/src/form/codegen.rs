@@ -2166,6 +2166,13 @@ fn generate_model_form(
 			generated_model_support_path(model.expect("legacy model"), "ModelFormData");
 		quote!(#payload_path<#policy_path>)
 	};
+	let validation_data_type = if contract.is_some() {
+		data_type.clone()
+	} else {
+		let payload_path =
+			generated_model_support_path(model.expect("legacy model"), "ModelFormData");
+		quote!(#payload_path<#policy_ident>)
+	};
 	let (model_form_selection_type, model_form_selection_impl) = match selection {
 		None => (
 			quote!(#pages_crate::form::ModelFormPayloadSelection<#data_ident, #policy_path>),
@@ -2238,15 +2245,8 @@ fn generate_model_form(
 				#policy_ident,
 			>();
 	};
-	let model_form_selection_check = if contract.is_some() {
-		quote! {
-			const _: () = { #selection_check_body };
-		}
-	} else {
-		quote! {
-			#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-			const _: () = { #selection_check_body };
-		}
+	let model_form_selection_check = quote! {
+		const _: () = { #selection_check_body };
 	};
 	let model_form_response_type = quote! {
 		<#server_fn::marker as #pages_crate::form::ModelFormServerFn<
@@ -2275,6 +2275,7 @@ fn generate_model_form(
 							);
 							self.loading.set(false);
 							self.error.set(::core::option::Option::Some(error.to_string()));
+							self.set_server_error(::core::option::Option::Some(error.clone()));
 							return ::core::result::Result::Err(error);
 						}
 					}
@@ -2309,18 +2310,24 @@ fn generate_model_form(
 	let model_form_validation_error_helper = quote! {
 		fn __server_mutation_validation_error(
 			&self,
-			error: #pages_crate::form::ModelFormPayloadError,
+			error: #pages_crate::ServerFnError,
 		) -> #pages_crate::FormValidationError<__ReinhardtModelFormField> {
-			let field_name = match &error {
-				#pages_crate::form::ModelFormPayloadError::UnknownField { field }
-				| #pages_crate::form::ModelFormPayloadError::ForbiddenField { field }
-				| #pages_crate::form::ModelFormPayloadError::InvalidValue { field, .. } => field,
-			};
 			let mut validation = #pages_crate::FormValidationError::new();
-			if let ::core::option::Option::Some(field) = self.field(field_name) {
-				validation.add_field_error(field, error.to_string());
-			} else {
-				validation.set_form_error(error.to_string());
+			let mut unmatched_errors = ::std::vec::Vec::new();
+			for field_error in error.field_errors() {
+				if let ::core::option::Option::Some(field) = self.field(field_error.field()) {
+					let message = validation.field_errors().get(&field).map_or_else(
+						|| field_error.message().to_owned(),
+						|previous| ::std::format!("{}\n{}", previous.message(), field_error.message()),
+					);
+					validation.add_field_error(field, message);
+				} else {
+					unmatched_errors.push(::std::format!("{}: {}", field_error.field(), field_error.message()));
+				}
+			}
+			if validation.field_errors().is_empty() || !unmatched_errors.is_empty() {
+				unmatched_errors.insert(0, error.user_message().to_owned());
+				validation.set_form_error(unmatched_errors.join("\n"));
 			}
 			validation
 		}
@@ -2977,6 +2984,18 @@ fn generate_model_form(
 				>,
 				__form_id: ::std::string::String,
 				__state_version: #pages_crate::Signal<u64>,
+				__server_error: #pages_crate::Signal<
+					::core::option::Option<#pages_crate::ServerFnError>
+				>,
+				__server_error_handlers: ::std::rc::Rc<
+					::std::cell::RefCell<
+						::std::vec::Vec<
+							::std::rc::Weak<
+								dyn Fn(::core::option::Option<#pages_crate::ServerFnError>)
+							>
+						>
+					>
+				>,
 				#model_form_binding_target_declarations
 				__explicitly_reset: ::std::rc::Rc<::std::cell::Cell<bool>>,
 				__submission_generation: ::std::rc::Rc<::std::cell::Cell<u64>>,
@@ -3002,6 +3021,10 @@ fn generate_model_form(
 						__model_state,
 						__form_id,
 						__state_version: #pages_crate::Signal::new(0),
+						__server_error: #pages_crate::Signal::new(::core::option::Option::None),
+						__server_error_handlers: ::std::rc::Rc::new(
+							::std::cell::RefCell::new(::std::vec::Vec::new()),
+						),
 						#model_form_binding_target_initializers
 						__explicitly_reset: ::std::rc::Rc::new(::std::cell::Cell::new(false)),
 						__submission_generation: ::std::rc::Rc::new(::std::cell::Cell::new(0)),
@@ -3223,6 +3246,25 @@ fn generate_model_form(
 					&self.success
 				}
 
+				fn set_server_error(
+					&self,
+					error: ::core::option::Option<#pages_crate::ServerFnError>,
+				) {
+					self.__server_error.set(error.clone());
+					let mut active_handlers = ::std::vec::Vec::new();
+					self.__server_error_handlers.borrow_mut().retain(|handler| {
+						if let ::core::option::Option::Some(handler) = handler.upgrade() {
+							active_handlers.push(handler);
+							true
+						} else {
+							false
+						}
+					});
+					for handler in active_handlers {
+						handler(error.clone());
+					}
+				}
+
 				#model_form_validation_error_helper
 
 				pub fn server_mutation<Deps>(
@@ -3278,12 +3320,16 @@ fn generate_model_form(
 							(*state).clone()
 						};
 						#model_form_policy_validation
+						let state = Self::__validated_submission_state(state)
+							.map_err(|error| __form.__server_mutation_validation_error(error))?;
 						<#server_fn::marker as #pages_crate::form::ModelFormServerFn<
 							#model_form_selection_type,
 							#schema_path,
 							#policy_ident,
 						>>::validate_input(&state)
-							.map_err(|error| __form.__server_mutation_validation_error(error))?;
+							.map_err(|error| __form.__server_mutation_validation_error(
+								#pages_crate::ServerFnError::from(state.payload_error_to_validation(error)),
+							))?;
 						::core::result::Result::Ok(state)
 					})
 				}
@@ -3298,6 +3344,7 @@ fn generate_model_form(
 						.wrapping_add(1);
 					self.__submission_generation.set(submission_generation);
 					let state = self.__model_state.borrow().clone();
+					let state = self.prepare_submission_state(state)?;
 					self
 						.submit_state(state, ::core::option::Option::None, submission_generation)
 						.await
@@ -3314,13 +3361,18 @@ fn generate_model_form(
 				pub async fn submit(
 					&self,
 				) -> ::core::result::Result<(), #pages_crate::ServerFnError> {
-					if let ::core::result::Result::Err(error) = self.data() {
-						let error = #pages_crate::ServerFnError::validation_with_message(
-							error.to_string(),
-							::core::iter::empty::<(&str, &str)>(),
-						);
+					self.set_server_error(::core::option::Option::None);
+					let state = self.__model_state.borrow().clone();
+					if let ::core::result::Result::Err(errors) = state.build_validated_payload_for::<
+						#validation_data_type,
+						#policy_ident,
+					>() {
+						let error = #pages_crate::ServerFnError::from(errors);
+						self.error.set(::core::option::Option::Some(error.to_string()));
+						self.set_server_error(::core::option::Option::Some(error.clone()));
 						return ::core::result::Result::Err(error);
 					}
+					self.error.set(::core::option::Option::None);
 					::core::result::Result::Ok(())
 				}
 
@@ -3375,6 +3427,64 @@ fn generate_model_form(
 					}
 				}
 
+				fn __validated_submission_state(
+					mut state: #pages_crate::form::ModelFormState<#schema_path, #policy_ident>,
+				) -> ::core::result::Result<
+					#pages_crate::form::ModelFormState<#schema_path, #policy_ident>,
+					#pages_crate::ServerFnError,
+				> {
+					let normalized_payload = state.build_validated_payload_for::<
+						#validation_data_type,
+						#policy_ident,
+					>().map_err(#pages_crate::ServerFnError::from)?;
+					for descriptor in state.selected_descriptors() {
+						if ::core::matches!(
+							descriptor.kind,
+							#pages_crate::form::ModelFormFieldKind::File
+								| #pages_crate::form::ModelFormFieldKind::Image
+						) {
+							continue;
+						}
+						match <#validation_data_type as #pages_crate::form::ModelFormPayload<#policy_ident>>::get_json(
+							&normalized_payload,
+							descriptor.name,
+						) {
+							::core::option::Option::Some(value) => state
+								.set_value(descriptor.name, value)
+								.expect("validated model-form payload must rehydrate its selected field"),
+							::core::option::Option::None => state
+								.clear_value(descriptor.name)
+								.expect("validated model-form payload must clear its selected field"),
+						}
+					}
+					::core::result::Result::Ok(state)
+				}
+
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+				fn prepare_submission_state(
+					&self,
+					state: #pages_crate::form::ModelFormState<#schema_path, #policy_ident>,
+				) -> ::core::result::Result<
+					#pages_crate::form::ModelFormState<#schema_path, #policy_ident>,
+					#pages_crate::ServerFnError,
+				> {
+					self.loading.set(true);
+					self.error.set(::core::option::Option::None);
+					self.set_server_error(::core::option::Option::None);
+					self.success.set(false);
+					#model_form_policy_check
+					let state = match Self::__validated_submission_state(state) {
+						::core::result::Result::Ok(state) => state,
+						::core::result::Result::Err(error) => {
+							self.loading.set(false);
+							self.error.set(::core::option::Option::Some(error.to_string()));
+							self.set_server_error(::core::option::Option::Some(error.clone()));
+							return ::core::result::Result::Err(error);
+						}
+					};
+					::core::result::Result::Ok(state)
+				}
+
 				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 				async fn submit_state(
 					&self,
@@ -3384,23 +3494,6 @@ fn generate_model_form(
 					>,
 					submission_generation: u64,
 				) -> ::core::result::Result<#model_form_response_type, #pages_crate::ServerFnError> {
-					let state = match state.validated_for_submission() {
-						::core::result::Result::Ok(state) => state,
-						::core::result::Result::Err(error) => {
-							let error = #pages_crate::ServerFnError::validation_with_message(
-								error.to_string(),
-								::core::iter::empty::<(&str, &str)>(),
-							);
-							self.loading.set(false);
-							self.success.set(false);
-							self.error.set(::core::option::Option::Some(error.to_string()));
-							return ::core::result::Result::Err(error);
-						}
-					};
-					self.loading.set(true);
-					self.error.set(::core::option::Option::None);
-					self.success.set(false);
-					#model_form_policy_check
 					let result = #pages_crate::server_mutation::execute_server_mutation_once(
 						&state,
 						|state| async move {
@@ -3429,6 +3522,7 @@ fn generate_model_form(
 						}
 						::core::result::Result::Err(error) => {
 							self.error.set(::core::option::Option::Some(error.to_string()));
+							self.set_server_error(::core::option::Option::Some(error.clone()));
 							::core::result::Result::Err(error)
 						}
 					}
@@ -4060,6 +4154,10 @@ fn generate_model_form(
 								}
 								#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 								{
+									let submitted_state = match submit_form.prepare_submission_state(submitted_state) {
+										::core::result::Result::Ok(state) => state,
+										::core::result::Result::Err(_) => return,
+									};
 									let form = submit_form.clone();
 									#pages_crate::platform::spawn_task(async move {
 										if form.__submission_generation.get() != submission_generation {
@@ -4167,6 +4265,27 @@ fn generate_model_form(
 						}
 					}
 					__ReinhardtModelFormValues(values)
+				}
+
+				fn runtime_server_error(
+					&self,
+				) -> ::core::option::Option<#pages_crate::ServerFnError> {
+					self.__server_error.get()
+				}
+
+				fn runtime_clear_server_error(&self) {
+					self.set_server_error(::core::option::Option::None);
+				}
+
+				fn runtime_register_server_error_handler(
+					&self,
+					handler: ::std::rc::Weak<
+						dyn Fn(::core::option::Option<#pages_crate::ServerFnError>)
+					>,
+				) {
+					let mut handlers = self.__server_error_handlers.borrow_mut();
+					handlers.retain(|handler| handler.upgrade().is_some());
+					handlers.push(handler);
 				}
 
 				fn runtime_apply_values(&self, values: &Self::Values) {
@@ -9952,10 +10071,14 @@ mod tests {
 
 		let output = parse_validate_generate(input).to_string();
 
-		assert!(output.contains("QuestionModelFormData < QuestionSubmissionPolicy >"));
-		assert!(
-			!output.contains("QuestionModelFormData < QuestionFormSelectionPolicy >"),
-			"the public data alias must remain assignable to the server endpoint payload"
+		assert_eq!(
+			output
+				.matches(
+					"pub type QuestionFormData = QuestionModelFormData < QuestionSubmissionPolicy >"
+				)
+				.count(),
+			1,
+			"the public data alias must remain assignable to the server endpoint payload",
 		);
 		assert!(output.contains("i128 :: from (min)"));
 		assert!(output.contains("Value :: Null => :: std :: string :: String :: new ()"));
@@ -10095,17 +10218,21 @@ mod tests {
 			.stmts
 			.iter()
 			.rev()
-			.take(2)
+			.take(3)
 			.rev()
 			.map(ToTokens::to_token_stream)
 			.collect::<TokenStream>();
 		let expected_validation_and_state: syn::Block = syn::parse2(quote! {{
+			let state = Self::__validated_submission_state(state)
+				.map_err(|error| __form.__server_mutation_validation_error(error))?;
 			<save_upload::marker as ::reinhardt_pages::form::ModelFormServerFn<
 				__ReinhardtModelFormSelection,
 				UploadDocumentFormSchema,
 				UploadFormSelectionPolicy,
 			>>::validate_input(&state)
-				.map_err(|error| __form.__server_mutation_validation_error(error))?;
+				.map_err(|error| __form.__server_mutation_validation_error(
+					::reinhardt_pages::ServerFnError::from(state.payload_error_to_validation(error)),
+				))?;
 			::core::result::Result::Ok(state)
 		}})
 		.expect("expected model form mutation preparation must parse");
@@ -10132,7 +10259,62 @@ mod tests {
 	}
 
 	#[rstest::rstest]
-	fn test_generate_model_form_gates_legacy_payload_validation_to_native() {
+	#[case::fields(quote! { fields: [name], })]
+	#[case::exclude(quote! { exclude: [api_url], })]
+	fn test_generate_model_form_validates_and_rehydrates_submission_snapshot(
+		#[case] selection: TokenStream,
+	) {
+		let input = quote! {
+			name: ClusterForm,
+			model: Cluster,
+			policy: ClusterPolicy,
+			#selection
+			server_fn: save_cluster,
+		};
+
+		let output = parse_validate_generate(input).to_string();
+		assert_eq!(output.matches("build_validated_payload_for").count(), 2);
+		assert_eq!(
+			output
+				.matches("build_validated_payload_for :: < ClusterModelFormData < ClusterFormSelectionPolicy > , ClusterFormSelectionPolicy , >")
+				.count(),
+			2,
+			"native and WASM snapshots must validate only selected fields",
+		);
+		let validation = output
+			.rfind("build_validated_payload_for")
+			.expect("WASM submission must validate its snapshot");
+		let rehydration = output[validation..]
+			.find("ModelFormPayload < ClusterFormSelectionPolicy >> :: get_json")
+			.map(|offset| validation + offset)
+			.expect("generated submission must read normalized payload fields");
+		let dispatch = output[validation..]
+			.find("submit (state)")
+			.map(|offset| validation + offset)
+			.expect("generated submission must dispatch through the marker contract");
+
+		assert_eq!(
+			(validation < rehydration, rehydration < dispatch),
+			(true, true)
+		);
+		assert_eq!(
+			output
+				.matches("validated model-form payload must rehydrate its selected field")
+				.count(),
+			1
+		);
+		assert_eq!(
+			output
+				.matches("Self :: __validated_submission_state (state)")
+				.count(),
+			2,
+			"legacy submission and server mutation must prepare the same normalized snapshot",
+		);
+		assert_eq!(output.matches("client_validation").count(), 0);
+	}
+
+	#[rstest::rstest]
+	fn test_generate_model_form_validates_native_submit_with_structured_errors() {
 		let input = quote! {
 			name: UploadForm,
 			model: UploadDocument,
@@ -10142,16 +10324,26 @@ mod tests {
 		};
 
 		let output = parse_validate_generate(input).to_string();
-		let legacy_validation =
-			"if let :: core :: result :: Result :: Err (error) = self . data ()";
 		let (_, native_submit) = output
 			.rsplit_once("pub async fn submit")
 			.expect("generated model form must have a native submit method");
 		let (native_submit, _) = native_submit
-			.split_once("pub fn into_page")
-			.expect("generated native submit method must precede into_page");
+			.split_once("fn clear_mounted_file_inputs_matching")
+			.expect("generated native submit method must precede WASM file cleanup");
 
-		assert_eq!(native_submit.matches(legacy_validation).count(), 1);
+		assert_eq!(
+			native_submit
+				.matches("state . build_validated_payload_for")
+				.count(),
+			1
+		);
+		assert_eq!(
+			native_submit
+				.matches("ServerFnError :: from (errors)")
+				.count(),
+			1
+		);
+		assert_eq!(native_submit.matches("self . data ()").count(), 0);
 	}
 
 	#[rstest::rstest]

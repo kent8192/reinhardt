@@ -221,7 +221,30 @@ Provides compile-time code generation for common patterns.
     target-neutral create-form contract from an explicit public field list
   - Defaults `table_name` to the app label plus struct name in snake_case without pluralization
   - Example: `#[model(app_label = "polls", form = true)]` generates
-    `QuestionFormSchema` and `QuestionModelFormData<P>` for a `Question` model
+    `QuestionFormSchema`, `QuestionModelFormData<P>`, and
+    `CleanedQuestionModelFormData<P>` for a `Question` model
+  - `#[form(validate = path)]` declares one synchronous validator over the
+    generated cleaned payload
+  - `#[form(trim)]` opts a generated text, email, or URL field into trimming;
+    generated fields otherwise preserve surrounding whitespace
+  - `#[field(...)]` remains database and model metadata; form-only behavior
+    belongs in `#[form(...)]`
+  - Native create code consumes raw payloads with `clean_and_validate()`, then
+    uses cleaned `into_model(context)`; update code uses
+    `clean_and_validate_for_update(&existing)` before `apply_to(existing)` so
+    synchronous cross-field validation observes the post-merge candidate.
+    `apply_to` validates against its actual existing instance, preserving omitted
+    values even when the cleaned payload came from create validation.
+  - Create validation evaluates omitted model defaults once, then normalizes and
+    validates the resulting values before model construction. Cleaned payloads
+    retain these values across snapshots and persistence.
+  - Existing file references are read by Rust field name; model serde renaming
+    or skipped serialization does not change storage-reference validation
+  - Cleaned file/image getters return `Option<ModelFormFileValue<'_, T>>`:
+    `Stored` exposes a validated storage reference and `Uploaded` exposes pending
+    upload metadata during browser and multipart validation. Missing files and
+    nullable clears return `None`; scalar getters retain their typed values.
+    Upload metadata is excluded when converting the candidate into a raw payload.
   - Example: `#[model(app_label = "polls", form(name = QuestionCreateForm,
     fields(text)))]` generates `QuestionCreateForm`,
     `QuestionCreateFormData`, `QuestionCreateFormSchema`, and
@@ -235,6 +258,14 @@ Provides compile-time code generation for common patterns.
     are rejected.
   - Named payload JSON is strict: unknown or duplicate keys and incompatible
     values fail deserialization. Only selected fields are serialized.
+  - Named data also implements `ModelFormValidatingPayload`: calling
+    `data.clean_and_validate()` on `QuestionCreateFormData` returns
+    `CleanedQuestionCreateFormData`. Declared defaults, opt-in trimming, field
+    constraints, and the synchronous validator share the same generated
+    pipeline on native and WASM. The callback receives
+    `&CleanedQuestionModelFormData<P>` on both targets; the cleaned named
+    payload exposes normalized getters and preserves default provenance when
+    converted back with `into_raw()`.
   - Models without either form opt-in generate no model-form symbols
 
 - **`#[derive(Model)]`** - Derive macro for automatic Model implementation

@@ -162,6 +162,9 @@ pub(crate) struct ServerFnOptions {
 	/// This is deliberately opt-in because a normal JSON server function may
 	/// also use a single parameter named `payload`.
 	pub model_form: bool,
+
+	/// Generated payload binding scalar validation and policy for a multipart endpoint.
+	pub model_form_payload: Option<syn::Type>,
 }
 
 fn default_codec() -> String {
@@ -177,6 +180,7 @@ impl Default for ServerFnOptions {
 			no_csrf: false,
 			pre_validate: false,
 			model_form: false,
+			model_form_payload: None,
 		}
 	}
 }
@@ -977,6 +981,13 @@ fn generate_server_fn(info: &ServerFnInfo) -> proc_macro2::TokenStream {
 	let uses_multipart = wire_params
 		.iter()
 		.any(|parameter| !matches!(parameter.kind, WireParamKind::Json));
+	if info.options.model_form_payload.is_some() && (!uses_multipart || info.options.model_form) {
+		return syn::Error::new_spanned(
+			&func.sig,
+			"server_fn(model_form_payload = ...) requires file arguments and cannot use model_form = true",
+		)
+		.to_compile_error();
+	}
 
 	// Auto-detect #[inject] parameters unconditionally
 	let inject_params = detect_inject_params(&func.sig.inputs);
@@ -2149,13 +2160,12 @@ fn generate_server_handler(
 	};
 	let model_form_payload_error = quote! {
 		.map_err(|error| {
-			#pages_crate::ServerFnError::validation_with_message(
-				error.to_string(),
-				::core::iter::empty::<(&str, &str)>(),
+			#pages_crate::ServerFnError::from(
+				state.payload_error_to_validation(error),
 			)
 		})?
 	};
-	let model_form_server_fn_impl = if uses_multipart {
+	let model_form_server_fn_impl = if let Some(payload_type) = &info.options.model_form_payload {
 		let selection_bounds: Vec<_> = wire_params
 			.iter()
 			.enumerate()
@@ -2243,7 +2253,12 @@ fn generate_server_handler(
 				__ReinhardtPolicy: #pages_crate::form::ModelFormPolicy,
 				__ReinhardtSelection:
 					#pages_crate::form::ModelFormSelectionCount<#argument_count>
-					#(+ #selection_bounds)*,
+					#(+ #selection_bounds)*
+					+ #pages_crate::form::ModelFormSelectionPayload<
+						__ReinhardtSchema,
+						__ReinhardtPolicy,
+						Payload = #payload_type,
+					>,
 					#return_type: #pages_crate::server_fn::ServerFnQueryResult,
 					#pages_crate::ServerFnError:
 						::core::convert::Into<
@@ -2915,6 +2930,18 @@ fn generate_server_handler(
 			#msw_wasm_inner_tokens
 		}
 	};
+	let multipart_model_validation = info.options.model_form_payload.as_ref().map(|payload_type| {
+		quote! {
+			if let Err(error) = arguments.validate_model_form::<#payload_type, _, #name::marker>() {
+				let error_body = ::serde_json::to_vec(&error)
+					.map(#pages_crate::__private::bytes::Bytes::from)
+					.unwrap_or_else(|_| #pages_crate::__private::bytes::Bytes::from_static(
+						br#"{"version":1,"kind":"server","status":500,"message":"Internal server error","field_errors":[]}"#,
+					));
+				return Err(error_body);
+			}
+		}
+	});
 	let handler_execution = if uses_multipart {
 		quote! {
 			let __handler_result = async {
@@ -2923,6 +2950,7 @@ fn generate_server_handler(
 				let mut arguments = #pages_crate::server_fn::MultipartArguments::from_request(&__req)
 					.await
 					.map_err(|_| __invalid_request_error())?;
+				#multipart_model_validation
 				#(#multipart_argument_extraction)*
 				arguments.finish().map_err(|_| __invalid_request_error())?;
 				#multipart_validation_code
@@ -3164,6 +3192,17 @@ mod tests {
 		assert_eq!(options.endpoint, Some("/custom".to_string()));
 		assert_eq!(options.codec, "json");
 		assert!(options.model_form);
+
+		let nested = NestedMeta::parse_meta_list(quote! {
+			model_form_payload = "UploadModelFormData<UploadPolicy>"
+		})
+		.unwrap();
+		let options = ServerFnOptions::from_list(&nested).unwrap();
+		let payload = options.model_form_payload.unwrap();
+		assert_eq!(
+			quote!(#payload).to_string(),
+			quote!(UploadModelFormData<UploadPolicy>).to_string(),
+		);
 	}
 
 	#[test]
@@ -3365,7 +3404,7 @@ mod tests {
 		let info = ServerFnInfo {
 			func,
 			options: ServerFnOptions {
-				model_form: true,
+				model_form_payload: Some(parse_quote!(UploadModelFormData<UploadPolicy>)),
 				..ServerFnOptions::default()
 			},
 			codec_explicit: false,
@@ -3382,6 +3421,9 @@ mod tests {
 		// Both target handlers validate and decode the same normalized wire name.
 		assert_eq!(generated.matches("json_argument (\"type\")").count(), 4);
 		assert_eq!(generated.matches("json_argument (\"r#type\")").count(), 0);
+		let validation = generated.find("arguments . validate_model_form").unwrap();
+		let extraction = generated.find("arguments . take_json").unwrap();
+		assert!(validation < extraction);
 	}
 
 	#[test]
@@ -3889,6 +3931,68 @@ mod tests {
 				&& generated.contains("{ data }"),
 			"the native fallback must bind and forward the declared parameter name: {generated}"
 		);
+	}
+
+	#[rstest::rstest]
+	fn model_form_submission_adapters_preserve_structured_payload_errors() {
+		use syn::parse_quote;
+
+		let multipart_func: ItemFn = parse_quote! {
+			async fn upload(title: String, document: UploadedFile) -> Result<(), ServerFnError> {
+				Ok(())
+			}
+		};
+		let multipart_info = ServerFnInfo {
+			func: multipart_func,
+			options: ServerFnOptions {
+				model_form_payload: Some(parse_quote!(UploadModelFormData<UploadPolicy>)),
+				..ServerFnOptions::default()
+			},
+			codec_explicit: false,
+			metadata_name: None,
+			endpoint_tokens: None,
+			metadata_name_tokens: None,
+			detail: false,
+			transactional: false,
+			structured_error: false,
+		};
+		let payload_func: ItemFn = parse_quote! {
+			async fn save(data: QuestionModelFormData<AllEditableModelFields>) -> Result<(), ServerFnError> {
+				Ok(())
+			}
+		};
+		let payload_info = ServerFnInfo {
+			func: payload_func,
+			options: ServerFnOptions {
+				model_form: true,
+				..ServerFnOptions::default()
+			},
+			codec_explicit: false,
+			metadata_name: None,
+			endpoint_tokens: None,
+			metadata_name_tokens: None,
+			detail: false,
+			transactional: false,
+			structured_error: false,
+		};
+
+		let multipart = generate_server_fn(&multipart_info).to_string();
+		let payload = generate_server_fn(&payload_info).to_string();
+
+		for (generated, expected_mappings) in [(multipart, 4), (payload, 2)] {
+			assert_eq!(
+				generated
+					.matches("state . payload_error_to_validation (error)")
+					.count(),
+				expected_mappings
+			);
+			assert_eq!(
+				generated
+					.matches("validation_with_message (error . to_string")
+					.count(),
+				0
+			);
+		}
 	}
 
 	#[test]

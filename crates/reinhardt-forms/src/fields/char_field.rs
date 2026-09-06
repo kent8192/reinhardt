@@ -217,7 +217,7 @@ impl FormField for CharField {
 				let v = if self.strip { v.trim() } else { v };
 				if v.is_empty() {
 					if self.required {
-						return Err(FieldError::Required(self.name.clone()));
+						return Err(FieldError::required(None));
 					}
 					return Ok(serde_json::Value::String(
 						self.empty_value.clone().unwrap_or_default(),
@@ -227,7 +227,7 @@ impl FormField for CharField {
 			}
 			None => {
 				if self.required {
-					return Err(FieldError::Required(self.name.clone()));
+					return Err(FieldError::required(None));
 				}
 				return Ok(serde_json::Value::String(
 					self.empty_value.clone().unwrap_or_default(),
@@ -267,14 +267,20 @@ mod tests {
 	use serde_json::json;
 
 	#[rstest]
-	fn test_char_field_required() {
+	#[case(None)]
+	#[case(Some(json!("")))]
+	#[case(Some(json!("  ")))]
+	fn test_char_field_required(#[case] value: Option<serde_json::Value>) {
 		// Arrange
 		let field = CharField::new("test".to_string()).required();
 
-		// Act & Assert
-		assert!(field.clean(None).is_err());
-		assert!(field.clean(Some(&json!(""))).is_err());
-		assert!(field.clean(Some(&json!("  "))).is_err());
+		// Act
+		let error = field
+			.clean(value.as_ref())
+			.expect_err("required text should reject missing or empty input");
+
+		// Assert
+		assert_eq!(error.to_string(), "This field is required.");
 	}
 
 	#[rstest]

@@ -1,5 +1,35 @@
 //! Schema contracts describing fields available to model-backed forms.
 
+/// Metadata for a pending file in a model-form validation candidate.
+///
+/// **Parity: P2.** Browser and native validation expose the same metadata.
+/// Presence and byte size come from the selected or parsed upload. Filenames
+/// and content types remain client-provided values, not trusted storage paths.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModelFormUpload {
+	/// The selected model field receiving this upload.
+	pub name: &'static str,
+	/// The original client filename, when supplied.
+	pub filename: Option<String>,
+	/// The client-declared media type, when supplied.
+	pub content_type: Option<String>,
+	/// The size of the uploaded bytes.
+	pub size: u64,
+}
+
+/// A stored file or pending upload visible to model-form validation.
+///
+/// **Parity: P2.** Generated cleaned file getters use this representation on
+/// native and WASM targets. Pending uploads carry no storage reference and
+/// are discarded when the cleaned candidate is converted back to its raw payload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModelFormFileValue<'a, T> {
+	/// An existing or server-defaulted storage-backed model value.
+	Stored(&'a T),
+	/// A selected file whose bytes have not been persisted to model storage.
+	Uploaded(&'a ModelFormUpload),
+}
+
 /// The target-neutral input kind for a model-backed form field.
 ///
 /// Parity: P2. The same field-kind metadata is available on native and
@@ -90,6 +120,10 @@ pub struct ModelFormFieldDescriptor {
 	pub editable: bool,
 	/// Whether the field is a generated relationship identifier.
 	pub generated_relation_id: bool,
+	/// Whether generated model-form cleaning strips surrounding whitespace.
+	///
+	/// **Parity: P2.** Native and WASM targets apply the same opt-in normalization.
+	pub trim: bool,
 }
 
 /// Supplies compile-time field metadata for a model-backed form.
@@ -257,6 +291,7 @@ mod tests {
 				nullable: false,
 				editable: true,
 				generated_relation_id: false,
+				trim: false,
 			}];
 			&FIELDS
 		}
@@ -361,6 +396,7 @@ mod tests {
 			nullable: false,
 			editable: true,
 			generated_relation_id: false,
+			trim: false,
 		};
 
 		assert!(descriptor.required);

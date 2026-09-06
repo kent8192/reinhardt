@@ -330,7 +330,9 @@ jobs:
   wasm-consumer-fixture:
     name: WASM Consumer Fixture (#4161 regression)
     runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
-    timeout-minutes: 30
+    # Cold CLI builds plus native and WASM checks need the same budget as
+    # the other Rust compilation jobs, even when dependency caches miss.
+    timeout-minutes: 360
     steps:
       - name: Free Disk Space (Ubuntu)
         if: ${{ !contains(inputs.runner || '', 'self-hosted') }}

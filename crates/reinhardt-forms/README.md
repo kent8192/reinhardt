@@ -111,8 +111,15 @@ use reinhardt::forms::{Form, Field, CharField, IntegerField};
   - Explicit `#[model(form = true)]` opt-in
   - Generated `{Model}FormSchema` metadata and
     `{Model}ModelFormData<P>` typed payload
+  - Generated `Cleaned{Model}ModelFormData<P>` after consuming strict create
+    validation with `clean_and_validate()` or post-merge update validation with
+    `clean_and_validate_for_update(&existing)`
+  - `#[form(trim)]` opt-in normalization for generated text, email, and URL
+    fields
+  - `#[form(validate = path)]` synchronous cross-field validation
   - `ModelFormPolicy`-controlled public field selection
-  - Typed trusted setters for server-owned values
+  - Typed trusted setters for excluded editable values
+  - Typed server context for required server-owned values during creation
   - `from_payload` for explicit create intent
   - `from_payload_and_instance` for explicit update intent
   - Database-free, cached `build_instance()` candidate construction
@@ -374,18 +381,73 @@ Use `from_payload_and_instance(payload, instance)` for an update. Create and
 update intent is selected by the constructor, not by a database existence
 query or a primary-key guess.
 
+Generated payloads also provide a direct server trust boundary. The raw
+payload is deserializable; its cleaned counterpart is not. Repeat validation
+on the server, run application-owned async checks on normalized values, and
+then construct or update the model:
+
+```rust,ignore
+use reinhardt_core::model_form::{
+    ModelFormUpdatingPayload,
+    ModelFormValidatingPayload,
+};
+
+let cleaned = payload.clean_and_validate()?;
+ensure_cluster_name_available(&cleaned).await?;
+let cluster = cleaned.into_model(
+    ClusterModelFormServerContext::new().organization_id(organization_id),
+)?;
+
+let cleaned = update_payload.clean_and_validate_for_update(&existing)?;
+ensure_cluster_name_available(&cleaned).await?;
+let updated = cleaned.apply_to(existing)?;
+```
+
+Required server-owned create values enter through the generated typed context,
+so an incomplete context cannot call `into_model`. Async validation remains an
+explicit application step after cleaning. Database failures remain structured
+persistence errors; they are not validation errors.
+
+Create validation requires every public field needed to construct the model.
+Update validation instead merges omitted fields from `existing` while running
+generated field and synchronous `#[form(validate = path)]` checks. The returned
+cleaned payload stays partial, so `apply_to(existing)` changes only fields that
+were supplied. Explicit nullable `null` values remain clears rather than being
+replaced from the existing model.
+
+Generated string-like fields preserve surrounding whitespace unless their
+model field has `#[form(trim)]`. Whitespace-only optional input then follows the
+same empty-control rules: nullable fields are cleared, while defaulted fields
+use their declared default on create and preserve omission on update. This does
+not change the defaults of manually constructed `CharField`, `EmailField`, or
+`URLField` values.
+
+Declared model defaults may provide trusted storage references. Submitted
+File/Image references must match the existing Rust model field, independent
+of model serialization attributes.
+
 `build_instance()` is the equivalent of Django's `commit=False`: it validates
 and caches a model candidate without database access. Repeated calls and a
 failed `save()` reuse that candidate, which makes persistence retryable.
+Retrying model validation replaces earlier errors without rerunning field
+cleaners for an unchanged payload.
+Inline formsets also retain prevalidated child candidates when the trusted
+parent key is unchanged, so saving the parent does not rerun child validation.
+When a generated key becomes available, public relationship values are installed
+in the cleaned child payload and generated validation runs again before the
+child is persisted. Custom field cleaners retain their normalized snapshot.
+Other trusted child values are type-checked before the parent is persisted.
 Mutations made directly to the returned clone after `build_instance()` are the
 caller's validation responsibility.
 
 An excluded required value must have a declared model default, an automatic
 model construction path, or a value supplied by a trusted typed setter before
 construction. Otherwise `build_instance()` returns
-`ModelFormError::MissingModelField`. Persistence failures remain
-`ModelFormError::Persistence`, and `database_error()` returns the structured
-`DatabaseError`.
+`ModelFormError::MissingModelField`. `ModelFormError::Persistence` means the
+write failed, while `ModelFormError::PersistenceAfterCreate` means the insert
+succeeded but hydration failed. Do not retry the latter as another create;
+reload the persisted record before updating it. `database_error()` returns the
+structured `DatabaseError` from either variant.
 
 ### Named target-neutral ModelForm contract
 

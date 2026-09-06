@@ -484,6 +484,37 @@ struct ModelConfig {
 	serde_deserialize: bool,
 }
 
+/// Model-form configuration from struct-level `#[form(...)]` attributes.
+#[derive(Debug, Clone, Default)]
+struct ModelFormConfig {
+	validate: Option<syn::Path>,
+}
+
+impl ModelFormConfig {
+	fn from_attrs(attrs: &[syn::Attribute]) -> Result<Self> {
+		let mut config = Self::default();
+
+		for attr in attrs {
+			if !attr.path().is_ident("form") {
+				continue;
+			}
+
+			attr.parse_nested_meta(|meta| {
+				if !meta.path.is_ident("validate") {
+					return Err(meta.error("unknown model form option; expected `validate`"));
+				}
+				if config.validate.is_some() {
+					return Err(meta.error("duplicate `validate` model form option"));
+				}
+				config.validate = Some(meta.value()?.parse()?);
+				Ok(())
+			})?;
+		}
+
+		Ok(config)
+	}
+}
+
 impl ModelConfig {
 	/// Parse `#[model(...)]` attribute
 	fn from_attrs(attrs: &[syn::Attribute], struct_name: &syn::Ident) -> Result<Self> {
@@ -1852,6 +1883,7 @@ struct FieldInfo {
 	name: syn::Ident,
 	ty: Type,
 	config: FieldConfig,
+	form: FieldFormConfig,
 	/// Field-level `#[serde(...)]` attributes copied to generated companion fields.
 	serde_attrs: Vec<syn::Attribute>,
 	/// Whether `#[model]` injected the relation-model `#[serde(skip)]` attribute.
@@ -1877,6 +1909,44 @@ struct FieldInfo {
 	/// Whether this is an auto-generated FK _id field (marked with `#[fk_id_field]`)
 	/// These fields should have getters but not setters
 	is_fk_id_field: bool,
+}
+
+/// Field-level model-form configuration from `#[form(...)]`.
+#[derive(Debug, Clone, Default)]
+struct FieldFormConfig {
+	trim: bool,
+	trim_span: Option<Span>,
+}
+
+impl FieldFormConfig {
+	/// Parse `#[form(...)]` attributes attached to a model field.
+	fn from_attrs(attrs: &[syn::Attribute]) -> Result<Self> {
+		let mut config = Self::default();
+
+		for attr in attrs {
+			if !attr.path().is_ident("form") {
+				continue;
+			}
+
+			attr.parse_nested_meta(|meta| {
+				if meta.path.is_ident("trim") {
+					if config.trim {
+						return Err(meta.error("duplicate `trim` form field option"));
+					}
+					if meta.input.peek(syn::Token![=]) {
+						return Err(meta.error("`trim` does not accept a value"));
+					}
+					config.trim = true;
+					config.trim_span = Some(meta.path.span());
+					Ok(())
+				} else {
+					Err(meta.error("unknown form field option; expected `trim`"))
+				}
+			})?;
+		}
+
+		Ok(config)
+	}
 }
 
 struct LoweredModelFields {
@@ -1909,6 +1979,7 @@ fn lower_model_fields(fields: &Punctuated<syn::Field, Token![,]>) -> Result<Lowe
 		let ty = field.ty.clone();
 		let config = FieldConfig::from_attrs(&field.attrs)?;
 		config.validate_for_field_type(&ty)?;
+		let form = FieldFormConfig::from_attrs(&field.attrs)?;
 		let injected_relation_serde_skip = field.attrs.iter().any(|attr| {
 			attr.path()
 				.is_ident("reinhardt_internal_relation_serde_skip")
@@ -1933,6 +2004,7 @@ fn lower_model_fields(fields: &Punctuated<syn::Field, Token![,]>) -> Result<Lowe
 			name,
 			ty,
 			config,
+			form,
 			serde_attrs,
 			injected_relation_serde_skip,
 			rel,
@@ -3090,12 +3162,18 @@ fn model_form_kind(field: &FieldInfo) -> Result<TokenStream> {
 			let min = field
 				.config
 				.min_value
-				.map(|value| quote!(::core::option::Option::Some(::core::stringify!(#value))))
+				.map(|value| {
+					let value = LitStr::new(&value.to_string(), field.name.span());
+					quote!(::core::option::Option::Some(#value))
+				})
 				.unwrap_or_else(|| quote!(::core::option::Option::None));
 			let max = field
 				.config
 				.max_value
-				.map(|value| quote!(::core::option::Option::Some(::core::stringify!(#value))))
+				.map(|value| {
+					let value = LitStr::new(&value.to_string(), field.name.span());
+					quote!(::core::option::Option::Some(#value))
+				})
 				.unwrap_or_else(|| quote!(::core::option::Option::None));
 			quote!(#core_crate::model_form::ModelFormFieldKind::Decimal { min: #min, max: #max })
 		}
@@ -3110,6 +3188,21 @@ fn model_form_kind(field: &FieldInfo) -> Result<TokenStream> {
 	};
 
 	Ok(kind)
+}
+
+fn validate_model_form_trim(field_infos: &[FieldInfo], model_form_enabled: bool) -> Result<()> {
+	for field in field_infos.iter().filter(|field| field.form.trim) {
+		if !model_form_enabled
+			|| !is_model_form_editable(field, field_infos)
+			|| !is_string_type(&field.ty)
+		{
+			return Err(syn::Error::new(
+				field.form.trim_span.unwrap_or_else(|| field.name.span()),
+				"`trim` is only valid on editable text, email, or URL ModelForm fields",
+			));
+		}
+	}
+	Ok(())
 }
 
 fn model_form_relation_id_kind(
@@ -3190,10 +3283,12 @@ fn generate_model_form_support(
 	struct_name: &Ident,
 	struct_vis: &syn::Visibility,
 	field_infos: &[FieldInfo],
+	form_config: &ModelFormConfig,
 	selected_fields: Option<&[Ident]>,
 ) -> Result<TokenStream> {
 	let core_crate = get_reinhardt_core_crate();
 	let forms_crate = get_reinhardt_forms_crate();
+	let validation_enabled = forms_crate.is_some();
 	let native_form_cfg = if forms_crate.is_some() {
 		quote!(#[cfg(not(all(target_family = "wasm", target_os = "unknown")))])
 	} else {
@@ -3205,6 +3300,10 @@ fn generate_model_form_support(
 	let serde_json_crate = get_serde_json_crate();
 	let schema_name = Ident::new(&format!("{}FormSchema", struct_name), struct_name.span());
 	let payload_name = Ident::new(&format!("{}ModelFormData", struct_name), struct_name.span());
+	let cleaned_payload_name = Ident::new(
+		&format!("Cleaned{}ModelFormData", struct_name),
+		struct_name.span(),
+	);
 	let visitor_name = Ident::new(
 		&format!("{}ModelFormDataVisitor", struct_name),
 		struct_name.span(),
@@ -3258,12 +3357,25 @@ fn generate_model_form_support(
 		let setter_name = format!("set_{field_name}");
 		let trusted_setter_name = format!("set_trusted_{field_name}");
 		let collides_with_reserved_api = [
+			"apply_defaults",
+			"clear_json",
+			"is_defaulted",
+			"set_normalized_json",
+			"clean_and_validate",
+			"clean_and_validate_for_update",
+			"clean_and_validate_with_uploads",
+			"__reinhardt_uploads",
+			"clone",
 			"default",
 			"empty",
 			"fields",
 			"forbidden_fields",
+			"from_validated_raw",
 			"supplied_fields",
 			"get_json",
+			"into_raw",
+			"into_model",
+			"apply_to",
 			"set_json",
 			"from_native_form_value",
 			"_policy",
@@ -3303,6 +3415,20 @@ fn generate_model_form_support(
 			Ok(quote!(#name => ::core::option::Option::Some(#kind)))
 		})
 		.collect::<Result<Vec<_>>>()?;
+	let trusted_relation_requiredness = field_infos
+		.iter()
+		.filter(|field| field.is_fk_id_field)
+		.map(|field| {
+			let name = LitStr::new(&ident_to_wire_name(&field.name), field.name.span());
+			let (is_optional, _) = extract_option_type(&field.ty);
+			let nullable = field
+				.config
+				.null
+				.unwrap_or(is_optional || model_form_relation_id_is_nullable(field, field_infos));
+			let required =
+				!nullable && field.config.blank != Some(true) && field.config.default.is_none();
+			quote!(#name => #required)
+		});
 	let trusted_field_assignments = field_infos.iter().map(|field| {
 		let name = LitStr::new(&ident_to_wire_name(&field.name), field.name.span());
 		let ident = &field.name;
@@ -3329,6 +3455,81 @@ fn generate_model_form_support(
 		.iter()
 		.map(|field| LitStr::new(&ident_to_wire_name(&field.name), field.name.span()))
 		.collect();
+	let instance_field_json_arms = field_names
+		.iter()
+		.zip(&field_literals)
+		.map(|(name, literal)| quote!(#literal => #serde_json_crate::to_value(&self.#name).ok(),));
+	let trusted_file_entries = editable_fields
+		.iter()
+		.filter(|field| storage_field_kind(&field.ty).is_some())
+		.map(|field| {
+			let name = &field.name;
+			let literal = LitStr::new(&ident_to_wire_name(name), name.span());
+			quote! {
+				(#literal.to_owned(), #serde_json_crate::to_value(&existing.#name).map_err(|error| {
+					let mut errors = #core_crate::validators::ValidationErrors::new();
+					errors.add(#literal, #core_crate::validators::ValidationError::Custom(error.to_string()));
+					errors
+				})?)
+			}
+		})
+		.collect::<Vec<_>>();
+	let trusted_file_values = quote! {
+		let instance_values = #serde_json_crate::Value::Object(
+			#serde_json_crate::Map::from_iter([#(#trusted_file_entries),*]),
+		);
+	};
+	let default_assignments = editable_fields
+		.iter()
+		.filter_map(|field| {
+			let default = model_form_declared_default(field)?;
+			let name = &field.name;
+			let literal = LitStr::new(&ident_to_wire_name(name), name.span());
+			Some(quote! {
+				if self.#name.is_none() {
+					self.#name = ::core::option::Option::Some(#default);
+					self.__reinhardt_defaulted_fields.push(#literal);
+				}
+			})
+		})
+		.collect::<Vec<_>>();
+	let clear_implicit_defaults = field_names
+		.iter()
+		.zip(&field_literals)
+		.map(|(name, literal)| {
+			quote! {
+				if raw.__reinhardt_defaulted_fields.contains(&#literal) {
+					raw.#name = ::core::option::Option::None;
+				}
+			}
+		})
+		.collect::<Vec<_>>();
+	let primary_key_literals: Vec<_> = field_infos
+		.iter()
+		.filter(|field| field.config.primary_key)
+		.map(|field| LitStr::new(&ident_to_wire_name(&field.name), field.name.span()))
+		.collect();
+	let reject_supplied_primary_keys = if primary_key_literals.is_empty() {
+		quote! {}
+	} else {
+		quote! {
+			let supplied_fields = <Self as #core_crate::model_form::ModelFormPayload<P>>::supplied_fields(&self);
+			if let Some(field) = supplied_fields.iter().copied().find(|field| {
+				[#(#primary_key_literals),*]
+					.iter()
+					.any(|primary_key| *primary_key == *field)
+			}) {
+				let mut errors = #core_crate::validators::ValidationErrors::new();
+				errors.add(
+					field.to_owned(),
+					#core_crate::validators::ValidationError::Custom(
+						"model form primary keys cannot be updated".to_owned(),
+					),
+				);
+				return ::core::result::Result::Err(errors);
+			}
+		}
+	};
 	let descriptor_entries = editable_fields
 		.iter()
 		.zip(&field_kinds)
@@ -3344,6 +3545,7 @@ fn generate_model_form_support(
 				!nullable && field.config.blank != Some(true) && field.config.default.is_none();
 			let has_default = field.config.default.is_some();
 			let generated_relation_id = field.is_fk_id_field;
+			let trim = field.form.trim;
 			quote! {
 				#core_crate::model_form::ModelFormFieldDescriptor {
 					name: #name,
@@ -3353,6 +3555,7 @@ fn generate_model_form_support(
 					nullable: #nullable,
 					editable: true,
 					generated_relation_id: #generated_relation_id,
+					trim: #trim,
 				}
 			}
 		});
@@ -3400,6 +3603,8 @@ fn generate_model_form_support(
 		.zip(&field_types)
 		.map(|(field_name, field_ty)| {
 			quote! {
+				#[doc = "Returns the raw, unvalidated value when this field was supplied."]
+				#[doc = "This P2 supplied-value accessor has equivalent semantics on native and WASM targets."]
 				pub fn #field_name(&self) -> ::core::option::Option<&#field_ty> {
 					self.#field_name.as_ref()
 				}
@@ -3427,6 +3632,7 @@ fn generate_model_form_support(
 						);
 					}
 					self.#field_name = ::core::option::Option::Some(value);
+					self.__reinhardt_defaulted_fields.retain(|field| *field != #field_literal);
 					::core::result::Result::Ok(())
 				}
 			}
@@ -3439,9 +3645,11 @@ fn generate_model_form_support(
 				&format!("set_trusted_{}", ident_to_wire_name(field_name)),
 				field_name.span(),
 			);
+			let field_literal = LitStr::new(&ident_to_wire_name(field_name), field_name.span());
 			quote! {
 				pub fn #setter_name(&mut self, value: #field_ty) {
 					self.#field_name = ::core::option::Option::Some(value);
+					self.__reinhardt_defaulted_fields.retain(|field| *field != #field_literal);
 				}
 			}
 		});
@@ -3480,11 +3688,37 @@ fn generate_model_form_support(
 						}
 					})?;
 					self.#field_name = ::core::option::Option::Some(parsed);
+					self.__reinhardt_defaulted_fields.retain(|field| *field != #field_literal);
 					::core::result::Result::Ok(())
 				}
 			}
 		},
 	);
+	let normalized_json_arms = field_names.iter().zip(&field_literals).zip(&field_types).map(|((name, literal), ty)| {
+		quote! {
+			#literal => {
+				if !P::allows(#literal) && !self.__reinhardt_defaulted_fields.contains(&#literal) {
+					return ::core::result::Result::Err(#core_crate::model_form::ModelFormPayloadError::ForbiddenField { field: #literal.to_owned() });
+				}
+				self.#name = ::core::option::Option::Some(#serde_json_crate::from_value::<#ty>(value).map_err(|error| {
+					#core_crate::model_form::ModelFormPayloadError::InvalidValue { field: #literal.to_owned(), message: error.to_string() }
+				})?);
+				::core::result::Result::Ok(())
+			}
+		}
+	});
+	let clear_json_arms = field_names.iter().zip(&field_literals).map(|(name, literal)| {
+		quote! {
+			#literal => {
+				if !P::allows(#literal) {
+					return ::core::result::Result::Err(#core_crate::model_form::ModelFormPayloadError::ForbiddenField { field: #literal.to_owned() });
+				}
+				self.#name = ::core::option::Option::None;
+				self.__reinhardt_defaulted_fields.retain(|field| *field != #literal);
+				::core::result::Result::Ok(())
+			}
+		}
+	});
 	let serialize_entries =
 		field_names
 			.iter()
@@ -3533,27 +3767,60 @@ fn generate_model_form_support(
 			|field_ty| quote!(#field_ty: #serde_crate::Serialize + #serde_crate::de::DeserializeOwned),
 		)
 		.collect();
-	let missing_noneditable_field = field_infos
+	let server_context_fields: Vec<_> = field_infos
 		.iter()
-		.find(|field| {
+		.filter(|field| {
 			if is_selected_editable(field)
 				|| field.config.skip
+				|| field.config.include_in_new == Some(false)
 				|| is_relationship_field_type(&field.ty)
 				|| model_form_declared_default(field).is_some()
-				|| (is_auto_generated_field(field) && !field.is_fk_id_field)
+				|| field.config.auto_now == Some(true)
+				|| field.config.auto_now_add == Some(true)
+				|| field.config.generated.is_some()
+				|| field.config.generated_sql.is_some()
+				|| (field.config.primary_key && is_auto_generated_field(field))
 			{
 				return false;
 			}
 			let (is_optional, _) = extract_option_type(&field.ty);
-			!is_optional && field.config.blank != Some(true)
+			let nullable = is_optional || model_form_relation_id_is_nullable(field, field_infos);
+			!nullable && field.config.blank != Some(true)
 		})
-		.map(|field| LitStr::new(&ident_to_wire_name(&field.name), field.name.span()));
-	let build_assignments: Vec<_> = field_infos
+		.collect();
+	if let Some(field) = server_context_fields
+		.iter()
+		.find(|field| ["new", "_state"].contains(&field.name.to_string().as_str()))
+	{
+		return Err(syn::Error::new_spanned(
+			&field.name,
+			"required non-editable model field name collides with generated model-form server context; rename the field or provide a model default",
+		));
+	}
+	let server_context_names: HashSet<_> = server_context_fields
+		.iter()
+		.map(|field| field.name.to_string())
+		.collect();
+	let build_from_cleaned_assignments: Vec<_> = field_infos
 		.iter()
 		.map(|field| {
 			let field_name = &field.name;
 			let field_literal = LitStr::new(&ident_to_wire_name(field_name), field.name.span());
+			let missing_value = if field.is_fk_id_field {
+				quote! {
+					if deferred_field == #field_literal {
+						::core::default::Default::default()
+					} else {
+						return ::core::result::Result::Err(#forms_crate::model_form::ModelFormError::MissingModelField { field: #field_literal });
+					}
+				}
+			} else {
+				quote! {
+					return ::core::result::Result::Err(#forms_crate::model_form::ModelFormError::MissingModelField { field: #field_literal })
+				}
+			};
 			if is_selected_editable(field) {
+				let field_ty = &field.ty;
 				let (is_optional, _) = extract_option_type(&field.ty);
 				let relation_is_nullable = model_form_relation_id_is_nullable(field, field_infos);
 				let nullable = field
@@ -3562,48 +3829,47 @@ fn generate_model_form_support(
 					.unwrap_or(is_optional || relation_is_nullable);
 				let required =
 					!nullable && field.config.blank != Some(true) && field.config.default.is_none();
-				let unresolved = if let Some(default) = model_form_declared_default(field) {
-					default
+				let unresolved = if model_form_declared_default(field).is_some() {
+					quote! {
+						return ::core::result::Result::Err(
+							#forms_crate::model_form::ModelFormError::MissingModelField { field: #field_literal },
+						)
+					}
 				} else if is_auto_generated_field(field) && !field.is_fk_id_field {
 					get_auto_field_default_value(field)
 				} else if required || (!nullable && field.config.blank == Some(true)) {
-					quote! {
-						return ::core::result::Result::Err(
-							#forms_crate::model_form::ModelFormError::MissingModelField {
-								field: #field_literal,
-							},
-						)
-					}
+					missing_value.clone()
 				} else {
 					quote!(::std::default::Default::default())
 				};
 				quote! {
 					#field_name: match data.#field_name.as_ref() {
 						::core::option::Option::Some(value) => value.clone(),
-						::core::option::Option::None => #unresolved,
+						::core::option::Option::None => match server_values.get(#field_literal) {
+							::core::option::Option::Some(value) => #serde_json_crate::from_value::<#field_ty>(value.clone())
+								.map_err(|error| #forms_crate::model_form::ModelFormError::FieldValidation {
+									errors: ::std::collections::HashMap::from([(#field_literal.to_owned(), vec![error.to_string()])]),
+								})?,
+							::core::option::Option::None => #unresolved,
+						},
+					}
+				}
+			} else if server_context_names.contains(&field.name.to_string()) {
+				let field_ty = &field.ty;
+				quote! {
+					#field_name: match server_values.get(#field_literal) {
+						::core::option::Option::Some(value) => #serde_json_crate::from_value::<#field_ty>(value.clone())
+							.map_err(|error| #forms_crate::model_form::ModelFormError::FieldValidation {
+								errors: ::std::collections::HashMap::from([(#field_literal.to_owned(), vec![error.to_string()])]),
+							})?,
+						::core::option::Option::None => { #missing_value },
 					}
 				}
 			} else {
-				let (is_optional, _) = extract_option_type(&field.ty);
-				let required = !is_optional && field.config.blank != Some(true);
 				let default = if let Some(default) = model_form_declared_default(field) {
 					default
 				} else if is_auto_generated_field(field) && !field.is_fk_id_field {
 					get_auto_field_default_value(field)
-				} else if is_relationship_field_type(&field.ty) {
-					quote!(::std::default::Default::default())
-				} else if required {
-					quote! {
-						if deferred_fields.contains(&#field_literal) {
-							::std::default::Default::default()
-						} else {
-							return ::core::result::Result::Err(
-								#forms_crate::model_form::ModelFormError::MissingModelField {
-									field: #field_literal,
-								},
-							)
-						}
-					}
 				} else {
 					quote!(::std::default::Default::default())
 				};
@@ -3611,103 +3877,12 @@ fn generate_model_form_support(
 			}
 		})
 		.collect();
-	let deferred_build_assignments: Vec<_> = field_infos
-		.iter()
-		.map(|field| {
-			let field_name = &field.name;
-			let field_literal = LitStr::new(&ident_to_wire_name(field_name), field.name.span());
-			if is_selected_editable(field) {
-				let (is_optional, _) = extract_option_type(&field.ty);
-				let relation_is_nullable = model_form_relation_id_is_nullable(field, field_infos);
-				let nullable = field
-					.config
-					.null
-					.unwrap_or(is_optional || relation_is_nullable);
-				let required =
-					!nullable && field.config.blank != Some(true) && field.config.default.is_none();
-				let unresolved = if let Some(default) = model_form_declared_default(field) {
-					default
-				} else if is_auto_generated_field(field) && !field.is_fk_id_field {
-					get_auto_field_default_value(field)
-				} else if !nullable && field.config.blank == Some(true) {
-					quote! {
-						return ::core::result::Result::Err(
-							#forms_crate::model_form::ModelFormError::MissingModelField {
-								field: #field_literal,
-							},
-						)
-					}
-				} else if required {
-					quote! {
-						if deferred_fields.contains(&#field_literal) {
-							::std::default::Default::default()
-						} else {
-							return ::core::result::Result::Err(
-								#forms_crate::model_form::ModelFormError::MissingModelField {
-									field: #field_literal,
-								},
-							);
-						}
-					}
-				} else {
-					quote!(::std::default::Default::default())
-				};
-				quote! {
-					#field_name: match data.#field_name.as_ref() {
-						::core::option::Option::Some(value) => value.clone(),
-						::core::option::Option::None => #unresolved,
-					}
-				}
-			} else {
-				let (is_optional, _) = extract_option_type(&field.ty);
-				let required = !is_optional && field.config.blank != Some(true);
-				let default = if let Some(default) = model_form_declared_default(field) {
-					default
-				} else if is_auto_generated_field(field) && !field.is_fk_id_field {
-					get_auto_field_default_value(field)
-				} else if is_relationship_field_type(&field.ty) {
-					quote!(::std::default::Default::default())
-				} else if required {
-					quote! {
-						if deferred_fields.contains(&#field_literal) {
-							::std::default::Default::default()
-						} else {
-							return ::core::result::Result::Err(
-								#forms_crate::model_form::ModelFormError::MissingModelField {
-									field: #field_literal,
-								},
-							);
-						}
-					}
-				} else {
-					quote!(::std::default::Default::default())
-				};
-				quote!(#field_name: #default)
-			}
-		})
-		.collect();
-	let build_from_payload_body = if let Some(field) = &missing_noneditable_field {
-		quote! {
-			let _ = data;
-			::core::result::Result::Err(
-				#forms_crate::model_form::ModelFormError::MissingModelField {
-					field: #field,
-				},
-			)
-		}
-	} else {
-		quote! {
-			::core::result::Result::Ok(Self {
-				#(#build_assignments,)*
-			})
-		}
-	};
-	let build_from_payload_with_deferred_field_body = quote! {
+	let build_from_cleaned_body = quote! {
 		::core::result::Result::Ok(Self {
-			#(#deferred_build_assignments,)*
+			#(#build_from_cleaned_assignments,)*
 		})
 	};
-	let apply_payload_fields = editable_fields
+	let apply_cleaned_fields = editable_fields
 		.iter()
 		.filter(|field| !field.config.primary_key)
 		.map(|field| {
@@ -3718,6 +3893,1123 @@ fn generate_model_form_support(
 				}
 			}
 		});
+	let clone_fields: Vec<_> = field_names
+		.iter()
+		.map(|field_name| quote!(#field_name: self.#field_name.clone()))
+		.collect();
+	let clone_bounds: Vec<_> = field_types
+		.iter()
+		.map(|field_ty| quote!(#field_ty: ::core::clone::Clone))
+		.collect();
+	let cleaned_getters = editable_fields.iter().map(|field| {
+		let field_name = &field.name;
+		let field_ty = &field.ty;
+		if storage_field_kind(field_ty).is_some() {
+			let literal = LitStr::new(&ident_to_wire_name(field_name), field_name.span());
+			let (optional, inner_ty) = extract_option_type(field_ty);
+			let stored = if optional {
+				quote!(self.#field_name.as_ref().and_then(::core::option::Option::as_ref))
+			} else {
+				quote!(self.#field_name.as_ref())
+			};
+			quote! {
+				#[doc = "Returns a stored file or pending upload; absent and cleared files return None."]
+				#[doc = "This P2 accessor exposes the same validation candidate on native and WASM targets."]
+				pub fn #field_name(&self) -> ::core::option::Option<#core_crate::model_form::ModelFormFileValue<'_, #inner_ty>> {
+					self.__reinhardt_uploads.iter().find(|upload| upload.name == #literal)
+						.map(#core_crate::model_form::ModelFormFileValue::Uploaded)
+						.or_else(|| #stored.map(#core_crate::model_form::ModelFormFileValue::Stored))
+				}
+			}
+		} else {
+			quote! {
+				#[doc = "Returns the normalized supplied value or evaluated model default."]
+				#[doc = "This P2 cleaned-value accessor has equivalent semantics on native and WASM targets."]
+				pub fn #field_name(&self) -> ::core::option::Option<&#field_ty> {
+					self.#field_name.as_ref()
+				}
+			}
+		}
+	});
+	let merge_existing_into_cleaned: Vec<_> = field_names
+		.iter()
+		.map(|field_name| {
+			quote! {
+				if merged.#field_name.is_none() {
+					merged.#field_name = ::core::option::Option::Some(existing.#field_name.clone());
+				}
+			}
+		})
+		.collect();
+	let context_name = Ident::new(
+		&format!("{}ModelFormServerContext", struct_name),
+		struct_name.span(),
+	);
+	let context_state_params: Vec<_> = server_context_fields
+		.iter()
+		.enumerate()
+		.map(|(index, field)| Ident::new(&format!("S{index}"), field.name.span()))
+		.collect();
+	let context_missing_markers: Vec<_> = server_context_fields
+		.iter()
+		.map(|field| {
+			Ident::new(
+				&format!(
+					"{}ModelForm{}Missing",
+					struct_name,
+					crate::pascal_case::to_pascal_case_with_suffix(&field.name.to_string(), "")
+				),
+				field.name.span(),
+			)
+		})
+		.collect();
+	let context_present_markers: Vec<_> = server_context_fields
+		.iter()
+		.map(|field| {
+			Ident::new(
+				&format!(
+					"{}ModelForm{}Present",
+					struct_name,
+					crate::pascal_case::to_pascal_case_with_suffix(&field.name.to_string(), "")
+				),
+				field.name.span(),
+			)
+		})
+		.collect();
+	let context_field_names: Vec<_> = server_context_fields
+		.iter()
+		.map(|field| &field.name)
+		.collect();
+	let context_field_types: Vec<_> = server_context_fields
+		.iter()
+		.map(|field| &field.ty)
+		.collect();
+	let context_setters: Vec<_> = server_context_fields
+		.iter()
+		.enumerate()
+		.map(|(setter_index, field)| {
+			let field_name = &field.name;
+			let field_ty = &field.ty;
+			let missing_state = &context_missing_markers[setter_index];
+			let present_state = &context_present_markers[setter_index];
+			let other_params: Vec<_> = context_state_params
+				.iter()
+				.enumerate()
+				.filter(|(index, _)| *index != setter_index)
+				.map(|(_, param)| param)
+				.collect();
+			let impl_generics = if other_params.is_empty() {
+				quote!()
+			} else {
+				quote!(<#(#other_params),*>)
+			};
+			let source_states: Vec<_> = context_state_params
+				.iter()
+				.enumerate()
+				.map(|(index, param)| {
+					if index == setter_index {
+						quote!(#missing_state)
+					} else {
+						quote!(#param)
+					}
+				})
+				.collect();
+			let target_states: Vec<_> = context_state_params
+				.iter()
+				.enumerate()
+				.map(|(index, param)| {
+					if index == setter_index {
+						quote!(#present_state)
+					} else {
+						quote!(#param)
+					}
+				})
+				.collect();
+			let moved_fields = context_field_names.iter().enumerate().map(|(index, name)| {
+				if index == setter_index {
+					quote!(#name: ::core::option::Option::Some(value))
+				} else {
+					quote!(#name: self.#name)
+				}
+			});
+			quote! {
+				#native_form_cfg
+				impl #impl_generics #context_name<#(#source_states),*> {
+					#[doc = "Sets one server-owned value and advances the native context typestate."]
+					#[doc = "This is a P0 native-only API because server-owned values are unavailable on WASM clients."]
+					pub fn #field_name(self, value: #field_ty) -> #context_name<#(#target_states),*> {
+						#context_name {
+							#(#moved_fields,)*
+							_state: ::core::marker::PhantomData,
+						}
+					}
+				}
+			}
+		})
+		.collect();
+	let direct_build_assignments: Vec<_> = field_infos
+		.iter()
+		.map(|field| {
+			let field_name = &field.name;
+			let field_literal = LitStr::new(&ident_to_wire_name(field_name), field.name.span());
+			if is_selected_editable(field) {
+				let (is_optional, _) = extract_option_type(&field.ty);
+				let relation_is_nullable = model_form_relation_id_is_nullable(field, field_infos);
+				let nullable = field
+					.config
+					.null
+					.unwrap_or(is_optional || relation_is_nullable);
+				let required =
+					!nullable && field.config.blank != Some(true) && field.config.default.is_none();
+				let unresolved = if model_form_declared_default(field).is_some() {
+					quote! {
+						return ::core::result::Result::Err(
+							#forms_crate::model_form::ModelFormError::MissingModelField { field: #field_literal },
+						)
+					}
+				} else if is_auto_generated_field(field) && !field.is_fk_id_field {
+					get_auto_field_default_value(field)
+				} else if required || (!nullable && field.config.blank == Some(true)) {
+					quote! {
+						return ::core::result::Result::Err(
+							#forms_crate::model_form::ModelFormError::MissingModelField { field: #field_literal },
+						)
+					}
+				} else {
+					quote!(::std::default::Default::default())
+				};
+				quote! {
+					#field_name: match self.#field_name.as_ref() {
+						::core::option::Option::Some(value) => value.clone(),
+						::core::option::Option::None => #unresolved,
+					}
+				}
+			} else if server_context_names.contains(&field.name.to_string()) {
+				quote! {
+					#field_name: context.#field_name.expect("complete model-form server context")
+				}
+			} else {
+				let default = if let Some(default) = model_form_declared_default(field) {
+					default
+				} else if is_auto_generated_field(field) && !field.is_fk_id_field {
+					get_auto_field_default_value(field)
+				} else {
+					quote!(::std::default::Default::default())
+				};
+				quote!(#field_name: #default)
+			}
+		})
+		.collect();
+	let apply_to_body = quote! {
+		let mut raw = self.into_raw();
+		#(#clear_implicit_defaults)*
+		raw.__reinhardt_defaulted_fields.clear();
+		let cleaned = <#payload_name<P> as #core_crate::model_form::ModelFormUpdatingPayload>::clean_and_validate_for_update(raw, &existing)
+			.map_err(#forms_crate::model_form::model_form_error_from_validation_errors)?;
+		<#struct_name as #forms_crate::model_form::FormModel>::apply_cleaned(&mut existing, &cleaned)?;
+		::core::result::Result::Ok(existing)
+	};
+	let cleaned_construction_output = if server_context_fields.is_empty() {
+		quote! {
+			#native_form_cfg
+			impl<P: #core_crate::model_form::ModelFormPolicy> #cleaned_payload_name<P> {
+				#[doc = "Builds a new model from this cleaned create payload."]
+				#[doc = "This is a P0 native-only API because ORM model construction is unavailable on WASM clients."]
+				pub fn into_model(self) -> ::core::result::Result<#struct_name, #forms_crate::model_form::ModelFormError> {
+					<#struct_name as #forms_crate::model_form::FormModel>::build_from_cleaned_compat(
+						&self,
+						&::std::collections::HashMap::new(),
+					)
+				}
+
+				#[doc = "Applies supplied cleaned values to an existing model while preserving omissions."]
+				#[doc = "This is a P0 native-only API because ORM model mutation is unavailable on WASM clients."]
+				pub fn apply_to(self, mut existing: #struct_name) -> ::core::result::Result<#struct_name, #forms_crate::model_form::ModelFormError> {
+					#apply_to_body
+				}
+			}
+		}
+	} else {
+		let marker_definitions = context_missing_markers
+			.iter()
+			.zip(&context_present_markers)
+			.map(|(missing, present)| {
+				quote! {
+					#native_form_cfg
+					#[doc(hidden)]
+					pub struct #missing;
+					#native_form_cfg
+					#[doc(hidden)]
+					pub struct #present;
+				}
+			});
+		let empty_context_fields = context_field_names
+			.iter()
+			.map(|name| quote!(#name: ::core::option::Option::None));
+		quote! {
+			#(#marker_definitions)*
+
+			#native_form_cfg
+			#[doc = "Native typestate context for server-owned values required to construct a model."]
+			#[doc = "This is a P0 native-only API because server-owned values are unavailable on WASM clients."]
+			pub struct #context_name<#(#context_state_params = #context_missing_markers),*> {
+				#(#context_field_names: ::core::option::Option<#context_field_types>,)*
+				_state: ::core::marker::PhantomData<(#(#context_state_params,)*)>,
+			}
+
+			#native_form_cfg
+			impl #context_name<#(#context_missing_markers),*> {
+				#[doc = "Creates an empty native server context."]
+				#[doc = "Every generated setter must be called before the context can construct a model."]
+				#[doc = "This is a P0 native-only API because server-owned values are unavailable on WASM clients."]
+				pub fn new() -> Self {
+					Self {
+						#(#empty_context_fields,)*
+						_state: ::core::marker::PhantomData,
+					}
+				}
+			}
+
+			#(#context_setters)*
+
+			#native_form_cfg
+			impl<P: #core_crate::model_form::ModelFormPolicy> #cleaned_payload_name<P> {
+				#[doc = "Builds a new model using a complete native server context."]
+				#[doc = "This is a P0 native-only API because ORM construction and server-owned values are unavailable on WASM clients."]
+				pub fn into_model(
+					self,
+					context: #context_name<#(#context_present_markers),*>,
+				) -> ::core::result::Result<#struct_name, #forms_crate::model_form::ModelFormError> {
+					::core::result::Result::Ok(#struct_name {
+						#(#direct_build_assignments,)*
+					})
+				}
+
+				#[doc = "Applies supplied cleaned values to an existing model while preserving omissions."]
+				#[doc = "This is a P0 native-only API because ORM model mutation is unavailable on WASM clients."]
+				pub fn apply_to(self, mut existing: #struct_name) -> ::core::result::Result<#struct_name, #forms_crate::model_form::ModelFormError> {
+					#apply_to_body
+				}
+			}
+		}
+	};
+	let validator_call = form_config
+		.validate
+		.as_ref()
+		.map(|validator| quote!(#validator(&cleaned)?;))
+		.unwrap_or_default();
+	let merged_validator_call = form_config
+		.validate
+		.as_ref()
+		.map(|validator| quote!(#validator(&merged)?;))
+		.unwrap_or_default();
+	let signature_check = form_config.validate.as_ref().map(|validator| {
+		let check_name = Ident::new(
+			&format!(
+				"__reinhardt_check_{}_model_form_validator",
+				to_snake_case(&struct_name.to_string())
+			),
+			struct_name.span(),
+		);
+		quote! {
+			// The helper is intentionally unused because its body provides the compile-time assertion.
+			#[allow(dead_code)]
+			fn #check_name<P: #core_crate::model_form::ModelFormPolicy>() {
+				let _: fn(
+					&#cleaned_payload_name<P>,
+				) -> ::core::result::Result<(), #core_crate::validators::ValidationErrors> = #validator;
+			}
+		}
+	});
+	let wasm_decimal_validation_arms: Vec<_> = editable_fields
+		.iter()
+		.filter_map(|field| {
+			let ty = extract_nested_option_type(&field.ty);
+			let Type::Path(type_path) = ty else {
+				return None;
+			};
+			if type_path
+				.path
+				.segments
+				.last()
+				.is_none_or(|segment| segment.ident != "Decimal")
+			{
+				return None;
+			}
+			let field_literal = LitStr::new(&ident_to_wire_name(&field.name), field.name.span());
+			let max_check = field.config.max_value.map(|max| {
+				let max_literal = LitStr::new(&max.to_string(), field.name.span());
+				quote! {
+					let bound = <#ty as ::core::str::FromStr>::from_str(#max_literal)
+						.expect("generated decimal maximum is valid");
+					if number > bound {
+						errors.add(
+							descriptor.name,
+							#core_crate::validators::ValidationError::Custom(
+								::std::format!("Ensure this value is less than or equal to {}", #max),
+							),
+						);
+						continue;
+					}
+				}
+			});
+			let min_check = field.config.min_value.map(|min| {
+				let min_literal = LitStr::new(&min.to_string(), field.name.span());
+				quote! {
+					let bound = <#ty as ::core::str::FromStr>::from_str(#min_literal)
+						.expect("generated decimal minimum is valid");
+					if number < bound {
+						errors.add(
+							descriptor.name,
+							#core_crate::validators::ValidationError::Custom(
+								::std::format!("Ensure this value is greater than or equal to {}", #min),
+							),
+						);
+					}
+				}
+			});
+			Some(quote! {
+				#field_literal => {
+					if let ::core::result::Result::Ok(number) =
+						#serde_json_crate::from_value::<#ty>(value.clone())
+					{
+						#max_check
+						#min_check
+					}
+				}
+			})
+		})
+		.collect();
+	let cleaned_payload_output = quote! {
+		#[doc = "A normalized generated model-form payload."]
+		#[doc = "This P2 type has equivalent payload semantics on native and WASM targets."]
+		#struct_vis struct #cleaned_payload_name<P: #core_crate::model_form::ModelFormPolicy> {
+			#(#field_names: ::core::option::Option<#field_types>,)*
+			forbidden_fields: ::std::vec::Vec<&'static str>,
+			__reinhardt_defaulted_fields: ::std::vec::Vec<&'static str>,
+			__reinhardt_uploads: ::std::vec::Vec<#core_crate::model_form::ModelFormUpload>,
+			_policy: ::core::marker::PhantomData<P>,
+		}
+
+		impl<P: #core_crate::model_form::ModelFormPolicy> #cleaned_payload_name<P> {
+			fn from_validated_raw(data: #payload_name<P>) -> Self {
+				Self {
+					#(#field_names: data.#field_names,)*
+					forbidden_fields: data.forbidden_fields,
+					__reinhardt_defaulted_fields: data.__reinhardt_defaulted_fields,
+					__reinhardt_uploads: ::std::vec::Vec::new(),
+					_policy: ::core::marker::PhantomData,
+				}
+			}
+
+			#[doc = "Converts this normalized payload back into its generated raw payload."]
+			#[doc = "This P2 conversion is available on native and WASM targets."]
+			pub fn into_raw(self) -> #payload_name<P> {
+				#payload_name {
+					#(#field_names: self.#field_names,)*
+					forbidden_fields: self.forbidden_fields,
+					__reinhardt_defaulted_fields: self.__reinhardt_defaulted_fields,
+					_policy: ::core::marker::PhantomData,
+				}
+			}
+
+			#(#cleaned_getters)*
+		}
+
+		impl<P> ::core::clone::Clone for #cleaned_payload_name<P>
+		where
+			P: #core_crate::model_form::ModelFormPolicy,
+			#(#clone_bounds,)*
+		{
+			fn clone(&self) -> Self {
+				Self {
+					#(#clone_fields,)*
+					forbidden_fields: self.forbidden_fields.clone(),
+					__reinhardt_defaulted_fields: self.__reinhardt_defaulted_fields.clone(),
+					__reinhardt_uploads: self.__reinhardt_uploads.clone(),
+					_policy: ::core::marker::PhantomData,
+				}
+			}
+		}
+	};
+	let cleaned_payload_trait_cfg = if validation_enabled {
+		quote! {}
+	} else {
+		quote!(#[cfg(all(target_family = "wasm", target_os = "unknown"))])
+	};
+	let validation_output = quote! {
+			#cleaned_payload_trait_cfg
+			impl<P> #core_crate::model_form::ModelFormCleanedPayload
+				for #cleaned_payload_name<P>
+			where
+				P: #core_crate::model_form::ModelFormPolicy,
+			{
+				type Raw = #payload_name<P>;
+
+				fn into_raw(self) -> Self::Raw {
+					#cleaned_payload_name::into_raw(self)
+				}
+			}
+
+			#native_form_cfg
+			impl<P> #core_crate::model_form::ModelFormValidatingPayload for #payload_name<P>
+			where
+				P: #core_crate::model_form::ModelFormPolicy,
+				#(#payload_bounds,)*
+			{
+				type Cleaned = #cleaned_payload_name<P>;
+
+				fn clean_and_validate(
+					mut self,
+				) -> ::core::result::Result<
+					Self::Cleaned,
+					#core_crate::validators::ValidationErrors,
+				> {
+					#forms_crate::model_form::clean_generated_payload::<#schema_name, P, _>(
+						&mut self,
+					)?;
+					let cleaned = #cleaned_payload_name::from_validated_raw(self);
+					#validator_call
+					::core::result::Result::Ok(cleaned)
+				}
+
+				fn clean_and_validate_with_deferred_required_field(
+					mut self,
+					deferred_field: &str,
+				) -> ::core::result::Result<
+					Self::Cleaned,
+					#core_crate::validators::ValidationErrors,
+				> {
+					#forms_crate::model_form::clean_generated_payload_with_deferred_required_field::<#schema_name, P, _>(
+						&mut self,
+						deferred_field,
+					)?;
+					let cleaned = #cleaned_payload_name::from_validated_raw(self);
+					#validator_call
+					::core::result::Result::Ok(cleaned)
+				}
+
+				fn clean_and_validate_with_deferred_required_fields(
+					self,
+					deferred_fields: &[&str],
+				) -> ::core::result::Result<Self::Cleaned, #core_crate::validators::ValidationErrors> {
+					<Self as #core_crate::model_form::ModelFormValidatingPayload>::clean_and_validate_with_uploads(self, deferred_fields, &[])
+				}
+
+				fn clean_and_validate_with_uploads(
+					mut self,
+					deferred_fields: &[&str],
+					uploads: &[#core_crate::model_form::ModelFormUpload],
+				) -> ::core::result::Result<
+					Self::Cleaned,
+					#core_crate::validators::ValidationErrors,
+				> {
+					#core_crate::model_form::validate_uploaded_fields::<#schema_name, P>(uploads)?;
+					#forms_crate::model_form::clean_generated_payload_with_deferred_required_fields::<#schema_name, P, _>(
+						&mut self,
+						deferred_fields,
+					)?;
+					let mut cleaned = #cleaned_payload_name::from_validated_raw(self);
+					cleaned.__reinhardt_uploads = uploads.to_vec();
+					#validator_call
+					::core::result::Result::Ok(cleaned)
+				}
+
+				fn clean_and_validate_for_multipart<Q: #core_crate::model_form::ModelFormPolicy>(
+					self,
+					deferred_files: &[&str],
+					uploads: &[#core_crate::model_form::ModelFormUpload],
+				) -> ::core::result::Result<
+					Self::Cleaned,
+					#core_crate::validators::ValidationErrors,
+				> {
+					struct SelectedPolicy<P, Q>(::core::marker::PhantomData<(P, Q)>);
+					impl<P, Q> #core_crate::model_form::ModelFormPolicy for SelectedPolicy<P, Q>
+					where
+						P: #core_crate::model_form::ModelFormPolicy,
+						Q: #core_crate::model_form::ModelFormPolicy,
+					{
+						fn allows(field: &str) -> bool {
+							P::allows(field) && Q::allows(field)
+						}
+					}
+					let selected = #payload_name::<SelectedPolicy<P, Q>> {
+						#(#field_names: self.#field_names,)*
+						forbidden_fields: self.forbidden_fields,
+						__reinhardt_defaulted_fields: self.__reinhardt_defaulted_fields,
+						_policy: ::core::marker::PhantomData,
+					};
+					let cleaned = #core_crate::model_form::ModelFormValidatingPayload::clean_and_validate_with_uploads(
+						selected,
+						deferred_files,
+						uploads,
+					)?;
+					::core::result::Result::Ok(#cleaned_payload_name {
+						#(#field_names: cleaned.#field_names,)*
+						forbidden_fields: cleaned.forbidden_fields,
+						__reinhardt_defaulted_fields: cleaned.__reinhardt_defaulted_fields,
+						__reinhardt_uploads: cleaned.__reinhardt_uploads,
+						_policy: ::core::marker::PhantomData,
+					})
+				}
+			}
+
+		#native_form_cfg
+		impl<P> #core_crate::model_form::ModelFormUpdatingPayload for #payload_name<P>
+			where
+				P: #core_crate::model_form::ModelFormPolicy,
+				#(#payload_bounds,)*
+			{
+			type Model = #struct_name;
+
+			fn clean_and_validate_for_update(
+					mut self,
+				existing: &Self::Model,
+				) -> ::core::result::Result<
+					Self::Cleaned,
+					#core_crate::validators::ValidationErrors,
+				> {
+					#reject_supplied_primary_keys
+					#trusted_file_values
+					#forms_crate::model_form::clean_generated_partial_payload_with_trusted_values::<#schema_name, P, _>(
+						&mut self,
+						::core::option::Option::Some(&instance_values),
+					)?;
+				let cleaned = #cleaned_payload_name::from_validated_raw(self);
+				let mut merged = cleaned.clone();
+				#(#merge_existing_into_cleaned)*
+				#merged_validator_call
+				::core::result::Result::Ok(cleaned)
+			}
+		}
+
+		#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+		impl<P> #payload_name<P>
+		where
+			P: #core_crate::model_form::ModelFormPolicy,
+			#(#payload_bounds,)*
+		{
+			fn __reinhardt_clean_and_validate(
+				mut self,
+				require_all: bool,
+				run_validator: bool,
+				deferred_required_fields: &[&str],
+				trusted_values: ::core::option::Option<&#serde_json_crate::Value>,
+			) -> ::core::result::Result<
+				#cleaned_payload_name<P>,
+				#core_crate::validators::ValidationErrors,
+				> {
+					fn json_within_depth(
+						value: &#serde_json_crate::Value,
+						current: usize,
+					) -> bool {
+						if current > 64 {
+							return false;
+						}
+						match value {
+							#serde_json_crate::Value::Array(values) => values
+								.iter()
+								.all(|value| json_within_depth(value, current + 1)),
+							#serde_json_crate::Value::Object(values) => values
+								.values()
+								.all(|value| json_within_depth(value, current + 1)),
+							_ => true,
+						}
+					}
+
+					fn serialized_year(value: &#serde_json_crate::Value) -> ::core::option::Option<i32> {
+						let raw = value.as_str()?;
+						let digits_start = usize::from(raw.starts_with('+') || raw.starts_with('-'));
+						let digits_end = raw[digits_start..].find('-')? + digits_start;
+						raw[..digits_end].parse().ok()
+					}
+
+					fn serialized_uuid_is_valid(value: &#serde_json_crate::Value) -> bool {
+						let ::core::option::Option::Some(raw) = value.as_str() else {
+							return false;
+						};
+						let lengths = [8, 4, 4, 4, 12];
+						let mut parts = raw.split('-');
+						lengths.into_iter().all(|length| {
+							parts.next().is_some_and(|part| {
+								part.len() == length
+									&& part.chars().all(|character| character.is_ascii_hexdigit())
+							})
+						}) && parts.next().is_none()
+					}
+
+					let mut errors = #core_crate::validators::ValidationErrors::new();
+					let forbidden_fields = <Self as #core_crate::model_form::ModelFormPayload<P>>::forbidden_fields(&self);
+					for descriptor in <#schema_name as #core_crate::model_form::ModelFormSchema>::fields() {
+						if forbidden_fields.contains(&descriptor.name) {
+							errors.add(
+								descriptor.name,
+								#core_crate::validators::ValidationError::Custom(
+									"This field is not allowed.".to_owned(),
+								),
+							);
+						}
+					}
+					if !errors.is_empty() {
+						return ::core::result::Result::Err(errors);
+					}
+
+					for descriptor in <#schema_name as #core_crate::model_form::ModelFormSchema>::fields() {
+						if descriptor.trim && !descriptor.required && (descriptor.nullable || descriptor.has_default)
+							&& P::allows(descriptor.name)
+							&& !<Self as #core_crate::model_form::ModelFormPayload<P>>::is_defaulted(&self, descriptor.name)
+							&& <Self as #core_crate::model_form::ModelFormPayload<P>>::get_json(&self, descriptor.name)
+								.is_some_and(|value| value.as_str().is_some_and(|value| value.trim().is_empty())) {
+							let result = if descriptor.has_default {
+								<Self as #core_crate::model_form::ModelFormPayload<P>>::clear_json(&mut self, descriptor.name)
+							} else {
+								<Self as #core_crate::model_form::ModelFormPayload<P>>::set_json(&mut self, descriptor.name, #serde_json_crate::Value::Null)
+							};
+							if let Err(error) = result {
+								errors.add(descriptor.name, #core_crate::validators::ValidationError::Custom(error.to_string()));
+								return ::core::result::Result::Err(errors);
+							}
+						}
+					}
+					if require_all {
+						<Self as #core_crate::model_form::ModelFormPayload<P>>::apply_defaults(&mut self);
+					}
+
+					let mut normalized = ::std::vec::Vec::new();
+					for descriptor in <#schema_name as #core_crate::model_form::ModelFormSchema>::fields() {
+						if !descriptor.editable || !(P::allows(descriptor.name) || <Self as #core_crate::model_form::ModelFormPayload<P>>::is_defaulted(&self, descriptor.name)) {
+							continue;
+						}
+						let ::core::option::Option::Some(value) =
+							<Self as #core_crate::model_form::ModelFormPayload<P>>::get_json(
+								&self,
+								descriptor.name,
+							)
+						else {
+						if require_all
+							&& descriptor.required
+							&& !deferred_required_fields.contains(&descriptor.name)
+						{
+							errors.add(
+								descriptor.name,
+								#core_crate::validators::ValidationError::Custom(
+									"This field is required.".to_owned(),
+								),
+							);
+						}
+							continue;
+						};
+						// Non-finite typed floats serialize to null, not to an omitted value.
+						if matches!(descriptor.kind, #core_crate::model_form::ModelFormFieldKind::Float { .. })
+							&& !descriptor.nullable
+							&& !value.as_f64().is_some_and(|number| number.is_finite())
+						{
+							errors.add(
+								descriptor.name,
+								#core_crate::validators::ValidationError::Custom(
+									"Expected number or string".to_owned(),
+								),
+							);
+							continue;
+						}
+						if value.is_null() {
+							if descriptor.nullable {
+								continue;
+							}
+							if matches!(
+								descriptor.kind,
+								#core_crate::model_form::ModelFormFieldKind::Json
+							) {
+								continue;
+							}
+							if matches!(
+								descriptor.kind,
+								#core_crate::model_form::ModelFormFieldKind::Boolean
+							) {
+								normalized.push((descriptor.name, #serde_json_crate::Value::Bool(false)));
+								continue;
+							}
+							if descriptor.required {
+								errors.add(
+									descriptor.name,
+									#core_crate::validators::ValidationError::Custom(
+										"This field is required.".to_owned(),
+									),
+								);
+							}
+							continue;
+						}
+
+						match descriptor.kind {
+							#core_crate::model_form::ModelFormFieldKind::Text {
+								min_length,
+								max_length,
+								..
+							}
+							| #core_crate::model_form::ModelFormFieldKind::Email {
+								min_length,
+								max_length,
+							}
+							| #core_crate::model_form::ModelFormFieldKind::Url {
+								min_length,
+								max_length,
+							} => {
+								let ::core::option::Option::Some(raw) = value.as_str() else {
+									errors.add(
+										descriptor.name,
+										#core_crate::validators::ValidationError::Custom(
+											"Expected string".to_owned(),
+										),
+									);
+									continue;
+								};
+								let value = if descriptor.trim { raw.trim() } else { raw };
+								if value.is_empty() {
+									if descriptor.required {
+										errors.add(
+											descriptor.name,
+											#core_crate::validators::ValidationError::Custom(
+												"This field is required.".to_owned(),
+											),
+										);
+									}
+									if !descriptor.required {
+										normalized.push((descriptor.name, #serde_json_crate::Value::String(value.to_owned())));
+									}
+									continue;
+								}
+
+								let length = value.chars().count();
+								let mut valid = true;
+								if let ::core::option::Option::Some(max) = max_length
+									&& length > max
+								{
+									errors.add(
+										descriptor.name,
+										#core_crate::validators::ValidationError::Custom(
+											::std::format!(
+												"Ensure this value has at most {} characters (it has {})",
+												max,
+												length,
+											),
+										),
+									);
+									valid = false;
+								} else if let ::core::option::Option::Some(min) = min_length
+									&& length < min
+								{
+									errors.add(
+										descriptor.name,
+										#core_crate::validators::ValidationError::Custom(
+											::std::format!(
+												"Ensure this value has at least {} characters (it has {})",
+												min,
+												length,
+											),
+										),
+									);
+									valid = false;
+								}
+								if valid {
+									let format_valid = match descriptor.kind {
+										#core_crate::model_form::ModelFormFieldKind::Email { .. } =>
+											<#core_crate::validators::EmailValidator as #core_crate::validators::Validator<str>>::validate(
+												&#core_crate::validators::EmailValidator::new(),
+												value,
+											).is_ok(),
+										#core_crate::model_form::ModelFormFieldKind::Url { .. } =>
+											<#core_crate::validators::UrlValidator as #core_crate::validators::Validator<str>>::validate(
+												&#core_crate::validators::UrlValidator::new(),
+												value,
+											).is_ok(),
+										_ => true,
+									};
+									if !format_valid {
+										let message = match descriptor.kind {
+											#core_crate::model_form::ModelFormFieldKind::Email { .. } =>
+												"Enter a valid email address",
+											_ => "Enter a valid URL",
+										};
+										errors.add(
+											descriptor.name,
+											#core_crate::validators::ValidationError::Custom(message.to_owned()),
+										);
+										valid = false;
+									}
+								}
+								if valid {
+									normalized.push((descriptor.name, #serde_json_crate::Value::String(value.to_owned())));
+								}
+							}
+							#core_crate::model_form::ModelFormFieldKind::Integer { min, max } => {
+								let signed = value.as_i64();
+								let unsigned = value.as_u64();
+								if let ::core::option::Option::Some(max) = max
+									&& (signed.is_some_and(|number| number > max)
+										|| unsigned.is_some_and(|number| max < 0 || number > max as u64))
+								{
+									errors.add(
+										descriptor.name,
+										#core_crate::validators::ValidationError::Custom(
+											::std::format!("Ensure this value is less than or equal to {}", max),
+										),
+									);
+								} else if let ::core::option::Option::Some(min) = min
+									&& (signed.is_some_and(|number| number < min)
+										|| unsigned.is_some_and(|number| min > 0 && number < min as u64))
+								{
+									errors.add(
+										descriptor.name,
+										#core_crate::validators::ValidationError::Custom(
+											::std::format!("Ensure this value is greater than or equal to {}", min),
+										),
+									);
+								}
+							}
+							#core_crate::model_form::ModelFormFieldKind::Float { min, max } => {
+								if let ::core::option::Option::Some(number) = value.as_f64() {
+									if let ::core::option::Option::Some(max) = max
+										&& number > max
+									{
+										errors.add(
+											descriptor.name,
+											#core_crate::validators::ValidationError::Custom(
+												::std::format!("Ensure this value is less than or equal to {}", max),
+											),
+										);
+									} else if let ::core::option::Option::Some(min) = min
+										&& number < min
+									{
+										errors.add(
+											descriptor.name,
+											#core_crate::validators::ValidationError::Custom(
+												::std::format!("Ensure this value is greater than or equal to {}", min),
+											),
+										);
+									}
+								}
+							}
+							#core_crate::model_form::ModelFormFieldKind::Decimal { .. } => {
+								match descriptor.name {
+									#(#wasm_decimal_validation_arms,)*
+									_ => {}
+								}
+							}
+							#core_crate::model_form::ModelFormFieldKind::Boolean => {
+								if !value.is_boolean() {
+									errors.add(
+										descriptor.name,
+										#core_crate::validators::ValidationError::Custom(
+											"Cannot convert to boolean".to_owned(),
+										),
+									);
+								}
+							}
+							#core_crate::model_form::ModelFormFieldKind::Date => {
+								if !serialized_year(&value).is_some_and(|year| (1000..=9999).contains(&year)) {
+									errors.add(
+										descriptor.name,
+										#core_crate::validators::ValidationError::Custom(
+											"Enter a valid date with a 4-digit year".to_owned(),
+										),
+									);
+								}
+							}
+							#core_crate::model_form::ModelFormFieldKind::DateTime
+							| #core_crate::model_form::ModelFormFieldKind::NaiveDateTime => {
+								if !serialized_year(&value).is_some_and(|year| (1000..=9999).contains(&year)) {
+									errors.add(
+										descriptor.name,
+										#core_crate::validators::ValidationError::Custom(
+											"Enter a year between 1000 and 9999".to_owned(),
+										),
+									);
+								}
+							}
+							#core_crate::model_form::ModelFormFieldKind::Time => {
+								if value.as_str().is_none() {
+									errors.add(
+										descriptor.name,
+										#core_crate::validators::ValidationError::Custom(
+											"Expected string".to_owned(),
+										),
+									);
+								}
+							}
+							#core_crate::model_form::ModelFormFieldKind::Uuid => {
+								if !serialized_uuid_is_valid(&value) {
+									errors.add(
+										descriptor.name,
+										#core_crate::validators::ValidationError::Custom(
+											"Enter a valid UUID.".to_owned(),
+										),
+									);
+								}
+							}
+							#core_crate::model_form::ModelFormFieldKind::Json => {
+								if !json_within_depth(&value, 0) {
+									errors.add(
+										descriptor.name,
+										#core_crate::validators::ValidationError::Custom(
+											"JSON structure is too deeply nested.".to_owned(),
+										),
+									);
+								}
+							}
+							#core_crate::model_form::ModelFormFieldKind::File
+							| #core_crate::model_form::ModelFormFieldKind::Image => {
+								let valid_reference = value.as_object().is_some_and(|reference| {
+									reference
+										.get("path")
+										.and_then(#serde_json_crate::Value::as_str)
+										.is_some_and(|path| !path.is_empty())
+										&& reference
+											.get("storage")
+											.and_then(#serde_json_crate::Value::as_str)
+											.is_some_and(|storage| !storage.is_empty())
+								});
+								if valid_reference
+									&& (<Self as #core_crate::model_form::ModelFormPayload<P>>::is_defaulted(&self, descriptor.name)
+										|| trusted_values
+											.and_then(|values| values.get(descriptor.name))
+											.is_some_and(|trusted_value| trusted_value == &value))
+								{
+									continue;
+								}
+								let message = if valid_reference {
+									"Stored file references must come from the existing instance"
+								} else {
+									"Expected storage-backed file reference"
+								};
+								errors.add(
+									descriptor.name,
+									#core_crate::validators::ValidationError::Custom(message.to_owned()),
+								);
+							}
+						}
+					}
+					if !errors.is_empty() {
+						return ::core::result::Result::Err(errors);
+					}
+
+					for (field, value) in normalized {
+						if let ::core::result::Result::Err(error) =
+							<Self as #core_crate::model_form::ModelFormPayload<P>>::set_normalized_json(
+								&mut self,
+								field,
+								value,
+							)
+						{
+							errors.add(
+								field,
+								#core_crate::validators::ValidationError::Custom(error.to_string()),
+							);
+							return ::core::result::Result::Err(errors);
+						}
+					}
+					let cleaned = #cleaned_payload_name::from_validated_raw(self);
+				if run_validator {
+					#validator_call
+				}
+				::core::result::Result::Ok(cleaned)
+			}
+		}
+
+		#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+		impl<P> #core_crate::model_form::ModelFormValidatingPayload for #payload_name<P>
+		where
+			P: #core_crate::model_form::ModelFormPolicy,
+			#(#payload_bounds,)*
+		{
+			type Cleaned = #cleaned_payload_name<P>;
+
+			fn clean_and_validate(
+				self,
+			) -> ::core::result::Result<
+				Self::Cleaned,
+				#core_crate::validators::ValidationErrors,
+				> {
+					self.__reinhardt_clean_and_validate(true, true, &[], None)
+				}
+
+				fn clean_and_validate_with_deferred_required_fields(
+					self,
+					deferred_fields: &[&str],
+				) -> ::core::result::Result<Self::Cleaned, #core_crate::validators::ValidationErrors> {
+					<Self as #core_crate::model_form::ModelFormValidatingPayload>::clean_and_validate_with_uploads(self, deferred_fields, &[])
+				}
+
+				fn clean_and_validate_with_uploads(
+					self,
+					deferred_fields: &[&str],
+					uploads: &[#core_crate::model_form::ModelFormUpload],
+				) -> ::core::result::Result<
+					Self::Cleaned,
+					#core_crate::validators::ValidationErrors,
+				> {
+					#core_crate::model_form::validate_uploaded_fields::<#schema_name, P>(uploads)?;
+					let mut errors = #core_crate::validators::ValidationErrors::new();
+					for &field in deferred_fields {
+						if !<#schema_name as #core_crate::model_form::ModelFormSchema>::fields()
+							.iter()
+							.any(|descriptor| {
+								descriptor.name == field
+									&& descriptor.required
+									&& matches!(
+										descriptor.kind,
+										#core_crate::model_form::ModelFormFieldKind::File
+											| #core_crate::model_form::ModelFormFieldKind::Image
+									)
+							})
+						{
+							errors.add(
+								field.to_owned(),
+								#core_crate::validators::ValidationError::Custom(
+									"only required file or image fields may be deferred".to_owned(),
+								),
+							);
+						}
+					}
+					if !errors.is_empty() {
+						return ::core::result::Result::Err(errors);
+					}
+					let mut cleaned = self.__reinhardt_clean_and_validate(true, false, deferred_fields, None)?;
+					cleaned.__reinhardt_uploads = uploads.to_vec();
+					#validator_call
+					::core::result::Result::Ok(cleaned)
+				}
+		}
+
+		#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+		impl<P> #core_crate::model_form::ModelFormUpdatingPayload for #payload_name<P>
+		where
+			P: #core_crate::model_form::ModelFormPolicy,
+			#(#payload_bounds,)*
+		{
+			type Model = #struct_name;
+
+			fn clean_and_validate_for_update(
+				self,
+				existing: &Self::Model,
+			) -> ::core::result::Result<
+				Self::Cleaned,
+				#core_crate::validators::ValidationErrors,
+				> {
+					#reject_supplied_primary_keys
+					#trusted_file_values
+					let cleaned = self.__reinhardt_clean_and_validate(
+						false,
+						false,
+						&[],
+						::core::option::Option::Some(&instance_values),
+					)?;
+				let mut merged = cleaned.clone();
+				#(#merge_existing_into_cleaned)*
+				#merged_validator_call
+					::core::result::Result::Ok(cleaned)
+				}
+			}
+	};
 
 	Ok(quote! {
 		#struct_vis struct #schema_name;
@@ -3752,7 +5044,23 @@ fn generate_model_form_support(
 		#struct_vis struct #payload_name<P: #core_crate::model_form::ModelFormPolicy> {
 			#(#field_names: ::core::option::Option<#field_types>,)*
 			forbidden_fields: ::std::vec::Vec<&'static str>,
+			__reinhardt_defaulted_fields: ::std::vec::Vec<&'static str>,
 			_policy: ::core::marker::PhantomData<P>,
+		}
+
+		impl<P> ::core::clone::Clone for #payload_name<P>
+		where
+			P: #core_crate::model_form::ModelFormPolicy,
+			#(#clone_bounds,)*
+		{
+			fn clone(&self) -> Self {
+				Self {
+					#(#clone_fields,)*
+					forbidden_fields: self.forbidden_fields.clone(),
+					__reinhardt_defaulted_fields: self.__reinhardt_defaulted_fields.clone(),
+					_policy: ::core::marker::PhantomData,
+				}
+			}
 		}
 
 		impl<P: #core_crate::model_form::ModelFormPolicy> #payload_name<P> {
@@ -3760,6 +5068,7 @@ fn generate_model_form_support(
 				Self {
 					#(#empty_fields,)*
 					forbidden_fields: ::std::vec::Vec::new(),
+					__reinhardt_defaulted_fields: ::std::vec::Vec::new(),
 					_policy: ::core::marker::PhantomData,
 				}
 			}
@@ -3780,6 +5089,28 @@ fn generate_model_form_support(
 			P: #core_crate::model_form::ModelFormPolicy,
 			#(#payload_bounds,)*
 		{
+			fn apply_defaults(&mut self) {
+				#(#default_assignments)*
+			}
+
+			fn is_defaulted(&self, field: &str) -> bool {
+				self.__reinhardt_defaulted_fields.contains(&field)
+			}
+
+			fn clear_json(&mut self, field: &str) -> ::core::result::Result<(), #core_crate::model_form::ModelFormPayloadError> {
+				match field {
+					#(#clear_json_arms,)*
+					_ => ::core::result::Result::Err(#core_crate::model_form::ModelFormPayloadError::UnknownField { field: field.to_owned() }),
+				}
+			}
+
+			fn set_normalized_json(&mut self, field: &str, value: #serde_json_crate::Value) -> ::core::result::Result<(), #core_crate::model_form::ModelFormPayloadError> {
+				match field {
+					#(#normalized_json_arms,)*
+					_ => ::core::result::Result::Err(#core_crate::model_form::ModelFormPayloadError::UnknownField { field: field.to_owned() }),
+				}
+			}
+
 			fn supplied_fields(&self) -> ::std::vec::Vec<&'static str> {
 				let mut fields = ::std::vec::Vec::new();
 				#(#supplied_fields)*
@@ -3867,6 +5198,7 @@ fn generate_model_form_support(
 				::core::result::Result::Ok(#payload_name {
 					#(#field_names,)*
 					forbidden_fields,
+					__reinhardt_defaulted_fields: ::std::vec::Vec::new(),
 					_policy: ::core::marker::PhantomData,
 				})
 			}
@@ -3888,36 +5220,64 @@ fn generate_model_form_support(
 			}
 		}
 
+		#cleaned_payload_output
+		#cleaned_construction_output
+		#signature_check
+		#validation_output
+
 		#native_form_cfg
 		impl #forms_crate::model_form::FormModel for #struct_name {
 			type Schema = #schema_name;
 			type Data<P: #core_crate::model_form::ModelFormPolicy> = #payload_name<P>;
+			type CleanedData<P: #core_crate::model_form::ModelFormPolicy> = #cleaned_payload_name<P>;
 
-			fn build_from_payload<P: #core_crate::model_form::ModelFormPolicy>(
-				data: &Self::Data<P>,
-			) -> ::core::result::Result<Self, #forms_crate::model_form::ModelFormError> {
-				#build_from_payload_body
+			fn clean_for_update<P: #core_crate::model_form::ModelFormPolicy>(
+				data: Self::Data<P>,
+				existing: &Self,
+			) -> ::core::result::Result<
+				Self::CleanedData<P>,
+				#core_crate::validators::ValidationErrors,
+			> {
+				<#payload_name<P> as #core_crate::model_form::ModelFormUpdatingPayload>::clean_and_validate_for_update(
+					data,
+					existing,
+				)
 			}
 
-			fn build_from_payload_with_deferred_required_field<P: #core_crate::model_form::ModelFormPolicy>(
-				data: &Self::Data<P>,
+			fn build_from_cleaned_compat<P: #core_crate::model_form::ModelFormPolicy>(
+				data: &Self::CleanedData<P>,
+				server_values: &::std::collections::HashMap<::std::string::String, #serde_json_crate::Value>,
+			) -> ::core::result::Result<Self, #forms_crate::model_form::ModelFormError> {
+				Self::build_from_cleaned_with_deferred_required_field(data, server_values, "")
+			}
+
+			fn build_from_cleaned_with_deferred_required_field<P: #core_crate::model_form::ModelFormPolicy>(
+				data: &Self::CleanedData<P>,
+				server_values: &::std::collections::HashMap<::std::string::String, #serde_json_crate::Value>,
 				deferred_field: &str,
 			) -> ::core::result::Result<Self, #forms_crate::model_form::ModelFormError> {
-				Self::build_from_payload_with_deferred_required_fields(data, &[deferred_field])
+				if !deferred_field.is_empty() && !Self::trusted_relation_field_is_required(deferred_field) {
+					return ::core::result::Result::Err(#forms_crate::model_form::ModelFormError::FieldValidation {
+						errors: ::std::collections::HashMap::from([(
+							deferred_field.to_owned(), vec!["only required relationship fields may be deferred".to_owned()],
+						)]),
+					});
+				}
+				#build_from_cleaned_body
 			}
 
-			fn build_from_payload_with_deferred_required_fields<P: #core_crate::model_form::ModelFormPolicy>(
-				data: &Self::Data<P>,
-				deferred_fields: &[&str],
-			) -> ::core::result::Result<Self, #forms_crate::model_form::ModelFormError> {
-				#build_from_payload_with_deferred_field_body
+			fn field_json(&self, field: &str) -> ::core::option::Option<#serde_json_crate::Value> {
+				match field {
+					#(#instance_field_json_arms)*
+					_ => ::core::option::Option::None,
+				}
 			}
 
-			fn apply_payload<P: #core_crate::model_form::ModelFormPolicy>(
+			fn apply_cleaned<P: #core_crate::model_form::ModelFormPolicy>(
 				&mut self,
-				data: &Self::Data<P>,
+				data: &Self::CleanedData<P>,
 			) -> ::core::result::Result<(), #forms_crate::model_form::ModelFormError> {
-				#(#apply_payload_fields)*
+				#(#apply_cleaned_fields)*
 				::core::result::Result::Ok(())
 			}
 
@@ -3944,6 +5304,13 @@ fn generate_model_form_support(
 				match field {
 					#(#trusted_field_kinds,)*
 					_ => ::core::option::Option::None,
+				}
+			}
+
+			fn trusted_relation_field_is_required(field: &str) -> bool {
+				match field {
+					#(#trusted_relation_requiredness,)*
+					_ => false,
 				}
 			}
 
@@ -4226,6 +5593,8 @@ pub(crate) fn generate_named_model_form_contract(
 	let contract_name = &config.name;
 	let contract_stem = ident_to_wire_name(contract_name);
 	let data_name = Ident::new(&format!("{contract_stem}Data"), contract_name.span());
+	let cleaned_data_name =
+		Ident::new(&format!("Cleaned{contract_stem}Data"), contract_name.span());
 	let schema_name = Ident::new(&format!("{contract_stem}Schema"), contract_name.span());
 	let field_name = Ident::new(&format!("{contract_stem}Field"), contract_name.span());
 	let policy_name = Ident::new(&format!("{contract_stem}Policy"), contract_name.span());
@@ -4235,9 +5604,14 @@ pub(crate) fn generate_named_model_form_contract(
 	);
 	let legacy_schema_name = Ident::new(&format!("{model_name}FormSchema"), model_name.span());
 	let legacy_data_name = Ident::new(&format!("{model_name}ModelFormData"), model_name.span());
+	let legacy_cleaned_name = Ident::new(
+		&format!("Cleaned{model_name}ModelFormData"),
+		model_name.span(),
+	);
 	let generated_names = [
 		contract_stem.clone(),
 		data_name.to_string(),
+		cleaned_data_name.to_string(),
 		schema_name.to_string(),
 		field_name.to_string(),
 		policy_name.to_string(),
@@ -4246,6 +5620,7 @@ pub(crate) fn generate_named_model_form_contract(
 		model_name.to_string(),
 		legacy_schema_name.to_string(),
 		legacy_data_name.to_string(),
+		legacy_cleaned_name.to_string(),
 	] {
 		if generated_names.contains(&occupied) {
 			return Err(syn::Error::new_spanned(
@@ -4363,6 +5738,13 @@ pub(crate) fn generate_named_model_form_contract(
 		let getter = selected_string.clone();
 		let setter = format!("set_{getter}");
 		let reserved = [
+			"apply_defaults",
+			"clear_json",
+			"clean_and_validate",
+			"clean_and_validate_with_deferred_required_fields",
+			"into_raw",
+			"is_defaulted",
+			"set_normalized_json",
 			"fields",
 			"model_form",
 			"clone",
@@ -4407,6 +5789,12 @@ pub(crate) fn generate_named_model_form_contract(
 	let core_crate = get_reinhardt_core_crate();
 	let serde_crate = get_serde_crate();
 	let serde_json_crate = get_serde_json_crate();
+	let forms_crate = get_reinhardt_forms_crate();
+	let validation_cfg = if forms_crate.is_some() {
+		quote! {}
+	} else {
+		quote!(#[cfg(all(target_family = "wasm", target_os = "unknown"))])
+	};
 	let field_count = selected.len();
 	let field_idents: Vec<_> = selected.iter().map(|field| &field.name).collect();
 	let field_types: Vec<_> = selected.iter().map(|field| &field.ty).collect();
@@ -4447,6 +5835,7 @@ pub(crate) fn generate_named_model_form_contract(
 		let required =
 			!nullable && field.config.blank != Some(true) && field.config.default.is_none();
 		let has_default = field.config.default.is_some();
+		let trim = field.form.trim;
 		quote! {
 			#core_crate::model_form::ModelFormFieldDescriptor {
 				name: #name,
@@ -4456,6 +5845,7 @@ pub(crate) fn generate_named_model_form_contract(
 				nullable: #nullable,
 				editable: true,
 				generated_relation_id: false,
+				trim: #trim,
 			}
 		}
 	});
@@ -4500,6 +5890,7 @@ pub(crate) fn generate_named_model_form_contract(
 			#[doc = concat!("Sets the supplied value for `", #field_name, "`. Parity: P2.")]
 			pub fn #setter(&mut self, value: #ty) {
 				self.#name = ::core::option::Option::Some(value);
+				self.__reinhardt_defaulted_fields.retain(|field| *field != #field_name);
 			}
 		}
 	});
@@ -4535,6 +5926,7 @@ pub(crate) fn generate_named_model_form_contract(
 						}
 					})?;
 					self.#name = ::core::option::Option::Some(parsed);
+					self.__reinhardt_defaulted_fields.retain(|field| *field != #literal);
 					::core::result::Result::Ok(())
 				}
 			}
@@ -4597,18 +5989,21 @@ pub(crate) fn generate_named_model_form_contract(
 		.zip(&field_literals)
 		.map(|(variant, literal)| quote!(Self::#variant => #literal));
 	let ordered_variants = variants.iter().map(|variant| quote!(#field_name::#variant));
-	let native_adapter = get_reinhardt_forms_crate().map(|forms_crate| {
-		let assignments = field_idents.iter().map(|field| {
+	let into_legacy_assignments = field_idents
+		.iter()
+		.map(|field| {
 			let setter = Ident::new(
-				&format!("set_trusted_{}", named_model_form_wire_name(field)),
+				&format!("set_{}", named_model_form_wire_name(field)),
 				field.span(),
 			);
 			quote! {
 				if let ::core::option::Option::Some(value) = data.#field {
-					legacy.#setter(value);
+					legacy.#setter(value).expect("named form policy allows its declared fields");
 				}
 			}
-		});
+		})
+		.collect::<Vec<_>>();
+	let native_adapter = forms_crate.map(|forms_crate| {
 		quote! {
 			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 			impl #contract_name {
@@ -4616,15 +6011,82 @@ pub(crate) fn generate_named_model_form_contract(
 				pub fn model_form(
 					data: #data_name,
 				) -> #forms_crate::model_form::ModelForm<#model_name, #policy_name> {
-					let mut legacy = #legacy_data_name::<#policy_name>::empty();
-					#(#assignments)*
-					#forms_crate::model_form::ModelForm::from_payload(legacy)
+					#forms_crate::model_form::ModelForm::from_payload(data.__reinhardt_into_legacy())
 				}
+			}
+		}
+	});
+	let model_stem = ident_to_wire_name(model_name);
+	let validation_model = Ident::new(
+		&format!("Reinhardt{model_stem}{contract_stem}ValidationModel"),
+		contract_name.span(),
+	);
+	let validation_data = Ident::new(
+		&format!("{validation_model}ModelFormData"),
+		contract_name.span(),
+	);
+	let validation_cleaned = Ident::new(
+		&format!("Cleaned{validation_model}ModelFormData"),
+		contract_name.span(),
+	);
+	let validation_field_names = config.fields.iter().collect::<HashSet<_>>();
+	let validation_fields = lowered
+		.field_infos
+		.iter()
+		.filter(|field| validation_field_names.contains(&field.name))
+		.cloned()
+		.collect::<Vec<_>>();
+	validate_model_form_trim(&lowered.field_infos, true)?;
+	let form_config = ModelFormConfig::from_attrs(&input.attrs)?;
+	let wasm_validation = generate_model_form_support(
+		&validation_model,
+		visibility,
+		&validation_fields,
+		&form_config,
+		None,
+	)?;
+	let wasm_validation_items = syn::parse2::<syn::File>(wasm_validation)?.items;
+	let serde_path = LitStr::new(&serde_crate.to_string(), contract_name.span());
+	let legacy_conversion = quote! {
+		let mut legacy = #legacy_data_name::<#policy_name>::empty();
+		#(#into_legacy_assignments)*
+		legacy.__reinhardt_defaulted_fields = data.__reinhardt_defaulted_fields;
+		legacy
+	};
+	let cleaned_getters = field_idents.iter().zip(&field_types).map(|(name, ty)| {
+		let field_name = LitStr::new(&named_model_form_wire_name(name), name.span());
+		quote! {
+			#[doc = concat!("Returns the normalized value for `", #field_name, "`. Parity: P2.")]
+			pub fn #name(&self) -> ::core::option::Option<&#ty> {
+				self.0.#name()
 			}
 		}
 	});
 
 	Ok(quote! {
+		// Keep the shared payload emitter in the caller's scope so field types,
+		// default expressions, and validator paths resolve identically on both targets.
+		// Only selected scalar fields enter the WASM carrier; ORM fields stay native.
+		#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+		#[doc(hidden)]
+		#[derive(Clone, #serde_crate::Serialize)]
+		#[serde(crate = #serde_path)]
+		#visibility struct #validation_model {
+			#(#field_idents: #field_types,)*
+		}
+
+		#(
+			#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+			#[doc(hidden)]
+			#wasm_validation_items
+		)*
+
+		#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+		#visibility use self::{
+			#validation_data as #legacy_data_name,
+			#validation_cleaned as #legacy_cleaned_name,
+		};
+
 		#[doc = "A target-neutral named model form contract marker.\n\nParity: P2. This marker is generated on native and `wasm32-unknown-unknown` targets."]
 		#visibility struct #contract_name;
 
@@ -4632,6 +6094,7 @@ pub(crate) fn generate_named_model_form_contract(
 		#[doc = "The target-neutral JSON payload for a named model form contract.\n\nParity: P2. This payload is generated on native and `wasm32-unknown-unknown` targets."]
 		#visibility struct #data_name {
 			#(#field_idents: ::core::option::Option<#field_types>,)*
+			__reinhardt_defaulted_fields: ::std::vec::Vec<&'static str>,
 		}
 
 		#[doc = "The target-neutral field descriptor schema for a named model form contract.\n\nParity: P2. This schema is generated on native and `wasm32-unknown-unknown` targets."]
@@ -4661,6 +6124,77 @@ pub(crate) fn generate_named_model_form_contract(
 		}
 
 		#native_adapter
+
+		#validation_cfg
+		#[doc = "A normalized named model-form payload. Parity: P2 on native and WASM targets."]
+		#visibility struct #cleaned_data_name(#legacy_cleaned_name<#policy_name>);
+
+		#validation_cfg
+		impl #cleaned_data_name {
+			#(#cleaned_getters)*
+
+			#[doc = "Converts this normalized payload back to its named raw payload. Parity: P2."]
+			pub fn into_raw(self) -> #data_name {
+				let data = self.0.into_raw();
+				let defaulted_fields = [#(#field_literals),*].into_iter().filter(|field| {
+					<#legacy_data_name<#policy_name> as #core_crate::model_form::ModelFormPayload<#policy_name>>::is_defaulted(&data, field)
+				}).collect();
+				#data_name {
+					#(#field_idents: data.#field_idents().cloned(),)*
+					__reinhardt_defaulted_fields: defaulted_fields,
+				}
+			}
+		}
+
+		#validation_cfg
+		impl #core_crate::model_form::ModelFormCleanedPayload for #cleaned_data_name {
+			type Raw = #data_name;
+
+			fn into_raw(self) -> Self::Raw {
+				#cleaned_data_name::into_raw(self)
+			}
+		}
+
+		#validation_cfg
+		impl #data_name {
+			fn __reinhardt_into_legacy(self) -> #legacy_data_name<#policy_name> {
+				let data = self;
+				#legacy_conversion
+			}
+		}
+
+		#validation_cfg
+		impl #core_crate::model_form::ModelFormValidatingPayload for #data_name {
+			type Cleaned = #cleaned_data_name;
+
+			fn clean_and_validate(self) -> ::core::result::Result<Self::Cleaned, #core_crate::validators::ValidationErrors> {
+				<#legacy_data_name<#policy_name> as #core_crate::model_form::ModelFormValidatingPayload>::clean_and_validate(
+					self.__reinhardt_into_legacy(),
+				).map(#cleaned_data_name)
+			}
+
+			fn clean_and_validate_with_uploads(
+				self,
+				deferred_fields: &[&str],
+				uploads: &[#core_crate::model_form::ModelFormUpload],
+			) -> ::core::result::Result<Self::Cleaned, #core_crate::validators::ValidationErrors> {
+				<#legacy_data_name<#policy_name> as #core_crate::model_form::ModelFormValidatingPayload>::clean_and_validate_with_uploads(
+					self.__reinhardt_into_legacy(),
+					deferred_fields,
+					uploads,
+				).map(#cleaned_data_name)
+			}
+
+			fn clean_and_validate_with_deferred_required_fields(
+				self,
+				deferred_fields: &[&str],
+			) -> ::core::result::Result<Self::Cleaned, #core_crate::validators::ValidationErrors> {
+				<#legacy_data_name<#policy_name> as #core_crate::model_form::ModelFormValidatingPayload>::clean_and_validate_with_deferred_required_fields(
+					self.__reinhardt_into_legacy(),
+					deferred_fields,
+				).map(#cleaned_data_name)
+			}
+		}
 
 		impl #data_name {
 			#(#getters)*
@@ -4703,6 +6237,10 @@ pub(crate) fn generate_named_model_form_contract(
 
 			fn forbidden_fields(&self) -> &[&'static str] {
 				&[]
+			}
+
+			fn is_defaulted(&self, field: &str) -> bool {
+				self.__reinhardt_defaulted_fields.contains(&field)
 			}
 
 			fn get_json(&self, field: &str) -> ::core::option::Option<#serde_json_crate::Value> {
@@ -4780,6 +6318,7 @@ pub(crate) fn generate_named_model_form_contract(
 				}
 				::core::result::Result::Ok(#data_name {
 					#(#field_idents,)*
+					__reinhardt_defaulted_fields: ::std::vec::Vec::new(),
 				})
 			}
 		}
@@ -6080,6 +7619,13 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 
 	// Parse model configuration
 	let model_config = ModelConfig::from_attrs(&input.attrs, struct_name)?;
+	let model_form_config = ModelFormConfig::from_attrs(&input.attrs)?;
+	if model_form_config.validate.is_some() && !model_config.form {
+		return Err(syn::Error::new_spanned(
+			struct_name,
+			"`#[form(validate = ...)]` requires `#[model(form = true)]`",
+		));
+	}
 	let app_label = &model_config.app_label;
 	let table_name = &model_config.table_name;
 
@@ -6107,6 +7653,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 		rel_fields,
 		fk_id_field_names,
 	} = lower_model_fields(fields)?;
+	validate_model_form_trim(&field_infos, model_config.form)?;
 
 	let latest_by_fields = model_config
 		.get_latest_by
@@ -6825,7 +8372,13 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			.named_form
 			.as_ref()
 			.map(|form| form.fields.as_slice());
-		generate_model_form_support(struct_name, struct_vis, &field_infos, selected_fields)?
+		generate_model_form_support(
+			struct_name,
+			struct_vis,
+			&field_infos,
+			&model_form_config,
+			selected_fields,
+		)?
 	} else {
 		quote! {}
 	};
@@ -12247,6 +13800,7 @@ mod tests {
 				unsigned: Some(true),
 				..FieldConfig::default()
 			},
+			form: FieldFormConfig::default(),
 			serde_attrs: Vec::new(),
 			injected_relation_serde_skip: false,
 			rel: None,
@@ -13380,6 +14934,128 @@ mod tests {
 		);
 	}
 
+	#[rstest]
+	fn test_model_form_server_context_only_tracks_required_server_fields() {
+		let input = quote! {
+			#[model(app_label = "fixture_tests", table_name = "fixture_models", form = true)]
+			struct FixtureModel {
+				#[field(primary_key = true)]
+				id: Option<i64>,
+				#[field(editable = false)]
+				organization_id: i64,
+				#[field(max_length = 200)]
+				note: Option<String>,
+				#[field(default = "system", editable = false, max_length = 200)]
+				audit_token: String,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("server-owned form fields should derive");
+		let file: syn::File = syn::parse2(output).expect("generated model output should parse");
+
+		let mut context_types: Vec<_> = file
+			.items
+			.iter()
+			.filter_map(|item| {
+				let syn::Item::Struct(item) = item else {
+					return None;
+				};
+				let name = item.ident.to_string();
+				(name.starts_with("FixtureModelModelForm")
+					&& (name.ends_with("Missing")
+						|| name.ends_with("Present")
+						|| name.ends_with("ServerContext")))
+				.then_some(name)
+			})
+			.collect();
+		context_types.sort();
+		assert_eq!(
+			context_types,
+			vec![
+				"FixtureModelModelFormOrganizationIdMissing",
+				"FixtureModelModelFormOrganizationIdPresent",
+				"FixtureModelModelFormServerContext",
+			]
+		);
+
+		let mut context_method_signatures: Vec<_> = file
+			.items
+			.iter()
+			.filter_map(|item| {
+				let syn::Item::Impl(item) = item else {
+					return None;
+				};
+				let syn::Type::Path(self_ty) = item.self_ty.as_ref() else {
+					return None;
+				};
+				(self_ty.path.segments.last()?.ident == "FixtureModelModelFormServerContext")
+					.then_some(item)
+			})
+			.flat_map(|item| item.items.iter())
+			.filter_map(|item| {
+				let syn::ImplItem::Fn(item) = item else {
+					return None;
+				};
+				Some(format!(
+					"{} {}",
+					item.vis.to_token_stream(),
+					item.sig.to_token_stream()
+				))
+			})
+			.collect();
+		context_method_signatures.sort();
+		assert_eq!(
+			context_method_signatures,
+			vec![
+				"pub fn new () -> Self",
+				"pub fn organization_id (self , value : i64) -> FixtureModelModelFormServerContext < FixtureModelModelFormOrganizationIdPresent >",
+			]
+		);
+
+		let form_model_methods = file
+			.items
+			.iter()
+			.find_map(|item| {
+				let syn::Item::Impl(item) = item else {
+					return None;
+				};
+				let trait_name = item
+					.trait_
+					.as_ref()
+					.and_then(|(_, path, _)| path.segments.last())?
+					.ident
+					.to_string();
+				(trait_name == "FormModel").then(|| {
+					item.items
+						.iter()
+						.filter_map(|item| {
+							let syn::ImplItem::Fn(item) = item else {
+								return None;
+							};
+							Some(item.sig.ident.to_string())
+						})
+						.collect::<Vec<_>>()
+				})
+			})
+			.expect("generated models should implement FormModel");
+		assert_eq!(
+			form_model_methods,
+			vec![
+				"clean_for_update",
+				"build_from_cleaned_compat",
+				"build_from_cleaned_with_deferred_required_field",
+				"field_json",
+				"apply_cleaned",
+				"set_trusted_field_json",
+				"accepts_trusted_field",
+				"trusted_relation_field_kind",
+				"trusted_relation_field_is_required",
+				"save_with_mode",
+			]
+		);
+	}
+
 	#[test]
 	fn test_model_form_f32_bounds_are_representable() {
 		let input = quote! {
@@ -13534,10 +15210,14 @@ mod tests {
 	#[test]
 	fn test_model_form_rejects_payload_api_accessor_collisions() {
 		for field_name in [
+			"clean_and_validate",
+			"clone",
 			"default",
 			"fields",
+			"from_validated_raw",
 			"json",
 			"get_json",
+			"into_raw",
 			"set_json",
 			"supplied_fields",
 			"__reinhardt_checkbox_enabled",

@@ -139,6 +139,7 @@ impl InlineModelAdmin {
 		P::PrimaryKey: Serialize,
 		C: FormModel + ModelFormPrimaryKeyFields + 'static,
 		C::Data<AllEditableModelFields>: Default + Send,
+		C::CleanedData<AllEditableModelFields>: Send,
 	{
 		let child_model = child_model.into();
 		let foreign_key = foreign_key.into();
@@ -415,6 +416,7 @@ where
 	P::PrimaryKey: Serialize,
 	C: FormModel + ModelFormPrimaryKeyFields + 'static,
 	C::Data<AllEditableModelFields>: Default + Send,
+	C::CleanedData<AllEditableModelFields>: Send,
 {
 	fn table_name(&self) -> &'static str {
 		C::table_name()
@@ -1302,6 +1304,7 @@ mod tests {
 			nullable: false,
 			editable: false,
 			generated_relation_id: false,
+			trim: false,
 		}];
 		let id = "01983c74-08c2-7ad2-a596-6bdbba00be40";
 
@@ -1323,6 +1326,7 @@ mod tests {
 			nullable: false,
 			editable: false,
 			generated_relation_id: false,
+			trim: false,
 		}];
 		let id = "9223372036854775808";
 

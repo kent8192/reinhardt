@@ -3,8 +3,9 @@
 use std::marker::PhantomData;
 
 use reinhardt_core::model_form::{
-	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError,
-	ModelFormPolicy, ModelFormSchema, NativeModelFormPayload,
+	ModelFormCleanedPayload, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload,
+	ModelFormPayloadError, ModelFormPolicy, ModelFormSchema, ModelFormValidatingPayload,
+	NativeModelFormPayload,
 };
 use reinhardt_pages::{form, use_form};
 
@@ -31,6 +32,7 @@ const QUESTION_FIELDS: [ModelFormFieldDescriptor; 2] = [
 		nullable: false,
 		editable: true,
 		generated_relation_id: false,
+		trim: false,
 	},
 	ModelFormFieldDescriptor {
 		name: "owner_id",
@@ -43,6 +45,7 @@ const QUESTION_FIELDS: [ModelFormFieldDescriptor; 2] = [
 		nullable: false,
 		editable: true,
 		generated_relation_id: true,
+		trim: false,
 	},
 ];
 
@@ -60,8 +63,11 @@ impl QuestionFormSchema {
 	}
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(bound = "")]
 struct QuestionModelFormData<P: ModelFormPolicy> {
 	title: Option<String>,
+	#[serde(skip)]
 	_policy: PhantomData<P>,
 }
 
@@ -127,43 +133,40 @@ impl<P: ModelFormPolicy> ModelFormPayload<P> for QuestionModelFormData<P> {
 	}
 }
 
+struct CleanedQuestionModelFormData<P: ModelFormPolicy>(QuestionModelFormData<P>);
+
+impl<P: ModelFormPolicy> ModelFormCleanedPayload for CleanedQuestionModelFormData<P> {
+	type Raw = QuestionModelFormData<P>;
+
+	fn into_raw(self) -> Self::Raw {
+		self.0
+	}
+}
+
+impl<P: ModelFormPolicy> ModelFormValidatingPayload for QuestionModelFormData<P> {
+	type Cleaned = CleanedQuestionModelFormData<P>;
+
+	fn clean_and_validate(
+		mut self,
+	) -> Result<Self::Cleaned, reinhardt_core::validators::ValidationErrors> {
+		reinhardt_forms::model_form::clean_generated_payload::<QuestionFormSchema, P, _>(
+			&mut self,
+		)?;
+		Ok(CleanedQuestionModelFormData(self))
+	}
+}
+
 impl<P: ModelFormPolicy> NativeModelFormPayload for QuestionModelFormData<P> {
 	fn from_native_form_value(_value: serde_json::Value) -> Result<Self, serde_json::Error> {
 		Ok(Self::empty())
 	}
 }
 
-async fn save_question<P: ModelFormPolicy>(
-	_payload: QuestionModelFormData<P>,
+#[reinhardt_pages::server_fn::server_fn(model_form = true)]
+async fn save_question(
+	_payload: QuestionModelFormData<QuestionFields>,
 ) -> Result<(), reinhardt_pages::ServerFnError> {
 	Ok(())
-}
-
-mod save_question {
-	// Generated server-function markers use the lower-case `marker` name.
-	#[allow(non_camel_case_types)]
-	pub struct marker;
-
-	impl reinhardt_pages::server_fn::ServerFnMetadata for marker {
-		const PATH: &'static str = "/api/server_fn/save_question";
-		const NAME: &'static str = "save_question";
-		const IS_JSON_CODEC: bool = true;
-	}
-
-	impl<Selection, S, P> reinhardt_pages::form::ModelFormServerFn<Selection, S, P> for marker
-	where
-		S: reinhardt_pages::form::ModelFormSchema,
-		P: reinhardt_pages::form::ModelFormPolicy,
-	{
-		type Response = ();
-		type Error = reinhardt_pages::ServerFnError;
-
-		fn submit(
-			_state: &reinhardt_pages::form::ModelFormState<S, P>,
-		) -> impl core::future::Future<Output = Result<Self::Response, Self::Error>> {
-			async { ::core::unreachable!() }
-		}
-	}
 }
 
 fn main() {

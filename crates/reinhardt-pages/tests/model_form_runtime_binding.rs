@@ -3,8 +3,9 @@
 use std::{cell::RefCell, marker::PhantomData, rc::Rc};
 
 use reinhardt_core::model_form::{
-	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError,
-	ModelFormPolicy, ModelFormSchema, NativeModelFormPayload,
+	ModelFormCleanedPayload, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload,
+	ModelFormPayloadError, ModelFormPolicy, ModelFormSchema, ModelFormValidatingPayload,
+	NativeModelFormPayload,
 };
 use reinhardt_core::reactive::{Effect, EffectTiming, runtime::with_runtime};
 use reinhardt_pages::component::{
@@ -45,6 +46,7 @@ const BINDING_FIELDS: [ModelFormFieldDescriptor; 7] = [
 		nullable: false,
 		editable: true,
 		generated_relation_id: false,
+		trim: false,
 	},
 	ModelFormFieldDescriptor {
 		name: "count",
@@ -57,6 +59,7 @@ const BINDING_FIELDS: [ModelFormFieldDescriptor; 7] = [
 		nullable: false,
 		editable: true,
 		generated_relation_id: false,
+		trim: false,
 	},
 	ModelFormFieldDescriptor {
 		name: "ratio",
@@ -69,6 +72,7 @@ const BINDING_FIELDS: [ModelFormFieldDescriptor; 7] = [
 		nullable: false,
 		editable: true,
 		generated_relation_id: false,
+		trim: false,
 	},
 	ModelFormFieldDescriptor {
 		name: "active",
@@ -78,6 +82,7 @@ const BINDING_FIELDS: [ModelFormFieldDescriptor; 7] = [
 		nullable: false,
 		editable: true,
 		generated_relation_id: false,
+		trim: false,
 	},
 	ModelFormFieldDescriptor {
 		name: "document",
@@ -87,6 +92,7 @@ const BINDING_FIELDS: [ModelFormFieldDescriptor; 7] = [
 		nullable: true,
 		editable: true,
 		generated_relation_id: false,
+		trim: false,
 	},
 	ModelFormFieldDescriptor {
 		name: "preview",
@@ -96,6 +102,7 @@ const BINDING_FIELDS: [ModelFormFieldDescriptor; 7] = [
 		nullable: true,
 		editable: true,
 		generated_relation_id: false,
+		trim: false,
 	},
 	ModelFormFieldDescriptor {
 		name: "metadata",
@@ -105,6 +112,7 @@ const BINDING_FIELDS: [ModelFormFieldDescriptor; 7] = [
 		nullable: true,
 		editable: true,
 		generated_relation_id: false,
+		trim: false,
 	},
 ];
 
@@ -191,6 +199,29 @@ impl<P: ModelFormPolicy> ModelFormPayload<P> for BindingRecordModelFormData<P> {
 		}
 		self.values.insert(field.to_owned(), value);
 		Ok(())
+	}
+}
+
+struct CleanedBindingRecordModelFormData<P: ModelFormPolicy>(BindingRecordModelFormData<P>);
+
+impl<P: ModelFormPolicy> ModelFormCleanedPayload for CleanedBindingRecordModelFormData<P> {
+	type Raw = BindingRecordModelFormData<P>;
+
+	fn into_raw(self) -> Self::Raw {
+		self.0
+	}
+}
+
+impl<P: ModelFormPolicy> ModelFormValidatingPayload for BindingRecordModelFormData<P> {
+	type Cleaned = CleanedBindingRecordModelFormData<P>;
+
+	fn clean_and_validate(
+		mut self,
+	) -> Result<Self::Cleaned, reinhardt_core::validators::ValidationErrors> {
+		reinhardt_forms::model_form::clean_generated_payload::<BindingRecordFormSchema, P, _>(
+			&mut self,
+		)?;
+		Ok(CleanedBindingRecordModelFormData(self))
 	}
 }
 

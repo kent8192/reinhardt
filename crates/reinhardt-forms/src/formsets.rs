@@ -250,7 +250,11 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 				})?;
 		let fk_field = self.fk_field.clone();
 		for child_form in &mut self.child_forms {
-			child_form.set_trusted_field_value(&fk_field, parent_id.clone())?;
+			if child_form.has_deferred_required_field(&fk_field) {
+				child_form.set_deferred_trusted_field_value(&fk_field, parent_id.clone())?;
+			} else {
+				child_form.set_trusted_field_value(&fk_field, parent_id.clone())?;
+			}
 			child_form.save(executor).await?;
 		}
 		Ok(())
@@ -324,16 +328,43 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 		Ok(())
 	}
 
+	fn can_defer_foreign_key_requiredness(&self) -> bool {
+		match C::Schema::fields()
+			.iter()
+			.find(|descriptor| descriptor.name == self.fk_field)
+		{
+			Some(descriptor) => descriptor.generated_relation_id && descriptor.required,
+			None => {
+				C::trusted_relation_field_kind(&self.fk_field).is_some()
+					&& C::trusted_relation_field_is_required(&self.fk_field)
+			}
+		}
+	}
+
 	/// Validate all child forms
 	pub fn is_valid(&mut self) -> bool {
 		let mut all_valid = true;
+		let can_defer_foreign_key = self.can_defer_foreign_key_requiredness();
 
 		for child_form in &mut self.child_forms {
 			match child_form.build_instance() {
 				Ok(_) => {}
-				Err(ModelFormError::MissingModelField { field }) if field == self.fk_field => {
+				Err(ModelFormError::MissingModelField { field })
+					if field == self.fk_field && can_defer_foreign_key =>
+				{
 					// The trusted parent key is assigned after the create parent has been saved,
 					// but every other required child field must still be validated first.
+					if !child_form.is_valid_with_deferred_required_field(&self.fk_field) {
+						all_valid = false;
+					}
+				}
+				Err(ModelFormError::FieldValidation { errors })
+					if can_defer_foreign_key
+						&& errors.len() == 1
+						&& errors.get(&self.fk_field).is_some_and(|messages| {
+							messages.len() == 1 && messages[0] == "This field is required."
+						}) =>
+				{
 					if !child_form.is_valid_with_deferred_required_field(&self.fk_field) {
 						all_valid = false;
 					}
@@ -746,13 +777,35 @@ mod tests {
 	use std::sync::atomic::{AtomicUsize, Ordering};
 
 	use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
+	use reinhardt_core::validators::{ValidationError, ValidationErrors};
 	use reinhardt_db::associations::ForeignKeyField;
 	use reinhardt_db::orm::connection::{
 		DatabaseBackend, OrmExecutor, QueryResult, QueryValue, Row,
 	};
 	use reinhardt_macros::model;
+	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 	use serde_json::json;
+	use serial_test::serial;
+
+	static REQUIRED_CHILD_GENERATED_VALIDATOR_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+	struct AtomicUsizeResetGuard {
+		counter: &'static AtomicUsize,
+	}
+
+	impl AtomicUsizeResetGuard {
+		fn new(counter: &'static AtomicUsize) -> Self {
+			counter.store(0, Ordering::SeqCst);
+			Self { counter }
+		}
+	}
+
+	impl Drop for AtomicUsizeResetGuard {
+		fn drop(&mut self) {
+			self.counter.store(0, Ordering::SeqCst);
+		}
+	}
 
 	// Test model implementation
 	#[model(
@@ -804,17 +857,73 @@ mod tests {
 		content: String,
 	}
 
+	fn validate_required_child<P: ModelFormPolicy>(
+		payload: &CleanedRequiredChildModelModelFormData<P>,
+	) -> Result<(), ValidationErrors> {
+		REQUIRED_CHILD_GENERATED_VALIDATOR_CALLS.fetch_add(1, Ordering::SeqCst);
+		let mut errors = ValidationErrors::new();
+		if payload
+			.content()
+			.is_some_and(|content| content == "blocked child")
+			&& payload.parent_id().is_none()
+		{
+			errors.add(
+				"_all",
+				ValidationError::Custom(
+					"generated child validation requires the parent key".to_owned(),
+				),
+			);
+		}
+		if payload
+			.content()
+			.is_some_and(|content| content == "blocked parent child")
+			&& payload.parent_id() == Some(&1)
+		{
+			errors.add(
+				"_all",
+				ValidationError::Custom(
+					"generated child validation rejected the parent key".to_owned(),
+				),
+			);
+		}
+		if errors.is_empty() {
+			Ok(())
+		} else {
+			Err(errors)
+		}
+	}
+
 	#[model(
 		app_label = "forms",
 		table_name = "advanced_formset_required_child_models",
-		form(name = RequiredChildCreateForm, fields(content)),
+		form = true,
 		info = false
 	)]
 	#[derive(Clone, Deserialize, Serialize)]
+	#[form(validate = validate_required_child)]
 	struct RequiredChildModel {
 		#[field(primary_key = true)]
 		id: Option<i64>,
 		#[rel(foreign_key, related_name = "required_child_models")]
+		parent: ForeignKeyField<TestModel>,
+		#[field(max_length = 100, editable = false)]
+		tenant_key: String,
+		#[field(max_length = 1_000)]
+		#[form(trim)]
+		content: String,
+	}
+
+	#[model(
+		app_label = "forms",
+		table_name = "advanced_formset_named_required_child_models",
+		form(name = RequiredChildCreateForm, fields(content)),
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
+	struct NamedRequiredChildModel {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		#[rel(foreign_key, related_name = "named_required_child_models")]
 		parent: ForeignKeyField<TestModel>,
 		#[field(max_length = 100, editable = false)]
 		tenant_key: String,
@@ -1061,7 +1170,7 @@ mod tests {
 		let mut formset =
 			InlineFormSet::<TestModel, ChildModel>::new(parent, "parent_id".to_owned());
 		let mut data = ChildModelModelFormData::<AllEditableModelFields>::empty();
-		data.set_content("Child content".to_owned());
+		data.set_content("Child content".to_owned()).unwrap();
 		formset.add_child_form(ModelForm::from_payload(data));
 		let mut executor = FormsetExecutor::new([
 			Ok(test_model_row(1, "parent")),
@@ -1082,7 +1191,7 @@ mod tests {
 		let mut formset =
 			InlineFormSet::<TestModel, ChildModel>::for_create(parent, "parent_id".to_owned());
 		let mut data = ChildModelModelFormData::<AllEditableModelFields>::empty();
-		data.set_content("Child content".to_owned());
+		data.set_content("Child content".to_owned()).unwrap();
 		formset.add_child_form(ModelForm::from_payload(data));
 		let mut executor = FormsetExecutor::new([Ok(child_model_row(2, 1, "Child content"))]);
 
@@ -1107,7 +1216,7 @@ mod tests {
 		let mut formset =
 			InlineFormSet::<TestModel, ChildModel>::for_update(parent, "parent_id".to_owned());
 		let mut data = ChildModelModelFormData::<AllEditableModelFields>::empty();
-		data.set_content("Child content".to_owned());
+		data.set_content("Child content".to_owned()).unwrap();
 		formset.add_child_form(ModelForm::from_payload(data));
 
 		let children = formset.prepare_child_instances().unwrap();
@@ -1118,8 +1227,69 @@ mod tests {
 		assert!(formset.child_forms()[0].instance().is_none());
 	}
 
-	#[test]
+	#[rstest]
+	#[case::parent_and_children(true)]
+	#[case::children_only(false)]
+	#[serial(inline_generated_validator)]
+	fn test_inline_formset_reuses_prevalidated_children_for_an_unchanged_parent_key(
+		#[case] save_parent: bool,
+	) {
+		// Arrange
+		let _generated_validator_calls_reset =
+			AtomicUsizeResetGuard::new(&REQUIRED_CHILD_GENERATED_VALIDATOR_CALLS);
+		let validator_calls = Arc::new(AtomicUsize::new(0));
+		let validator_calls_for_candidate = Arc::clone(&validator_calls);
+		let mut formset = InlineFormSet::<TestModel, RequiredChildModel>::for_update(
+			test_model(1, "parent"),
+			"parent_id".to_owned(),
+		);
+		let mut data = RequiredChildModelModelFormData::<AllEditableModelFields>::empty();
+		data.set_content(" prevalidated child ".to_owned()).unwrap();
+		let mut child_form = ModelForm::<RequiredChildModel>::from_payload(data)
+			.with_model_validator(move |_| {
+				if validator_calls_for_candidate.fetch_add(1, Ordering::SeqCst) == 0 {
+					Ok(())
+				} else {
+					Err(vec!["child validation ran more than once".to_owned()])
+				}
+			});
+		child_form
+			.set_trusted_field_value("tenant_key", json!("tenant-a"))
+			.unwrap();
+		formset.add_child_form(child_form);
+		let mut rows = Vec::new();
+		if save_parent {
+			rows.push(Ok(test_model_row(1, "parent")));
+		}
+		rows.push(Ok(required_child_model_row(2, 1, "prevalidated child")));
+		let mut executor = FormsetExecutor::new(rows);
+
+		// Act
+		if save_parent {
+			tokio_test::block_on(formset.save(&mut executor)).unwrap();
+		} else {
+			tokio_test::block_on(formset.save_children(&mut executor)).unwrap();
+		}
+
+		// Assert
+		let saved_child = formset.child_forms()[0].instance().unwrap();
+		assert_eq!(saved_child.parent_id, 1);
+		assert_eq!(saved_child.content, "prevalidated child");
+		assert_eq!(validator_calls.load(Ordering::SeqCst), 1);
+		assert_eq!(
+			REQUIRED_CHILD_GENERATED_VALIDATOR_CALLS.load(Ordering::SeqCst),
+			1
+		);
+		assert_eq!(executor.fetch_one_calls, if save_parent { 2 } else { 1 });
+	}
+
+	#[rstest]
+	#[serial(inline_generated_validator)]
 	fn test_inline_formset_defers_model_validator_until_generated_parent_key_is_assigned() {
+		let _generated_validator_calls_reset =
+			AtomicUsizeResetGuard::new(&REQUIRED_CHILD_GENERATED_VALIDATOR_CALLS);
+		let validator_calls = Arc::new(AtomicUsize::new(0));
+		let validator_calls_for_candidate = Arc::clone(&validator_calls);
 		let parent = TestModel {
 			id: None,
 			name: "parent".to_owned(),
@@ -1130,11 +1300,12 @@ mod tests {
 			"parent_id".to_owned(),
 		);
 		let mut data = RequiredChildModelModelFormData::<AllEditableModelFields>::empty();
-		data.set_content("invalid child".to_owned())
+		data.set_content(" valid child ".to_owned())
 			.expect("child content should be accepted");
 		let mut child_form = ModelForm::<RequiredChildModel>::from_payload(data)
-			.with_model_validator(|candidate| {
-				if candidate.parent_id > 0 {
+			.with_model_validator(move |candidate| {
+				validator_calls_for_candidate.fetch_add(1, Ordering::SeqCst);
+				if candidate.parent_id == 1 {
 					Ok(())
 				} else {
 					Err(vec!["parent key must be assigned".to_owned()])
@@ -1142,18 +1313,153 @@ mod tests {
 			});
 		child_form
 			.set_trusted_field_value("tenant_key", json!("tenant-a"))
-			.expect("a trusted child field should participate in deferred validation");
+			.unwrap();
+		let cleaner_calls = Arc::new(AtomicUsize::new(0));
+		let cleaner_calls_for_field = Arc::clone(&cleaner_calls);
+		child_form
+			.form_mut()
+			.add_field_clean_function("content", move |value| {
+				cleaner_calls_for_field.fetch_add(1, Ordering::SeqCst);
+				Ok(json!(format!("{}-cleaned", value.as_str().unwrap())))
+			});
 		formset.add_child_form(child_form);
+		let structurally_valid = formset.is_valid();
+		assert_eq!(
+			formset.child_forms()[0].form().errors(),
+			&std::collections::HashMap::new()
+		);
+		assert_eq!(structurally_valid, true);
 		let mut executor = FormsetExecutor::new([
 			Ok(test_model_row(1, "parent")),
-			Ok(required_child_model_row(2, 1, "invalid child")),
+			Ok(required_child_model_row(2, 1, "valid child-cleaned")),
 		]);
 
 		tokio_test::block_on(formset.save(&mut executor))
 			.expect("child validator should observe the generated parent key");
 
 		assert_eq!(formset.child_forms()[0].instance().unwrap().parent_id, 1);
+		assert_eq!(
+			formset.child_forms()[0].instance().unwrap().content,
+			"valid child-cleaned"
+		);
+		assert_eq!(validator_calls.load(Ordering::SeqCst), 1);
+		assert_eq!(
+			REQUIRED_CHILD_GENERATED_VALIDATOR_CALLS.load(Ordering::SeqCst),
+			2
+		);
+		assert_eq!(cleaner_calls.load(Ordering::SeqCst), 1);
 		assert_eq!(executor.fetch_one_calls, 2);
+	}
+
+	#[rstest]
+	#[serial(inline_generated_validator)]
+	fn test_inline_formset_generated_validator_rejects_before_parent_persistence() {
+		// Arrange
+		let _generated_validator_calls_reset =
+			AtomicUsizeResetGuard::new(&REQUIRED_CHILD_GENERATED_VALIDATOR_CALLS);
+		let model_validator_calls = Arc::new(AtomicUsize::new(0));
+		let model_validator_calls_for_candidate = Arc::clone(&model_validator_calls);
+		let parent = TestModel {
+			id: None,
+			name: "parent".to_owned(),
+			email: "parent@example.com".to_owned(),
+		};
+		let mut formset = InlineFormSet::<TestModel, RequiredChildModel>::for_create(
+			parent,
+			"parent_id".to_owned(),
+		);
+		let mut data = RequiredChildModelModelFormData::<AllEditableModelFields>::empty();
+		data.set_content(" blocked child ".to_owned())
+			.expect("child content should be accepted");
+		let mut child_form = ModelForm::<RequiredChildModel>::from_payload(data)
+			.with_model_validator(move |_| {
+				model_validator_calls_for_candidate.fetch_add(1, Ordering::SeqCst);
+				Ok(())
+			});
+		child_form
+			.set_trusted_field_value("tenant_key", json!("tenant-a"))
+			.unwrap();
+		formset.add_child_form(child_form);
+		let mut executor = FormsetExecutor::new([Ok(test_model_row(1, "parent"))]);
+
+		// Act
+		let error = tokio_test::block_on(formset.save(&mut executor))
+			.expect_err("generated child validation should reject before parent persistence");
+
+		// Assert
+		assert_eq!(
+			error,
+			ModelFormError::ModelValidation {
+				errors: vec!["inline formset contains invalid child fields".to_owned()],
+			}
+		);
+		assert_eq!(
+			formset.child_forms()[0].form().errors(),
+			&std::collections::HashMap::from([(
+				"_all".to_owned(),
+				vec!["generated child validation requires the parent key".to_owned()],
+			)])
+		);
+		assert_eq!(model_validator_calls.load(Ordering::SeqCst), 0);
+		assert_eq!(
+			REQUIRED_CHILD_GENERATED_VALIDATOR_CALLS.load(Ordering::SeqCst),
+			1
+		);
+		assert_eq!(executor.fetch_one_calls, 0);
+		assert_eq!(executor.queries, Vec::<String>::new());
+	}
+
+	#[rstest]
+	#[serial(inline_generated_validator)]
+	fn test_inline_formset_generated_validator_rejects_assigned_parent_before_child_persistence() {
+		// Arrange
+		let _generated_validator_calls_reset =
+			AtomicUsizeResetGuard::new(&REQUIRED_CHILD_GENERATED_VALIDATOR_CALLS);
+		let mut formset = InlineFormSet::<TestModel, RequiredChildModel>::for_create(
+			TestModel {
+				id: None,
+				name: "parent".to_owned(),
+				email: "parent@example.com".to_owned(),
+			},
+			"parent_id".to_owned(),
+		);
+		let mut data = RequiredChildModelModelFormData::<AllEditableModelFields>::empty();
+		data.set_content(" blocked parent child ".to_owned())
+			.unwrap();
+		let mut child_form = ModelForm::<RequiredChildModel>::from_payload(data);
+		child_form
+			.set_trusted_field_value("tenant_key", json!("tenant-a"))
+			.unwrap();
+		formset.add_child_form(child_form);
+		let mut executor = FormsetExecutor::new([Ok(test_model_row(1, "parent"))]);
+
+		// Act
+		let error = tokio_test::block_on(formset.save(&mut executor))
+			.expect_err("generated validation must see the assigned parent key");
+
+		// Assert
+		assert_eq!(
+			error,
+			ModelFormError::FieldValidation {
+				errors: std::collections::HashMap::from([(
+					"_all".to_owned(),
+					vec!["generated child validation rejected the parent key".to_owned()],
+				)]),
+			}
+		);
+		assert_eq!(
+			REQUIRED_CHILD_GENERATED_VALIDATOR_CALLS.load(Ordering::SeqCst),
+			2
+		);
+		assert_eq!(
+			formset.child_forms()[0].form().errors().get("_all"),
+			Some(&vec![
+				"generated child validation rejected the parent key".to_owned()
+			]),
+		);
+		assert_eq!(executor.fetch_one_calls, 1);
+		assert_eq!(executor.queries.len(), 1);
+		assert_eq!(formset.child_forms()[0].instance().is_none(), true);
 	}
 
 	#[test]
@@ -1163,14 +1469,14 @@ mod tests {
 			name: "parent".to_owned(),
 			email: "parent@example.com".to_owned(),
 		};
-		let mut formset = InlineFormSet::<TestModel, RequiredChildModel>::for_create(
+		let mut formset = InlineFormSet::<TestModel, NamedRequiredChildModel>::for_create(
 			parent,
 			"parent_id".to_owned(),
 		);
-		let mut data = RequiredChildModelModelFormData::<AllEditableModelFields>::empty();
+		let mut data = NamedRequiredChildModelModelFormData::<AllEditableModelFields>::empty();
 		data.set_content("child".to_owned())
 			.expect("child content should be accepted");
-		let mut child_form = ModelForm::<RequiredChildModel>::from_payload(data);
+		let mut child_form = ModelForm::<NamedRequiredChildModel>::from_payload(data);
 		child_form
 			.set_trusted_field_value("tenant_key", json!(7))
 			.expect("trusted values are decoded during candidate construction");
@@ -1185,21 +1491,37 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_inline_formset_rejects_editable_scalar_as_foreign_key() {
 		let parent = test_model(1, "parent");
 		let mut formset =
 			InlineFormSet::<TestModel, ScalarChildModel>::for_update(parent, "position".to_owned());
+		let mut data = ScalarChildModelModelFormData::<AllEditableModelFields>::empty();
+		data.set_content("child".to_owned())
+			.expect("child content should be accepted");
+		formset.add_child_form(ModelForm::from_payload(data));
+
+		assert_eq!(formset.is_valid(), false);
+		assert_eq!(
+			formset.child_forms()[0].form().errors(),
+			&std::collections::HashMap::from([(
+				"position".to_owned(),
+				vec!["This field is required.".to_owned()],
+			)])
+		);
 		let mut executor = FormsetExecutor::new(Vec::<Result<Row, Error>>::new());
 
 		let error = tokio_test::block_on(formset.save(&mut executor)).unwrap_err();
 
-		assert!(matches!(
+		assert_eq!(
 			error,
-			ModelFormError::FieldValidation { errors }
-				if errors.get("position")
-					== Some(&vec!["foreign key field is not a generated relationship identifier".to_owned()])
-		));
+			ModelFormError::FieldValidation {
+				errors: std::collections::HashMap::from([(
+					"position".to_owned(),
+					vec!["foreign key field is not a generated relationship identifier".to_owned(),],
+				)]),
+			}
+		);
 		assert_eq!(executor.fetch_one_calls, 0);
 	}
 
@@ -1233,7 +1555,7 @@ mod tests {
 		let mut formset =
 			InlineFormSet::<TestModel, UuidChild>::for_create(parent, "parent_id".to_owned());
 		let mut data = UuidChildModelFormData::<AllEditableModelFields>::empty();
-		data.set_content("child".to_owned());
+		data.set_content("child".to_owned()).unwrap();
 		formset.add_child_form(ModelForm::from_payload(data));
 		let mut executor = FormsetExecutor::new(Vec::<Result<Row, Error>>::new());
 
@@ -1258,7 +1580,7 @@ mod tests {
 		let mut formset =
 			InlineFormSet::<UuidParent, UuidChild>::for_create(parent, "parent_id".to_owned());
 		let mut data = UuidChildModelFormData::<AllEditableModelFields>::empty();
-		data.set_content("created child".to_owned());
+		data.set_content("created child".to_owned()).unwrap();
 		formset.add_child_form(ModelForm::from_payload(data));
 		let mut executor = FormsetExecutor::new([
 			Ok(uuid_parent_row(parent_id, "assigned")),
@@ -1412,8 +1734,8 @@ mod tests {
 	#[test]
 	fn test_model_formset_submitted_extra_is_persisted() {
 		let mut data = TestModelModelFormData::<AllEditableModelFields>::empty();
-		data.set_name("submitted".to_owned());
-		data.set_email("submitted@example.com".to_owned());
+		data.set_name("submitted".to_owned()).unwrap();
+		data.set_email("submitted@example.com".to_owned()).unwrap();
 		let mut formset = ModelFormSet::<TestModel>::new("test".to_owned());
 		formset.add_form(ModelForm::from_payload(data)).unwrap();
 		let mut executor = FormsetExecutor::new([Ok(test_model_row(7, "submitted"))]);
@@ -1451,8 +1773,8 @@ mod tests {
 	#[test]
 	fn test_model_formset_save_reuses_preflight_candidate() {
 		let mut data = TestModelModelFormData::<AllEditableModelFields>::empty();
-		data.set_name("candidate".to_owned());
-		data.set_email("candidate@example.com".to_owned());
+		data.set_name("candidate".to_owned()).unwrap();
+		data.set_email("candidate@example.com".to_owned()).unwrap();
 		let cleaner_calls = Arc::new(AtomicUsize::new(0));
 		let cleaner_calls_for_field = Arc::clone(&cleaner_calls);
 		let mut form = ModelForm::<TestModel>::from_payload(data);

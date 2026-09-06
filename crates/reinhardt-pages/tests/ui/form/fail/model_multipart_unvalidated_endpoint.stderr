@@ -1,0 +1,30 @@
+error[E0277]: the trait bound `upload_unvalidated::marker: reinhardt_pages::form::ModelFormServerFn<__ReinhardtModelFormSelection, UploadFormSchema, UnvalidatedUploadFormSelectionPolicy>` is not satisfied
+  --> tests/ui/form/fail/model_multipart_unvalidated_endpoint.rs:4:14
+   |
+ 4 |       let _form = reinhardt_pages::form! {
+   |  _________________^
+ 5 | |         name: UnvalidatedUploadForm,
+ 6 | |         model: Upload,
+ 7 | |         policy: UploadPolicy,
+ 8 | |         fields: [title, document, avatar],
+ 9 | |         server_fn: upload_unvalidated,
+10 | |     };
+   | |_____^ unsatisfied trait bound
+   |
+help: the trait `reinhardt_pages::form::ModelFormServerFn<__ReinhardtModelFormSelection, UploadFormSchema, UnvalidatedUploadFormSelectionPolicy>` is not implemented for `upload_unvalidated::marker`
+  --> tests/ui/form/fail/../model_multipart_support.rs
+   |
+   | #[server_fn]
+   | ^^^^^^^^^^^^
+help: the following other types implement trait `reinhardt_pages::form::ModelFormServerFn<Selection, S, P>`
+  --> tests/ui/form/fail/../model_multipart_support.rs
+   |
+   | #[server_fn(model_form_payload = "UploadModelFormData<UploadPolicy>")]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `upload::marker`
+...
+   | #[server_fn(model_form_payload = "UploadModelFormData<UploadPolicy>")]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `upload_wrong_types::marker`
+...
+   | #[server_fn(model_form_payload = "UploadModelFormData<UploadPolicy>")]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `upload_wrong_requiredness::marker`
+   = note: this error originates in the macro `reinhardt_pages::form` which comes from the expansion of the attribute macro `server_fn` (in Nightly builds, run with -Z macro-backtrace for more info)

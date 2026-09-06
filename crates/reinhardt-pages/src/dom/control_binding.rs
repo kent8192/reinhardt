@@ -410,7 +410,6 @@ fn install_password_reset_listener(
 	let document = input.owner_document()?;
 	let binding = binding.clone();
 	let state = Rc::downgrade(state);
-	// ponytail: one document listener per text input; share delegation if large forms make reset dispatch costly.
 	// Capture also covers form= reassociation and reset handlers that stop propagation.
 	let callback = Closure::wrap(Box::new(move |event: web_sys::Event| {
 		if !input.type_().eq_ignore_ascii_case("password")

@@ -2143,6 +2143,54 @@ fn generate_model_form(
 			TypedModelFieldSelection::Exclude(_) => quote! {},
 		},
 	};
+	let model_form_policy_validation = match selection {
+		Some(TypedModelFieldSelection::Fields(fields)) => {
+			let names = fields.iter().map(|field| {
+				let name = ident_to_wire_name(field);
+				quote!(#name)
+			});
+			quote! {
+				for field in [#(#names),*] {
+					if !<#policy_ident as #pages_crate::form::ModelFormPolicy>::allows(field) {
+						return ::core::result::Result::Err(
+							#pages_crate::FormValidationError::form(
+								::std::format!(
+									"model-form field `{}` is not permitted by its policy",
+									field,
+								),
+							),
+						);
+					}
+				}
+			}
+		}
+		None | Some(TypedModelFieldSelection::Exclude(_)) => quote! {},
+	};
+	let model_form_validation_error_helper = quote! {
+		fn __server_mutation_validation_error(
+			&self,
+			error: #pages_crate::ServerFnError,
+		) -> #pages_crate::FormValidationError<__ReinhardtModelFormField> {
+			let mut validation = #pages_crate::FormValidationError::new();
+			let mut unmatched_errors = ::std::vec::Vec::new();
+			for field_error in error.field_errors() {
+				if let ::core::option::Option::Some(field) = self.field(field_error.field()) {
+					let message = validation.field_errors().get(&field).map_or_else(
+						|| field_error.message().to_owned(),
+						|previous| ::std::format!("{}\n{}", previous.message(), field_error.message()),
+					);
+					validation.add_field_error(field, message);
+				} else {
+					unmatched_errors.push(::std::format!("{}: {}", field_error.field(), field_error.message()));
+				}
+			}
+			if validation.field_errors().is_empty() || !unmatched_errors.is_empty() {
+				unmatched_errors.insert(0, error.user_message().to_owned());
+				validation.set_form_error(unmatched_errors.join("\n"));
+			}
+			validation
+		}
+	};
 	let model_form_field_accessors = match selection {
 		None => Vec::new(),
 		Some(selection) => match selection {
@@ -2461,7 +2509,11 @@ fn generate_model_form(
 						.borrow_mut()
 						.clear_selected_files_matching(submitted);
 					if changed {
-						self.__state_version.update(|version| *version = version.wrapping_add(1));
+						if let ::core::result::Result::Ok(version) =
+							self.__state_version.try_get_untracked()
+						{
+							let _ = self.__state_version.try_set(version.wrapping_add(1));
+						}
 					}
 				}
 
@@ -2566,6 +2618,75 @@ fn generate_model_form(
 					}
 				}
 
+				#model_form_validation_error_helper
+
+				pub fn server_mutation<Deps>(
+					&self,
+					runtime: &#pages_crate::UseFormReturn<Self, Deps>,
+				) -> #pages_crate::FormServerMutationBuilder<
+					Self,
+					Deps,
+					#pages_crate::form::ModelFormState<#schema_path, #policy_ident>,
+					#model_form_response_type,
+				>
+				where
+					Deps: ::core::clone::Clone + ::core::cmp::PartialEq + 'static,
+					<#server_fn::marker as #pages_crate::form::ModelFormServerFn<
+						#model_form_selection_type,
+						#schema_path,
+						#policy_ident,
+					>>::Error: ::core::convert::Into<#pages_crate::ServerFnError>,
+				{
+					let _ = self;
+					let __form = runtime.__reinhardt_form_source();
+					let __form_for_success = __form.clone();
+					let __model_state = ::std::rc::Rc::clone(&__form.__model_state);
+					#pages_crate::use_server_mutation(move |state: #pages_crate::form::ModelFormState<#schema_path, #policy_ident>| {
+						let __form_for_success = __form_for_success.clone();
+						async move {
+							let __submitted_state = state.clone();
+							let __result = #pages_crate::server_mutation::execute_server_mutation_once(
+								state,
+								|state| async move {
+									<#server_fn::marker as #pages_crate::form::ModelFormServerFn<
+										#model_form_selection_type,
+										#schema_path,
+										#policy_ident,
+									>>::submit(&state)
+										.await
+								},
+							)
+							.await;
+							#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+							if __result.is_ok() {
+								__form_for_success.clear_selected_files_matching(&__submitted_state);
+								__form_for_success.clear_mounted_file_inputs_matching(&__submitted_state, None);
+							}
+							#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+							let _ = (&__form_for_success, &__submitted_state);
+							__result
+						}
+					})
+						.with_generated_form(runtime, move |_| {
+						let state = {
+							let state = __model_state.borrow();
+							(*state).clone()
+						};
+						#model_form_policy_validation
+						let state = Self::__validated_submission_state(state)
+							.map_err(|error| __form.__server_mutation_validation_error(error))?;
+						<#server_fn::marker as #pages_crate::form::ModelFormServerFn<
+							#model_form_selection_type,
+							#schema_path,
+							#policy_ident,
+						>>::validate_input(&state)
+							.map_err(|error| __form.__server_mutation_validation_error(
+								#pages_crate::ServerFnError::from(state.payload_error_to_validation(error)),
+							))?;
+						::core::result::Result::Ok(state)
+					})
+				}
+
 				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 				pub async fn submit_response(
 					&self,
@@ -2651,33 +2772,16 @@ fn generate_model_form(
 					}
 				}
 
-				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-				async fn submit_state(
-					&self,
-					state: #pages_crate::form::ModelFormState<#schema_path, #policy_ident>,
-					form: ::core::option::Option<
-						&#pages_crate::__private::web_sys::HtmlFormElement,
-					>,
-				) -> ::core::result::Result<#model_form_response_type, #pages_crate::ServerFnError> {
-					self.loading.set(true);
-					self.error.set(::core::option::Option::None);
-					self.set_server_error(::core::option::Option::None);
-					self.success.set(false);
-					#model_form_policy_check
-					let normalized_payload = match state.build_validated_payload_for::<
+				fn __validated_submission_state(
+					mut state: #pages_crate::form::ModelFormState<#schema_path, #policy_ident>,
+				) -> ::core::result::Result<
+					#pages_crate::form::ModelFormState<#schema_path, #policy_ident>,
+					#pages_crate::ServerFnError,
+				> {
+					let normalized_payload = state.build_validated_payload_for::<
 						#validation_data_type,
 						#policy_ident,
-					>() {
-						::core::result::Result::Ok(payload) => payload,
-						::core::result::Result::Err(errors) => {
-							let error = #pages_crate::ServerFnError::from(errors);
-							self.loading.set(false);
-							self.error.set(::core::option::Option::Some(error.to_string()));
-							self.set_server_error(::core::option::Option::Some(error.clone()));
-							return ::core::result::Result::Err(error);
-						}
-					};
-					let mut state = state;
+					>().map_err(#pages_crate::ServerFnError::from)?;
 					for descriptor in state.selected_descriptors() {
 						if ::core::matches!(
 							descriptor.kind,
@@ -2698,11 +2802,42 @@ fn generate_model_form(
 								.expect("validated model-form payload must clear its selected field"),
 						}
 					}
-					let result = <#server_fn::marker as #pages_crate::form::ModelFormServerFn<
-						#model_form_selection_type,
-						#schema_path,
-						#policy_ident,
-					>>::submit(&state)
+					::core::result::Result::Ok(state)
+				}
+
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+				async fn submit_state(
+					&self,
+					state: #pages_crate::form::ModelFormState<#schema_path, #policy_ident>,
+					form: ::core::option::Option<
+						&#pages_crate::__private::web_sys::HtmlFormElement,
+					>,
+				) -> ::core::result::Result<#model_form_response_type, #pages_crate::ServerFnError> {
+					self.loading.set(true);
+					self.error.set(::core::option::Option::None);
+					self.set_server_error(::core::option::Option::None);
+					self.success.set(false);
+					#model_form_policy_check
+					let state = match Self::__validated_submission_state(state) {
+						::core::result::Result::Ok(state) => state,
+						::core::result::Result::Err(error) => {
+							self.loading.set(false);
+							self.error.set(::core::option::Option::Some(error.to_string()));
+							self.set_server_error(::core::option::Option::Some(error.clone()));
+							return ::core::result::Result::Err(error);
+						}
+					};
+					let result = #pages_crate::server_mutation::execute_server_mutation_once(
+						&state,
+						|state| async move {
+							<#server_fn::marker as #pages_crate::form::ModelFormServerFn<
+								#model_form_selection_type,
+								#schema_path,
+								#policy_ident,
+							>>::submit(state)
+								.await
+						},
+					)
 						.await
 						.map_err(|error| -> #pages_crate::ServerFnError {
 							::core::convert::Into::into(error)
@@ -8928,14 +9063,116 @@ mod tests {
 			server_fn: save_upload,
 		};
 
-		let output = parse_validate_generate(input).to_string();
+		let output = parse_validate_generate(input);
+		let block: syn::Block =
+			syn::parse2(output).expect("generated model form expansion must parse as a Rust block");
+		let selection_cfg_counts = block
+			.stmts
+			.iter()
+			.filter_map(|statement| match statement {
+				syn::Stmt::Item(syn::Item::Struct(item))
+					if item.ident == "__ReinhardtModelFormSelection" =>
+				{
+					Some(&item.attrs)
+				}
+				syn::Stmt::Item(syn::Item::Impl(item))
+					if matches!(item.self_ty.as_ref(), syn::Type::Path(path)
+						if path.path.is_ident("__ReinhardtModelFormSelection")) =>
+				{
+					Some(&item.attrs)
+				}
+				_ => None,
+			})
+			.map(|attributes| {
+				attributes
+					.iter()
+					.filter(|attribute| attribute.path().is_ident("cfg"))
+					.count()
+			})
+			.collect::<Vec<_>>();
+		assert_eq!(selection_cfg_counts, vec![0; 5]);
+		let server_mutation = block
+			.stmts
+			.iter()
+			.filter_map(|statement| match statement {
+				syn::Stmt::Item(syn::Item::Impl(implementation)) => Some(implementation),
+				_ => None,
+			})
+			.flat_map(|implementation| implementation.items.iter())
+			.find_map(|item| match item {
+				syn::ImplItem::Fn(method) if method.sig.ident == "server_mutation" => Some(method),
+				_ => None,
+			})
+			.expect("generated model form must define server_mutation");
+		let syn::ReturnType::Type(_, return_type) = &server_mutation.sig.output else {
+			panic!("generated server_mutation must declare its builder return type");
+		};
+		let syn::Type::Path(return_type) = return_type.as_ref() else {
+			panic!("generated server_mutation must return a path type");
+		};
+		assert_eq!(
+			return_type
+				.path
+				.segments
+				.last()
+				.expect("generated server_mutation return path must be non-empty")
+				.ident,
+			"FormServerMutationBuilder"
+		);
 
-		assert!(output.contains("ModelFormServerFn"));
-		assert!(output.contains(":: Response"));
+		let Some(syn::Stmt::Expr(syn::Expr::MethodCall(preparation), None)) =
+			server_mutation.block.stmts.last()
+		else {
+			panic!("generated server_mutation must end with mutation preparation");
+		};
+		assert_eq!(preparation.method, "with_generated_form");
+		let Some(syn::Expr::Closure(prepare_state)) = preparation.args.iter().nth(1) else {
+			panic!("generated mutation preparation must receive the state callback");
+		};
+		let syn::Expr::Block(prepare_state) = prepare_state.body.as_ref() else {
+			panic!("generated mutation preparation callback must have a block body");
+		};
+		let validation_and_state = prepare_state
+			.block
+			.stmts
+			.iter()
+			.rev()
+			.take(3)
+			.rev()
+			.map(ToTokens::to_token_stream)
+			.collect::<TokenStream>();
+		let expected_validation_and_state: syn::Block = syn::parse2(quote! {{
+			let state = Self::__validated_submission_state(state)
+				.map_err(|error| __form.__server_mutation_validation_error(error))?;
+			<save_upload::marker as ::reinhardt_pages::form::ModelFormServerFn<
+				__ReinhardtModelFormSelection,
+				UploadDocumentFormSchema,
+				UploadFormSelectionPolicy,
+			>>::validate_input(&state)
+				.map_err(|error| __form.__server_mutation_validation_error(
+					::reinhardt_pages::ServerFnError::from(state.payload_error_to_validation(error)),
+				))?;
+			::core::result::Result::Ok(state)
+		}})
+		.expect("expected model form mutation preparation must parse");
+		assert_eq!(
+			validation_and_state.to_string(),
+			expected_validation_and_state
+				.stmts
+				.into_iter()
+				.map(|statement| statement.to_token_stream())
+				.collect::<TokenStream>()
+				.to_string()
+		);
+
+		let output = block.to_token_stream().to_string();
 		assert!(output.contains("ModelFormSelectionCount < 2usize >"));
 		assert!(output.contains("ModelFormSelectionArgument < 0usize"));
 		assert!(output.contains("ModelFormSelectionArgument < 1usize"));
 		assert!(output.contains("const NAME : & 'static str = \"title\""));
+		assert!(output.contains("runtime . __reinhardt_form_source ()"));
+		assert!(output.contains("Rc :: clone (& __form . __model_state)"));
+		assert!(!output.contains("Rc :: clone (& self . __model_state)"));
 		assert!(!output.contains("save_upload :: __args :: title"));
 		assert!(output.contains("not permitted by its policy"));
 	}
@@ -8971,7 +9208,7 @@ mod tests {
 			.map(|offset| validation + offset)
 			.expect("generated submission must read normalized payload fields");
 		let dispatch = output[validation..]
-			.find("submit (& state)")
+			.find("submit (state)")
 			.map(|offset| validation + offset)
 			.expect("generated submission must dispatch through the marker contract");
 
@@ -8984,6 +9221,13 @@ mod tests {
 				.matches("validated model-form payload must rehydrate its selected field")
 				.count(),
 			1
+		);
+		assert_eq!(
+			output
+				.matches("Self :: __validated_submission_state (state)")
+				.count(),
+			2,
+			"legacy submission and server mutation must prepare the same normalized snapshot",
 		);
 		assert_eq!(output.matches("client_validation").count(), 0);
 	}

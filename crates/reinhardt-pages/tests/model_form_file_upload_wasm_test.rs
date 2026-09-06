@@ -2,6 +2,9 @@
 
 include!("ui/form/model_multipart_support.rs");
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use gloo_timers::future::TimeoutFuture;
 use js_sys::{Function, Reflect};
 use reinhardt_macros::model;
@@ -9,7 +12,8 @@ use reinhardt_pages::component::{PageExt, cleanup_reactive_nodes};
 use reinhardt_pages::dom::Element;
 use reinhardt_pages::prelude::defer_yield;
 use reinhardt_pages::reactive::ReactiveScope;
-use reinhardt_pages::{FieldError, form, use_form};
+use reinhardt_pages::{FieldError, MutationDispatchOutcome, form, use_form};
+use rstest::rstest;
 use serial_test::serial;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::*;
@@ -32,6 +36,30 @@ struct NullableDefaultTrueRecord {
 #[server_fn(model_form = true)]
 async fn save_nullable_default_true(
 	payload: NullableDefaultTrueFormData,
+) -> Result<(), ServerFnError> {
+	let _ = payload;
+	Ok(())
+}
+
+#[model(
+	app_label = "pages",
+	table_name = "normalized_mutation_records",
+	form(name = NormalizedMutationForm, fields(title, published)),
+	info = false
+)]
+struct NormalizedMutationRecord {
+	#[field(primary_key = true)]
+	id: i64,
+	#[field(min_length = 1, max_length = 120)]
+	#[form(trim)]
+	title: String,
+	#[field(default = true)]
+	published: bool,
+}
+
+#[server_fn(model_form = true)]
+async fn save_normalized_mutation(
+	payload: NormalizedMutationFormData,
 ) -> Result<(), ServerFnError> {
 	let _ = payload;
 	Ok(())
@@ -72,9 +100,20 @@ impl SuccessfulFetchGuard {
 		let window = web_sys::window().expect("browser window");
 		let previous_fetch =
 			Reflect::get(window.as_ref(), &JsValue::from_str("fetch")).expect("read browser fetch");
+		Reflect::set(
+			js_sys::global().as_ref(),
+			&JsValue::from_str("__reinhardtModelFormJsonPayload"),
+			&JsValue::NULL,
+		)
+		.expect("clear captured JSON payload");
 		let stub = Function::new_with_args(
-			"_request",
-			"return Promise.resolve(new Response('null', { status: 200 }));",
+			"request",
+			r#"
+				return request.text().then((body) => {
+					globalThis.__reinhardtModelFormJsonPayload = body;
+					return new Response('null', { status: 200 });
+				});
+			"#,
 		);
 		Reflect::set(window.as_ref(), &JsValue::from_str("fetch"), stub.as_ref())
 			.expect("install successful fetch stub");
@@ -82,6 +121,17 @@ impl SuccessfulFetchGuard {
 			window,
 			previous_fetch,
 		}
+	}
+
+	fn payload(&self) -> serde_json::Value {
+		let body = Reflect::get(
+			js_sys::global().as_ref(),
+			&JsValue::from_str("__reinhardtModelFormJsonPayload"),
+		)
+		.expect("read captured JSON payload")
+		.as_string()
+		.expect("request body was captured");
+		serde_json::from_str(&body).expect("request body is JSON")
 	}
 }
 
@@ -91,6 +141,10 @@ impl Drop for SuccessfulFetchGuard {
 			self.window.as_ref(),
 			&JsValue::from_str("fetch"),
 			&self.previous_fetch,
+		);
+		let _ = Reflect::delete_property(
+			js_sys::global().as_ref(),
+			&JsValue::from_str("__reinhardtModelFormJsonPayload"),
 		);
 	}
 }
@@ -372,10 +426,12 @@ async fn wait_for_files_to_clear(root: &web_sys::Element) {
 	assert_eq!(file_count(&query_input(root, "upload-form-avatar")), 0);
 }
 
-#[rstest::rstest]
+#[rstest]
+#[case::automatic_submit(false)]
+#[case::server_mutation(true)]
 #[serial(model_form_file_upload_globals)]
 #[test_attr(wasm_bindgen_test)]
-async fn automatic_model_form_submit_routes_snapshot_errors_without_fetch() {
+async fn model_form_submit_routes_snapshot_errors_without_fetch(#[case] use_mutation: bool) {
 	// Arrange
 	let root = BodyRoot::new();
 	let document_file = browser_file("report.pdf");
@@ -407,7 +463,16 @@ async fn automatic_model_form_submit_routes_snapshot_errors_without_fetch() {
 	defer_yield().await;
 
 	// Act
-	submit(&query_form(&root.0));
+	if use_mutation {
+		let mutation = scope.enter(|| form.server_mutation(&runtime).build());
+		assert_eq!(
+			mutation.dispatch(),
+			MutationDispatchOutcome::ValidationFailed
+		);
+		assert!(!mutation.is_pending());
+	} else {
+		submit(&query_form(&root.0));
+	}
 	wait_for_error(|| {
 		runtime.get_field_state(form.title_field()).error.is_some()
 			&& runtime.form_state().form_error.get().is_some()
@@ -430,6 +495,50 @@ async fn automatic_model_form_submit_routes_snapshot_errors_without_fetch() {
 	);
 	assert_eq!(title.value(), "Rejected by validation");
 	assert!(same_file(&selected_file(&document), &document_file));
+}
+
+#[rstest]
+#[serial(model_form_file_upload_globals)]
+#[test_attr(wasm_bindgen_test)]
+async fn model_form_mutation_sends_normalized_snapshot_with_defaults() {
+	// Arrange
+	let fetch = SuccessfulFetchGuard::install();
+	let scope = ReactiveScope::new();
+	let (form, mutation) = scope.enter(|| {
+		let form = form! {
+			name: NormalizedMutationPageForm,
+			model_form: NormalizedMutationForm,
+			server_fn: save_normalized_mutation,
+		};
+		form.set_value("title", serde_json::json!("  Report  "))
+			.expect("raw title is accepted");
+		let runtime = use_form(&form).build();
+		let mutation = form.server_mutation(&runtime).build();
+		(form, mutation)
+	});
+	assert_eq!(form.value("published"), None);
+
+	// Act
+	assert_eq!(mutation.dispatch(), MutationDispatchOutcome::Dispatched);
+	for _ in 0..100 {
+		if mutation.is_success() {
+			break;
+		}
+		TimeoutFuture::new(10).await;
+	}
+
+	// Assert
+	assert!(
+		mutation.is_success(),
+		"mutation failed: {:?}",
+		mutation.error()
+	);
+	assert_eq!(
+		fetch.payload(),
+		serde_json::json!({"payload": {"title": "Report", "published": true}})
+	);
+	assert_eq!(form.value("title"), Some(serde_json::json!("  Report  ")));
+	assert_eq!(form.value("published"), None);
 }
 
 #[wasm_bindgen_test]
@@ -592,4 +701,133 @@ async fn model_form_files_clear_only_after_success_or_reset() {
 	wait_for_files_to_clear(&root.0).await;
 	assert_eq!(file_count(&query_input(&root.0, "upload-form-document")), 0);
 	scope.dispose();
+}
+
+#[rstest]
+#[serial(model_form_file_upload_globals)]
+#[test_attr(wasm_bindgen_test)]
+async fn multipart_mutation_callbacks_continue_after_form_success_disposes_scope() {
+	let root = BodyRoot::new();
+	let document_file = browser_file("report.pdf");
+	let avatar_file = browser_file("avatar.png");
+	let fetch = MultipartFetchGuard::install(&document_file, &avatar_file);
+	fetch.set_status(200.0);
+	let scope = Rc::new(ReactiveScope::new());
+	let form_success_calls = Rc::new(Cell::new(0));
+	let mutation_success_calls = Rc::new(Cell::new(0));
+	let mutation = scope.enter(|| {
+		let form = form! {
+			name: UploadForm,
+			model: Upload,
+			policy: UploadPolicy,
+			fields: [title, document, avatar],
+			server_fn: upload,
+		};
+		form.clone()
+			.into_page()
+			.mount(&Element::new(root.0.clone()))
+			.expect("model form mounts");
+		let scope_for_success = Rc::clone(&scope);
+		let form_success_calls_for_callback = Rc::clone(&form_success_calls);
+		let runtime = use_form(&form)
+			.on_submit_success(move |_| {
+				form_success_calls_for_callback.set(form_success_calls_for_callback.get() + 1);
+				scope_for_success.dispose();
+			})
+			.build();
+		let mutation_success_calls_for_callback = Rc::clone(&mutation_success_calls);
+		form.server_mutation(&runtime)
+			.on_success(move |_| {
+				mutation_success_calls_for_callback
+					.set(mutation_success_calls_for_callback.get() + 1);
+			})
+			.build()
+	});
+
+	let title = query_input(&root.0, "upload-form-title");
+	title.set_value("Report");
+	title
+		.dispatch_event(&web_sys::Event::new("input").expect("input event"))
+		.expect("dispatch title input");
+	select_file(
+		&query_input(&root.0, "upload-form-document"),
+		&document_file,
+	);
+	select_file(&query_input(&root.0, "upload-form-avatar"), &avatar_file);
+	defer_yield().await;
+
+	assert_eq!(mutation.dispatch(), MutationDispatchOutcome::Dispatched);
+	wait_for_requests(&fetch, 1).await;
+	for _ in 0..100 {
+		if mutation_success_calls.get() == 1 {
+			break;
+		}
+		TimeoutFuture::new(10).await;
+	}
+
+	assert_eq!(form_success_calls.get(), 1);
+	assert_eq!(mutation_success_calls.get(), 1);
+}
+
+#[rstest]
+#[serial(model_form_file_upload_globals)]
+#[test_attr(wasm_bindgen_test)]
+async fn multipart_mutation_callbacks_continue_after_form_owner_disposal() {
+	let root = BodyRoot::new();
+	let document_file = browser_file("report.pdf");
+	let avatar_file = browser_file("avatar.png");
+	let fetch = MultipartFetchGuard::install(&document_file, &avatar_file);
+	fetch.set_status(200.0);
+	let form_scope = ReactiveScope::new();
+	let (form, runtime) = form_scope.enter(|| {
+		let form = form! {
+			name: UploadForm,
+			model: Upload,
+			policy: UploadPolicy,
+			fields: [title, document, avatar],
+			server_fn: upload,
+		};
+		form.clone()
+			.into_page()
+			.mount(&Element::new(root.0.clone()))
+			.expect("model form mounts");
+		let runtime = use_form(&form).build();
+		(form, runtime)
+	});
+	let mutation_scope = ReactiveScope::new();
+	let mutation_success_calls = Rc::new(Cell::new(0));
+	let mutation_success_calls_for_callback = Rc::clone(&mutation_success_calls);
+	let mutation = mutation_scope.enter(|| {
+		form.server_mutation(&runtime)
+			.on_success(move |_| {
+				mutation_success_calls_for_callback
+					.set(mutation_success_calls_for_callback.get() + 1);
+			})
+			.build()
+	});
+
+	let title = query_input(&root.0, "upload-form-title");
+	title.set_value("Report");
+	title
+		.dispatch_event(&web_sys::Event::new("input").expect("input event"))
+		.expect("dispatch title input");
+	select_file(
+		&query_input(&root.0, "upload-form-document"),
+		&document_file,
+	);
+	select_file(&query_input(&root.0, "upload-form-avatar"), &avatar_file);
+	defer_yield().await;
+
+	assert_eq!(mutation.dispatch(), MutationDispatchOutcome::Dispatched);
+	form_scope.dispose();
+	wait_for_requests(&fetch, 1).await;
+	for _ in 0..100 {
+		if mutation_success_calls.get() == 1 {
+			break;
+		}
+		TimeoutFuture::new(10).await;
+	}
+
+	assert_eq!(mutation_success_calls.get(), 1);
+	mutation_scope.dispose();
 }

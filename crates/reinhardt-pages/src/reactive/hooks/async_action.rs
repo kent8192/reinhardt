@@ -17,7 +17,7 @@ use crate::reactive::Signal;
 use crate::reactive::pages_arena::{PageNodeKey, PageNodeKind, allocate_page_node, with_page_node};
 use reinhardt_core::reactive::deps::Trackable;
 use reinhardt_core::reactive::scope::enter_scope;
-use reinhardt_core::reactive::{ScopeId, current_scope_id};
+use reinhardt_core::reactive::{ScopeId, current_scope_id, untracked};
 
 type ErrorCallback<E> = Rc<dyn Fn(&E)>;
 type SuccessCallback<T> = Rc<dyn Fn(&T)>;
@@ -75,6 +75,28 @@ struct ActionSlot<T: Clone + 'static, E: Clone + 'static> {
 	on_error: SharedErrorCallback<E>,
 	on_success: SharedSuccessCallback<T>,
 	reset_on_success: Rc<Cell<bool>>,
+}
+
+struct ActionPendingGuard<T: Clone + 'static, E: Clone + 'static> {
+	state: Option<Signal<ActionPhase<T, E>>>,
+}
+
+impl<T: Clone + 'static, E: Clone + 'static> ActionPendingGuard<T, E> {
+	fn new(state: Signal<ActionPhase<T, E>>) -> Self {
+		Self { state: Some(state) }
+	}
+
+	fn disarm(&mut self) {
+		self.state = None;
+	}
+}
+
+impl<T: Clone + 'static, E: Clone + 'static> Drop for ActionPendingGuard<T, E> {
+	fn drop(&mut self) {
+		if let Some(state) = self.state {
+			let _ = state.try_set(ActionPhase::Idle);
+		}
+	}
 }
 
 /// Represents the current phase of an async action.
@@ -200,6 +222,14 @@ impl<T: Clone + 'static, E: Clone + 'static> Action<T, E> {
 	/// Returns `true` if the action is pending.
 	pub fn is_pending(&self) -> bool {
 		self.phase().is_pending()
+	}
+
+	pub(crate) fn try_is_pending_untracked(&self) -> Option<bool> {
+		with_page_node::<ActionSlot<T, E>, _>(self.key, |slot| slot.state)
+			.ok()?
+			.try_get_untracked()
+			.ok()
+			.map(|phase| phase.is_pending())
 	}
 
 	/// Returns `true` if the action completed successfully.
@@ -603,13 +633,11 @@ where
 			if state.try_set(ActionPhase::Pending).is_err() {
 				return;
 			}
+			let pending_guard = ActionPendingGuard::new(state);
 
 			let fut = match enter_scope(scope, || action_fn(*payload)) {
 				Ok(fut) => fut,
-				Err(_) => {
-					let _ = state.try_set(ActionPhase::Idle);
-					return;
-				}
+				Err(_) => return,
 			};
 
 			#[cfg(wasm)]
@@ -619,6 +647,7 @@ where
 				let on_success = Rc::clone(&on_success_for_dispatch);
 				let reset_on_success = Rc::clone(&reset_on_success_for_dispatch);
 				let fut = scope_action_future(scope, fut);
+				let mut pending_guard = pending_guard;
 				spawn_task(async move {
 					let Some(result) = fut.await else {
 						return;
@@ -628,6 +657,7 @@ where
 							let _ = enter_scope(scope, || {
 								crate::reactive::batch(|| {
 									if state.try_set(ActionPhase::Success(val.clone())).is_ok() {
+										pending_guard.disarm();
 										let on_success = on_success.borrow().clone();
 										on_success(&val);
 										if reset_on_success.get() {
@@ -641,6 +671,7 @@ where
 							let _ = enter_scope(scope, || {
 								crate::reactive::batch(|| {
 									if state.try_set(ActionPhase::Error(err.clone())).is_ok() {
+										pending_guard.disarm();
 										let on_error = on_error.borrow().clone();
 										on_error(&err);
 									}
@@ -658,7 +689,8 @@ where
 				let on_success = Rc::clone(&on_success_for_dispatch);
 				let reset_on_success = Rc::clone(&reset_on_success_for_dispatch);
 				let fut = scope_action_future(scope, fut);
-				let spawned = crate::platform::try_spawn_task(async move {
+				let mut pending_guard = pending_guard;
+				crate::platform::try_spawn_task(async move {
 					let Some(result) = fut.await else {
 						return;
 					};
@@ -670,6 +702,7 @@ where
 										.try_set(ActionPhase::Success(val.clone()))
 										.is_ok()
 									{
+										pending_guard.disarm();
 										let on_success = on_success.borrow().clone();
 										on_success(&val);
 										if reset_on_success.get() {
@@ -683,6 +716,7 @@ where
 							let _ = enter_scope(scope, || {
 								crate::reactive::batch(|| {
 									if task_state.try_set(ActionPhase::Error(err.clone())).is_ok() {
+										pending_guard.disarm();
 										let on_error = on_error.borrow().clone();
 										on_error(&err);
 									}
@@ -691,9 +725,6 @@ where
 						}
 					}
 				});
-				if !spawned {
-					state.set(ActionPhase::Idle);
-				}
 			}
 		})
 	};
@@ -725,7 +756,7 @@ impl<T: Clone + 'static, E: Clone + 'static> Action<T, E> {
 		else {
 			return;
 		};
-		dispatch(Box::new(payload));
+		untracked(|| dispatch(Box::new(payload)));
 	}
 }
 
@@ -754,6 +785,24 @@ mod tests {
 			copied.dispatch(1);
 			assert_eq!(action.phase(), ActionPhase::Idle);
 		});
+	}
+
+	#[cfg(native)]
+	#[rstest]
+	fn synchronous_action_panic_restores_idle_phase() {
+		let scope = reinhardt_core::reactive::ReactiveScope::new();
+		let action = scope.enter(|| {
+			use_action(|_: ()| -> std::future::Ready<Result<(), String>> {
+				panic!("synchronous action panic")
+			})
+		});
+
+		let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			action.dispatch(());
+		}));
+
+		assert!(panic.is_err());
+		assert_eq!(action.phase(), ActionPhase::Idle);
 	}
 
 	#[rstest]
@@ -834,6 +883,72 @@ mod tests {
 		scope.dispose();
 
 		action.dispatch(());
+	}
+
+	#[rstest]
+	#[serial_test::serial(reactive_runtime)]
+	fn stale_action_pending_check_is_unavailable() {
+		let scope = reinhardt_core::reactive::ReactiveScope::new();
+		let action = scope.enter(|| use_action(|_: ()| async { Ok::<i32, String>(42) }));
+
+		scope.dispose();
+
+		assert_eq!(action.try_is_pending_untracked(), None);
+	}
+
+	#[rstest]
+	#[serial_test::serial(reactive_runtime)]
+	fn untracked_pending_check_does_not_subscribe() {
+		let scope = reinhardt_core::reactive::ReactiveScope::new();
+		let action = scope.enter(|| use_action(|_: ()| async { Ok::<(), String>(()) }));
+		let runs = Rc::new(std::cell::Cell::new(0));
+		let _effect = scope.enter(|| {
+			let action = action;
+			let runs = Rc::clone(&runs);
+			reinhardt_core::reactive::Effect::new(move || {
+				runs.set(runs.get() + 1);
+				assert_eq!(action.try_is_pending_untracked(), Some(false));
+			})
+		});
+
+		assert_eq!(runs.get(), 1);
+		action.force_success_for_test(());
+		reinhardt_core::reactive::with_runtime(|runtime| runtime.flush_updates());
+		assert_eq!(runs.get(), 1);
+	}
+
+	#[rstest]
+	#[serial_test::serial(reactive_runtime)]
+	fn dispatch_construction_does_not_subscribe_the_calling_effect() {
+		let scope = reinhardt_core::reactive::ReactiveScope::new();
+		let construction_reads = Rc::new(std::cell::Cell::new(0));
+		let effect_runs = Rc::new(std::cell::Cell::new(0));
+		let (source, _action, _effect) = scope.enter(|| {
+			let source = Signal::new("first".to_owned());
+			let source_for_action = source;
+			let construction_reads_for_action = Rc::clone(&construction_reads);
+			let action = use_action(move |_: ()| {
+				construction_reads_for_action.set(construction_reads_for_action.get() + 1);
+				let value = source_for_action.get();
+				async move { Ok::<String, String>(value) }
+			});
+			let action_for_effect = action;
+			let effect_runs_for_effect = Rc::clone(&effect_runs);
+			let effect = reinhardt_core::reactive::Effect::new(move || {
+				effect_runs_for_effect.set(effect_runs_for_effect.get() + 1);
+				action_for_effect.dispatch(());
+			});
+			(source, action, effect)
+		});
+
+		assert_eq!(effect_runs.get(), 1);
+		assert_eq!(construction_reads.get(), 1);
+
+		source.set("second".to_owned());
+		reinhardt_core::reactive::with_runtime(|runtime| runtime.flush_updates());
+
+		assert_eq!(effect_runs.get(), 1);
+		assert_eq!(construction_reads.get(), 1);
 	}
 
 	#[cfg(all(native, feature = "testing"))]

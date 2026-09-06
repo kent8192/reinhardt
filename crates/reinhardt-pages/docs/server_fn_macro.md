@@ -67,6 +67,80 @@ async fn fetch_data() {
 }
 ```
 
+## Server mutations and generated adapters
+
+Ordinary `#[server_fn]` definitions can be passed directly to
+`use_server_mutation` when the client input already matches the public function
+signature:
+
+```rust,ignore
+use reinhardt::pages::prelude::*;
+
+let remove = use_server_mutation(delete_cluster)
+    .invalidate_family(query_client, clusters::family())
+    .redirect("/clusters")
+    .build();
+let outcome = remove.dispatch(cluster_id);
+```
+
+Adapt multi-argument signatures explicitly when the client should treat them as
+one input value:
+
+```rust,ignore
+let remove = use_server_mutation(|(cluster_id, force): (String, bool)| {
+    delete_cluster(cluster_id, force)
+})
+.build();
+```
+
+DTO inputs work the same way because `use_server_mutation` accepts any single
+input value:
+
+```rust,ignore
+let save = use_server_mutation(update_cluster).build();
+let outcome = save.dispatch(UpdateClusterRequest {
+    cluster_id: "cluster-1".to_owned(),
+    name: "Primary".to_owned(),
+});
+```
+
+Injected and extractor parameters need a generated adapter. Every such
+`#[server_fn]` exports `function_name::mutation()`, which strips ambient server
+arguments from the client input while keeping the server-side handler unchanged:
+
+```rust,ignore
+let remove = use_server_mutation(delete_cluster::mutation()).build();
+let outcome = remove.dispatch(cluster_id);
+```
+
+`use_server_mutation` normalizes the action error into `ServerFnError`, so
+typed validation, auth, transport, and application failures stay consistent
+whether the action came from a direct server function, a tuple adapter, or a
+generated `mutation()` helper.
+
+Dispatch is duplicate-safe on both APIs: a pending plain mutation returns
+`MutationDispatchOutcome::AlreadyPending`, and a pending generated-form
+mutation returns the same outcome before validating or invoking the request.
+
+Successful mutations can invalidate one cache entry or an entire family:
+
+```rust,ignore
+let exact = use_server_mutation(reload_project_jobs)
+    .invalidate(query_client.clone(), list_project_jobs::key(project_id))
+    .build();
+let family = use_server_mutation(delete_cluster::mutation())
+    .invalidate_family(query_client, list_project_jobs::family())
+    .build();
+```
+
+Exact invalidation is for one argument set; family invalidation is for mutations
+that can affect several cached views.
+
+Multipart `#[server_fn]` endpoints continue to use generated `ModelForm`
+submission. `web_sys::File` is browser-only, so there is no target-neutral
+`use_server_mutation` input for file payloads; keep using `form! { server_fn:
+upload, ... }` and the generated submit helpers for those functions.
+
 ## Structured errors (version 1)
 
 Every failed server-function response uses a JSON error envelope independent of
@@ -377,6 +451,11 @@ such as `AppResult<T> = Result<T, ServerFnError>`. Server functions with
 request extractors or `#[inject]` parameters do not run their fetcher during
 native SSR prefetch; the key remains usable for browser fetches and native
 component-test server-function mocks, including result aliases.
+
+The same extractor/injection distinction applies to server mutations: use the
+public function directly for ordinary input shapes, and use
+`function_name::mutation()` when the browser must not supply extractor or
+injected parameters.
 
 Use `server_fn_module::key(...)` for generated keys. The module-qualified helper
 binds the key to the selected server function even when another function has the

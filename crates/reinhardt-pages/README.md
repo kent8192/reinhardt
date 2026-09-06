@@ -513,7 +513,8 @@ Fresh mount writes runtime values to the DOM. Hydration is normally DOM-first,
 so edits made after SSR and before hydration are preserved. A reset performed
 before hydration makes runtime field bindings source-preferred, causing reset
 defaults to replace stale SSR properties. Direct `Signal` bindings retain
-normal DOM-first hydration.
+normal DOM-first hydration. Radio selections are captured before hydration
+updates sibling controls, preserving edits regardless of option order.
 
 For numeric bindings, invalid or incomplete raw text remains in the editor and
 the typed value remains the last valid value. The associated

@@ -7341,14 +7341,17 @@ fn generate_field_view(
 				syn::Ident::new(&format!("{}_choices", field.name), field.name.span());
 			let choice_items_name =
 				syn::Ident::new(&format!("{}_choice_items", field.name), field.name.span());
-			let checked_attr = signal_ident.map(|signal_ident| {
-				quote! {
-						.bool_attr(
-						"checked",
-						#signal_ident.get().to_string() == choice_value.to_string(),
-					)
-				}
-			});
+			// Controlled string radios project checked state without rerendering the group.
+			let checked_attr = signal_ident
+				.filter(|_| !is_string_valued_field(&field.field_type))
+				.map(|signal_ident| {
+					quote! {
+							.bool_attr(
+							"checked",
+							#signal_ident.get().to_string() == choice_value.to_string(),
+						)
+					}
+				});
 			quote! {
 					{
 						let __choices_signal = self.#choices_name.clone();

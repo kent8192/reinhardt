@@ -297,7 +297,7 @@ pub fn hydrate<C: Component>(component: &C, root: &Element) -> Result<(), Hydrat
 				web_sys::console::log_1(&"[Hydration] Reconciliation complete".into());
 
 				// Install hydration guards and reactive DOM owners in the same ownership pass.
-				crate::dom::control_binding::with_hydration_snapshot_transaction(|| {
+				crate::dom::control_binding::with_hydration_snapshot_transaction(root, || {
 					let mut root_registry = EventRegistry::new_for_hydration();
 					install_hydrated_reactive_nodes(root, &view, &mut root_registry)?;
 					store_reactive_node(root_registry);
@@ -1104,7 +1104,7 @@ pub fn attach_events_to_mounted_view(
 
 	web_sys::console::log_1(&"[CSR] Attaching events to mounted view...".into());
 
-	crate::dom::control_binding::with_hydration_snapshot_transaction(|| {
+	crate::dom::control_binding::with_hydration_snapshot_transaction(element, || {
 		let mut registry = EventRegistry::new_for_hydration();
 		attach_events_recursive(element, view, &mut registry)?;
 		store_reactive_node(registry);

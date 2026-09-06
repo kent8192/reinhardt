@@ -168,16 +168,22 @@ fn range_step_grids_allow_reconciliation(
 		(Some(_), None) | (None, Some(_)) => return false,
 		(Some(first_step), Some(second_step)) => (first_step, second_step),
 	};
-	// ponytail: differing grids stay local even if some projections converge;
-	// support them only with a shared normalization algorithm that cannot cycle.
+	// ponytail: only identical step grids reconcile; differing grids stay local.
+	// Broader support requires a shared normalization algorithm that cannot cycle.
 	if first_step != second_step || !first_step.is_finite() || first_step <= 0.0 {
 		return false;
 	}
 	let phase = (second_base - first_base) / first_step;
-	if !phase.is_finite() || phase.fract() != 0.0 {
+	if !phase.is_finite() || (phase - phase.round()).abs() > range_step_index_tolerance(phase) {
 		return false;
 	}
 	range_step_grid_has_value(overlap_min, overlap_max, first_step, first_base)
+}
+
+#[cfg(any(wasm, test, feature = "testing"))]
+pub(crate) fn range_step_index_tolerance(index: f64) -> f64 {
+	// Cap roundoff in step units so large indices cannot hide a different grid.
+	(4.0 * f64::EPSILON * index.abs().max(1.0)).min(1e-7)
 }
 
 #[cfg(any(wasm, test, feature = "testing"))]
@@ -185,17 +191,18 @@ fn range_step_grid_has_value(overlap_min: f64, overlap_max: f64, step: f64, base
 	if !step.is_finite() || step <= 0.0 || !base.is_finite() {
 		return false;
 	}
-	let step_index = ((overlap_min - base) / step).ceil();
-	let candidate = base + step_index * step;
-	let bound_tolerance = overlap_min.abs().max(overlap_max.abs()).max(1.0) * 1e-9;
-	candidate.is_finite()
-		&& candidate >= overlap_min - bound_tolerance
-		&& candidate <= overlap_max + bound_tolerance
+	let first_index = (overlap_min - base) / step;
+	let last_index = (overlap_max - base) / step;
+	first_index.is_finite()
+		&& last_index.is_finite()
+		&& (first_index - range_step_index_tolerance(first_index)).ceil()
+			<= (last_index + range_step_index_tolerance(last_index)).floor()
 }
 
 #[cfg(test)]
 mod tests {
 	use super::{parse_html_number, range_constraints_conflict};
+	use rstest::rstest;
 
 	#[test]
 	fn html_number_parser_matches_the_range_constraint_grammar() {
@@ -233,6 +240,37 @@ mod tests {
 
 		// Assert
 		assert_eq!((outside_only_conflicts, inside_conflicts), (true, false));
+	}
+
+	#[rstest]
+	#[case::decimal_bases((0.3, 1.0), 0.1, (0.0, 0.3), false)]
+	#[case::decimal_endpoint((0.3, 0.3), 0.1, (0.0, 0.3), false)]
+	#[case::rounded_endpoint((0.30000000000000004, 0.30000000000000004), 0.1, (0.0, 0.3), false)]
+	#[case::different_decimal_grids((0.0, 1.0), 0.1, (0.0, 0.05), true)]
+	#[case::off_grid_decimal_endpoint((0.35, 0.35), 0.1, (0.0, 0.3), true)]
+	#[case::large_off_grid_endpoint((1e12 + 0.5, 1e12 + 0.5), 1.0, (0.0, 0.0), true)]
+	#[case::large_aligned_phase((1e12, 1e12 + 10.0), 1.0, (0.0, 1e12), false)]
+	#[case::large_half_step_phase((1e12, 1e12 + 10.0), 1.0, (0.0, 1e12 + 0.5), true)]
+	#[case::large_near_half_step_phase((1e12, 1e12 + 10.0), 1.0, (0.0, 1e12 + 0.4999), true)]
+	#[case::large_near_integer_phase((1e12, 1e12 + 10.0), 1.0, (0.0, 1e12 + 0.01), true)]
+	fn range_grid_compatibility_tolerates_only_floating_point_roundoff(
+		#[case] bounds: (f64, f64),
+		#[case] step: f64,
+		#[case] bases: (f64, f64),
+		#[case] expected: bool,
+	) {
+		// Arrange
+		let first = (bounds.0, bounds.1, Some(step), bases.0);
+		let second = (bounds.0, bounds.1, Some(step), bases.1);
+
+		// Act
+		let conflicts = [
+			range_constraints_conflict(first, second),
+			range_constraints_conflict(second, first),
+		];
+
+		// Assert
+		assert_eq!(conflicts, [expected; 2]);
 	}
 
 	#[test]

@@ -312,7 +312,8 @@ inputs continue to preserve rejected editor text. Multiple range controls bound
 to one signal reconcile browser-normalized values only when their bounds
 overlap at an accepted value and their grids match: equal steps with aligned
 bases, or all `step="any"`. Differing grids, including continuous/stepped pairs,
-keep normalization local even if they share valid values. See the
+keep normalization local even if they share valid values. Decimal grid alignment
+allows only bounded floating-point roundoff. See the
 [React migration guide](docs/react_to_reinhardt.md#controlled-and-uncontrolled-form-controls)
 for event ordering, IME, numeric-error, and low-level escape-hatch details.
 For `input[type=number]`, the binding combines `beforeinput` metadata with the

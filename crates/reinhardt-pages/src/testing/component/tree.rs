@@ -1357,8 +1357,19 @@ fn normalize_native_control_value(
 			None => clamped,
 			Some(step) => {
 				let quotient = (clamped - step_base) / step;
-				let lower = step_base + quotient.floor() * step;
-				let upper = step_base + quotient.ceil() * step;
+				let (lower, upper) = if quotient.is_finite()
+					&& (quotient - quotient.round()).abs()
+						<= crate::control_binding::range_step_index_tolerance(quotient)
+				{
+					// Preserve aligned decimals so equivalent grids do not alternate
+					// between neighboring floating-point representations.
+					(clamped, clamped)
+				} else {
+					(
+						step_base + quotient.floor() * step,
+						step_base + quotient.ceil() * step,
+					)
+				};
 				let epsilon = step * 1e-12 + f64::EPSILON;
 				let lower = (lower >= min - epsilon && lower <= max + epsilon).then_some(lower);
 				let upper = (upper >= min - epsilon && upper <= max + epsilon).then_some(upper);

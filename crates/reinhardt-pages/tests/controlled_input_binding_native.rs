@@ -1347,6 +1347,47 @@ fn native_initial_range_reconciliation_uses_the_bound_value_as_the_step_base(
 }
 
 #[rstest]
+#[case::aligned_decimal(0.1, 0.3)]
+#[case::off_step(0.36, 0.4)]
+#[tokio::test]
+async fn native_shared_decimal_ranges_converge_without_roundoff_drift(
+	reactive_scope: ReactiveScope,
+	#[case] initial: f64,
+	#[case] expected: f64,
+) {
+	// Arrange
+	let value = signal_in_scope(&reactive_scope, initial);
+	let mut controls = PageElement::new("div");
+	for (label, min) in [("First range", "0"), ("Second range", "0.3")] {
+		controls = controls.child(
+			PageElement::new("input")
+				.attr("aria-label", label)
+				.attr("type", "range")
+				.attr("min", min)
+				.attr("max", "1")
+				.attr("step", "0.1")
+				.control_binding(ControlBinding::number(value)),
+		);
+	}
+	let screen = render(controls);
+
+	// Act
+	screen.settle().await;
+
+	// Assert
+	assert_eq!(value.get(), expected);
+	assert_eq!(
+		screen.get_by_label("First range").value(),
+		Some(expected.to_string())
+	);
+	assert_eq!(
+		screen.get_by_label("Second range").value(),
+		Some(expected.to_string())
+	);
+}
+
+
+#[rstest]
 #[case::leading_plus_min("min", "+10")]
 #[case::leading_plus_step("step", "+2")]
 fn native_range_ignores_constraints_outside_the_html_number_grammar(

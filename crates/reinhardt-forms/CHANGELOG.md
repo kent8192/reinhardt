@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-forms@v0.4.0-alpha.13...reinhardt-forms@v0.4.0-alpha.14) - 2026-09-06
+
+### Fixed
+
+- *(forms)* restrict singular validation deferral to required relations
+- *(forms)* preserve inline candidates for unchanged parent keys
+- *(forms)* enforce validation deferral field eligibility
+- *(forms)* clear stale errors before cached model revalidation
+- *(forms)* reconcile validation with named form contracts
+
+### Maintenance
+
+- merge develop/0.4.0 into model form validation
+
+### Testing
+
+- *(forms)* align assertions with canonical required errors
+
 ## [0.4.0-alpha.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-forms@v0.4.0-alpha.10...reinhardt-forms@v0.4.0-alpha.11) - 2026-08-27
 
 ### Documentation

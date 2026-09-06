@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.4.0-alpha.13...reinhardt-commands@v0.4.0-alpha.14) - 2026-09-06
+
+### Maintenance
+
+- merge develop/0.4.0 into migration source PR
+
+### Testing
+
+- *(migrations)* expect versioned builder-style generated source
+
 ### Changed
 
 - Make `makemigrations --check` a no-write drift check that exits unsuccessfully

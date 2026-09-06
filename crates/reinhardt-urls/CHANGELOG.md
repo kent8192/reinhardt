@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.4.0-alpha.13...reinhardt-urls@v0.4.0-alpha.14) - 2026-09-06
+
+### Maintenance
+
+- merge develop/0.4.0 into navigation guard branch
+
 ## [0.4.0-alpha.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.4.0-alpha.9...reinhardt-urls@v0.4.0-alpha.10) - 2026-08-25
 
 ### Added

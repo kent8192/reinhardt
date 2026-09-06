@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.4.0-alpha.13...reinhardt-macros@v0.4.0-alpha.14) - 2026-09-06
+
+### Fixed
+
+- *(forms)* restrict singular validation deferral to required relations
+- *(forms)* enforce validation deferral field eligibility
+- *(forms)* reconcile validation with named form contracts
+- *(forms)* normalize raw primary keys before update validation
+- *(pages)* scope multipart validation to endpoint fields
+- *(forms)* reject nonfinite defaulted floats on WASM
+- *(forms)* expose pending uploads to model validation
+
+### Maintenance
+
+- merge develop/0.4.0 into constraint violation design
+- merge develop/0.4.0 into model form validation
+
+### Testing
+
+- *(macros)* initialize form metadata in unsigned registration fixture
+
 ### Fixed
 
 - *(macros)* keep Model field_metadata reachable when a field is named metadata

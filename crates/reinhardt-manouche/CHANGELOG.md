@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-manouche@v0.4.0-alpha.13...reinhardt-manouche@v0.4.0-alpha.14) - 2026-09-06
+
+### Maintenance
+
+- merge develop/0.4.0 into PR [[#6226](https://github.com/kent8192/reinhardt-web/issues/6226)](https://github.com/kent8192/reinhardt-web/issues/6226) branch
+- merge develop/0.4.0 into semantic input bindings
+
+### Other
+
+- Apply remaining changes
+
 ## [0.4.0-alpha.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-manouche@v0.4.0-alpha.10...reinhardt-manouche@v0.4.0-alpha.11) - 2026-08-27
 
 ### Maintenance

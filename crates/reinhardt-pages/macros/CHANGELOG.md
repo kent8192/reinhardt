@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages-macros@v0.4.0-alpha.13...reinhardt-pages-macros@v0.4.0-alpha.14) - 2026-09-06
+
+### Fixed
+
+- *(forms)* reconcile validation with named form contracts
+- *(pages)* validate multipart model payloads on the server
+- *(pages)* scope multipart validation to endpoint fields
+
+### Maintenance
+
+- merge develop/0.4.0 into navigation guard branch
+- merge develop/0.4.0 form mutation changes
+- merge develop/0.4.0 into model form validation
+- merge develop/0.4.0 into semantic input bindings
+
 ## [0.4.0-alpha.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages-macros@v0.4.0-alpha.11...reinhardt-pages-macros@v0.4.0-alpha.12) - 2026-08-30
 
 ### Added

@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.4.0-alpha.13...reinhardt-pages@v0.4.0-alpha.14) - 2026-09-06
+
+### Documentation
+
+- *(pages)* reverse login path in navigation guard example
+- *(pages)* clarify temporal normalization writeback
+
+### Fixed
+
+- *(ci)* replace tabs in Rustdoc example
+- *(pages)* skip auth revalidation after a newer navigation
+- *(pages)* preserve source history for push-origin redirects
+- *(pages)* sanitize native fallback text input values
+- *(core)* allow reactive temporal input bindings
+- *(pages)* canonicalize native range zero values
+- *(pages)* prevent shared range normalization cycles
+- *(pages)* reconcile surviving range bindings
+- *(core)* mark omitted passwords for hydration
+- *(pages)* use HTML number grammar for native range events
+- *(pages)* tolerate roundoff in aligned range grids
+- *(pages)* update range defaults before signal normalization
+- *(pages)* refresh shared ranges after constraint changes
+- *(pages)* reconcile password bindings after form resets
+
+### Maintenance
+
+- merge develop/0.4.0 into constraint violation design
+- merge develop/0.4.0 into navigation guard branch
+- merge develop/0.4.0 into semantic input bindings
+- merge develop/0.4.0 into semantic input bindings
+- *(pages)* remove deferred listener delegation note
+
+### Testing
+
+- *(pages)* verify fallback text sanitization
+
 ### Fixed
 
 - *(model-form)* preserve UTC datetime values and fractional seconds in typed runtime updates

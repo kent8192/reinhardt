@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.4.0-alpha.13...reinhardt-db@v0.4.0-alpha.14) - 2026-09-06
+
+### Fixed
+
+- *(ci)* use spaces in database error doc example
+- *(deps)* remove resolved tinyvec compatibility pins
+
+### Maintenance
+
+- merge develop/0.4.0 into constraint violation design
+- merge develop/0.4.0 into ModelForm contract branch
+
+### Testing
+
+- pin tinyvec 1.12.0 in isolated consumer fixtures
+
 ### Testing
 
 - *(db)* remove obsolete tinyvec version pins from isolated consumer fixtures

@@ -467,7 +467,10 @@
 //! inputs use a primitive implementing [`NumberValue`], and multiple selects
 //! use `Signal<Vec<String>>`. Date/time inputs use the browser's serialized
 //! value, with `""` for an empty or browser-rejected editor value. Browser
-//! sanitization of an application write does not silently rewrite the signal.
+//! normalization of a valid application write updates the signal, such as
+//! `2026-08-31 10:30` becoming `2026-08-31T10:30` for `datetime-local`. When an
+//! invalid application value is sanitized to `""`, the original signal is
+//! preserved.
 //! Numeric bindings may expose a [`NumberParseError`] signal that retains
 //! recoverable invalid editor text.
 //! Only unmodified Arrow/Home/End keyboard moves are predicted; modifier-key

@@ -286,8 +286,10 @@ Date/time bindings use the browser's serialized strings, for example
 The DOM-to-signal path stores the browser-normalized `HTMLInputElement.value`;
 empty, invalid, or incomplete editor values are exposed as `""` by these
 controls. Applications should write a browser-valid serialization or `""` to
-the signal. If the browser sanitizes an application-provided value, the
-binding does not silently rewrite the signal.
+the signal. Browser normalization of a valid application write updates the
+signal, such as `2026-08-31 10:30` becoming `2026-08-31T10:30` for
+`datetime-local`. When an invalid application value is sanitized to `""`, the
+original signal is preserved.
 
 SSR serializes the signal string into the `value` attribute. Hydration first
 adopts the live DOM property, preserving browser restoration and edits made

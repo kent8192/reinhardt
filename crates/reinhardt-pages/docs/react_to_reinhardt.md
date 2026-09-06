@@ -292,8 +292,10 @@ type. Typical values are `2026-08-31`, `2026-08-31T10:30`, `2026-08`,
 `2026-W36`, and `10:30`; `""` represents an empty control. User edits commit
 the browser-normalized `HTMLInputElement.value`, so an invalid or incomplete
 editor value is observed as `""`. Application writes should be a valid
-serialization or `""`. Browser sanitization of an application write changes
-the DOM property but does not silently rewrite the signal.
+serialization or `""`. Browser normalization of a valid application write
+updates the signal, such as `2026-08-31 10:30` becoming `2026-08-31T10:30` for
+`datetime-local`. When an invalid application value is sanitized to `""`, the
+original signal is preserved.
 
 Text writes are deferred while an IME composition is active. The completed
 value is committed at `compositionend`, and a duplicate final `input` event is

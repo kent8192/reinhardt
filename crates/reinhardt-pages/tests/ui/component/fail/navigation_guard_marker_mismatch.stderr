@@ -1,0 +1,24 @@
+warning: type `marker` should have an upper camel case name
+ --> tests/ui/component/fail/navigation_guard_marker_mismatch.rs:4:13
+  |
+4 |     pub struct marker;
+  |                ^^^^^^ help: convert the identifier to upper camel case: `Marker`
+  |
+  = note: `#[warn(non_camel_case_types)]` (part of `#[warn(nonstandard_style)]`) on by default
+
+error[E0277]: the trait bound `not_a_navigation_guard::marker: NavigationGuard` is not satisfied
+  --> tests/ui/component/fail/navigation_guard_marker_mismatch.rs:7:1
+   |
+ 7 | / #[component(
+ 8 | |     "/account/",
+ 9 | |     name = "account",
+10 | |     navigation_guard = not_a_navigation_guard,
+11 | | )]
+   | |__^ unsatisfied trait bound
+   |
+help: the trait `NavigationGuard` is not implemented for `not_a_navigation_guard::marker`
+  --> tests/ui/component/fail/navigation_guard_marker_mismatch.rs:4:2
+   |
+ 4 |     pub struct marker;
+   |     ^^^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `component` (in Nightly builds, run with -Z macro-backtrace for more info)

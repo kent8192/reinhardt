@@ -252,7 +252,7 @@ fn optional_loader_query_reaches_ssr_and_uses_the_same_hydration_key() {
 }
 
 #[test]
-fn route_loader_timeout_returns_safe_status() {
+fn route_preparation_timeout_returns_safe_status() {
 	tokio_test::block_on(async {
 		let router = ClientRouter::new().component(ssr_timeout);
 		let mut renderer = SsrRenderer::with_options(
@@ -262,7 +262,12 @@ fn route_loader_timeout_returns_safe_status() {
 		let output = renderer.render_route_to_string(&router, "/timeout/").await;
 
 		assert_eq!(output.status, 504);
-		assert!(output.html.contains("route loader timed out"));
+		assert!(
+			output
+				.html
+				.contains("data-route-error=\"route-preparation-timeout\"")
+		);
+		assert!(output.html.contains("route preparation timed out"));
 		assert_eq!(renderer.state().resource_count(), 0);
 	});
 }
@@ -286,7 +291,7 @@ fn route_loader_failure_returns_before_a_slow_sibling_times_out() {
 
 		assert_eq!(output.status, 500);
 		assert!(output.html.contains("fast loader failure"));
-		assert!(!output.html.contains("route loader timed out"));
+		assert!(!output.html.contains("route preparation timed out"));
 		assert_eq!(renderer.state().resource_count(), 0);
 	});
 }

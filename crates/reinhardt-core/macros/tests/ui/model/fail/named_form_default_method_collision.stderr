@@ -1,0 +1,5 @@
+error: named model form field name collides with generated contract API
+ --> tests/ui/model/fail/named_form_default_method_collision.rs:7:41
+  |
+7 |     form(name = DocumentCreateForm, fields(r#default))
+  |                                            ^^^^^^^^^

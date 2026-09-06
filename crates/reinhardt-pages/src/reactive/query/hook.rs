@@ -10,8 +10,6 @@ use super::client::{
 use super::context::queries;
 use super::identity::QueryDescriptor;
 use super::retry::QueryRetryConfig;
-#[cfg(native)]
-use super::state::{QueryHydrationSnapshot, QueryHydrationState};
 use super::state::{QueryOptions, QuerySnapshot, QueryStatus};
 
 /// Reactive handle returned by [`use_query`].
@@ -85,36 +83,8 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryHandle<T, E> {
 		T: Serialize,
 		E: Serialize,
 	{
-		if self.entry.is_normalized() {
-			return self
-				.entry
-				.normalized_hydration_snapshot(self.lease.inner.policy.stale_time);
-		}
-		let snapshot = self.snapshot();
-		let state = match snapshot.status {
-			QueryStatus::Success => QueryHydrationState::Success(
-				snapshot
-					.data
-					.expect("successful query hydration requires settled data"),
-			),
-			QueryStatus::Error => QueryHydrationState::Error(
-				snapshot
-					.error
-					.expect("error query hydration requires a settled error"),
-			),
-			QueryStatus::Idle | QueryStatus::Pending => {
-				panic!("query hydration requires a settled query")
-			}
-		};
-		Some(
-			serde_json::to_value(QueryHydrationSnapshot {
-				state,
-				refetch_error: snapshot.refetch_error,
-				is_fetching: snapshot.is_fetching,
-				is_stale: snapshot.is_stale,
-			})
-			.expect("query snapshots must serialize for hydration"),
-		)
+		self.mark_ssr_read();
+		self.lease.hydration_snapshot_value()
 	}
 
 	/// Returns the current successful value, if present.

@@ -18,12 +18,14 @@ struct ComponentArgs {
 	path: LitStr,
 	name: LitStr,
 	loader: Option<syn::Path>,
+	navigation_guard: Option<syn::Path>,
 }
 
 struct LayoutArgs {
 	path: LitStr,
 	name: LitStr,
 	loader: Option<syn::Path>,
+	navigation_guard: Option<syn::Path>,
 }
 
 const COMPONENT_ARGS_EXPECTED: &str = "expected #[component(\"/path/\", name = \"name\")]";
@@ -31,16 +33,27 @@ const LAYOUT_ARGS_EXPECTED: &str = "expected #[layout(\"/path/\", name = \"name\
 
 impl Parse for ComponentArgs {
 	fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-		let (path, name, loader) =
+		let (path, name, loader, navigation_guard) =
 			parse_route_macro_args(input, "component", COMPONENT_ARGS_EXPECTED)?;
-		Ok(Self { path, name, loader })
+		Ok(Self {
+			path,
+			name,
+			loader,
+			navigation_guard,
+		})
 	}
 }
 
 impl Parse for LayoutArgs {
 	fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-		let (path, name, loader) = parse_route_macro_args(input, "layout", LAYOUT_ARGS_EXPECTED)?;
-		Ok(Self { path, name, loader })
+		let (path, name, loader, navigation_guard) =
+			parse_route_macro_args(input, "layout", LAYOUT_ARGS_EXPECTED)?;
+		Ok(Self {
+			path,
+			name,
+			loader,
+			navigation_guard,
+		})
 	}
 }
 
@@ -48,7 +61,7 @@ fn parse_route_macro_args(
 	input: ParseStream<'_>,
 	macro_name: &str,
 	expected: &str,
-) -> syn::Result<(LitStr, LitStr, Option<syn::Path>)> {
+) -> syn::Result<(LitStr, LitStr, Option<syn::Path>, Option<syn::Path>)> {
 	let path: LitStr = input.parse()?;
 	if input.is_empty() {
 		return Err(input.error(expected));
@@ -63,13 +76,14 @@ fn parse_route_macro_args(
 	}
 	let mut name = None;
 	let mut loader = None;
+	let mut navigation_guard = None;
 	loop {
 		let key: Ident = input.parse()?;
 		let key_name = key.to_string();
-		if key_name != "name" && key_name != "loader" {
+		if key_name != "name" && key_name != "loader" && key_name != "navigation_guard" {
 			return Err(syn::Error::new(
 				key.span(),
-				"expected route name argument `name = \"...\"`",
+				"expected route option `name = \"...\"`, `loader = path`, or `navigation_guard = path`",
 			));
 		}
 		input.parse::<Token![=]>()?;
@@ -97,6 +111,15 @@ fn parse_route_macro_args(
 				}
 				loader = Some(input.parse()?);
 			}
+			"navigation_guard" => {
+				if navigation_guard.is_some() {
+					return Err(syn::Error::new_spanned(
+						key,
+						"duplicate route option `navigation_guard`",
+					));
+				}
+				navigation_guard = Some(input.parse()?);
+			}
 			_ => unreachable!("route option was validated above"),
 		}
 		if input.is_empty() {
@@ -111,7 +134,7 @@ fn parse_route_macro_args(
 	let Some(name) = name else {
 		return Err(input.error(expected));
 	};
-	Ok((path, name, loader))
+	Ok((path, name, loader, navigation_guard))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -183,6 +206,7 @@ fn expand_component(args: ComponentArgs, input: ItemFn) -> syn::Result<proc_macr
 		path,
 		name: route_name,
 		loader: loader_option,
+		navigation_guard: navigation_guard_option,
 	} = args;
 	let fn_name = input.sig.ident.clone();
 	let component_name = fn_name.to_string().to_case(Case::Pascal);
@@ -207,6 +231,27 @@ fn expand_component(args: ComponentArgs, input: ItemFn) -> syn::Result<proc_macr
 	let loader_id_method = loader_id.as_ref().map_or_else(
 		|| quote! { ::core::option::Option::None },
 		|id| quote! { ::core::option::Option::Some(#id) },
+	);
+	let navigation_guard_id = navigation_guard_option.map(|path| {
+		quote! { <#path::marker as #pages_crate::NavigationGuard>::ID }
+	});
+	let navigation_guard_id_method = navigation_guard_id.as_ref().map_or_else(
+		|| quote! { ::core::option::Option::None },
+		|id| quote! { ::core::option::Option::Some(#id) },
+	);
+	let navigation_guard_metadata = navigation_guard_id.as_ref().map_or_else(
+		|| quote! {},
+		|id| {
+			quote! {
+				#pages_crate::__private::inventory::submit! {
+					#pages_crate::__private::reinhardt_urls::routers::client_router::ComponentNavigationGuardMetadata {
+						path: #path,
+						name: #route_name,
+						navigation_guard_id: #id,
+					}
+				}
+			}
+		},
 	);
 	let loader_assertion = loader_binding.as_ref().map_or_else(
 		|| quote! {},
@@ -329,6 +374,13 @@ fn expand_component(args: ComponentArgs, input: ItemFn) -> syn::Result<proc_macr
 					#(#from_request_fields,)*
 				})
 			}
+
+			fn component_route_metadata() -> ::core::option::Option<(
+				::core::option::Option<#pages_crate::RouteLoaderId>,
+				::core::option::Option<#pages_crate::NavigationGuardId>,
+			)> {
+				::core::option::Option::Some((#loader_id_method, #navigation_guard_id_method))
+			}
 		}
 
 		impl #pages_crate::__private::reinhardt_urls::routers::client_router::ComponentInfo
@@ -341,6 +393,9 @@ fn expand_component(args: ComponentArgs, input: ItemFn) -> syn::Result<proc_macr
 			fn props_type_name() -> &'static str { #props_type_literal }
 			fn loader_id() -> ::core::option::Option<#pages_crate::RouteLoaderId> {
 				#loader_id_method
+			}
+			fn navigation_guard_id() -> ::core::option::Option<#pages_crate::NavigationGuardId> {
+				#navigation_guard_id_method
 			}
 		}
 
@@ -355,6 +410,8 @@ fn expand_component(args: ComponentArgs, input: ItemFn) -> syn::Result<proc_macr
 				loader_id: #loader_id_method,
 			}
 		}
+
+		#navigation_guard_metadata
 
 		fn #original_ident(#(#original_inputs,)*) #output {
 			#block
@@ -397,6 +454,7 @@ fn expand_layout(args: LayoutArgs, input: ItemFn) -> syn::Result<proc_macro2::To
 		path,
 		name: route_name,
 		loader: loader_option,
+		navigation_guard: navigation_guard_option,
 	} = args;
 	let fn_name = input.sig.ident.clone();
 	let component_name = fn_name.to_string().to_case(Case::Pascal);
@@ -424,6 +482,27 @@ fn expand_layout(args: LayoutArgs, input: ItemFn) -> syn::Result<proc_macro2::To
 	let loader_id_method = loader_id.as_ref().map_or_else(
 		|| quote! { ::core::option::Option::None },
 		|id| quote! { ::core::option::Option::Some(#id) },
+	);
+	let navigation_guard_id = navigation_guard_option.map(|path| {
+		quote! { <#path::marker as #pages_crate::NavigationGuard>::ID }
+	});
+	let navigation_guard_id_method = navigation_guard_id.as_ref().map_or_else(
+		|| quote! { ::core::option::Option::None },
+		|id| quote! { ::core::option::Option::Some(#id) },
+	);
+	let navigation_guard_metadata = navigation_guard_id.as_ref().map_or_else(
+		|| quote! {},
+		|id| {
+			quote! {
+				#pages_crate::__private::inventory::submit! {
+					#pages_crate::__private::reinhardt_urls::routers::client_router::LayoutNavigationGuardMetadata {
+						path: #path,
+						name: #route_name,
+						navigation_guard_id: #id,
+					}
+				}
+			}
+		},
 	);
 	let loader_assertion = loader_binding.as_ref().map_or_else(
 		|| quote! {},
@@ -564,6 +643,9 @@ fn expand_layout(args: LayoutArgs, input: ItemFn) -> syn::Result<proc_macro2::To
 			fn loader_id() -> ::core::option::Option<#pages_crate::RouteLoaderId> {
 				#loader_id_method
 			}
+			fn navigation_guard_id() -> ::core::option::Option<#pages_crate::NavigationGuardId> {
+				#navigation_guard_id_method
+			}
 		}
 
 		#pages_crate::__private::inventory::submit! {
@@ -577,6 +659,8 @@ fn expand_layout(args: LayoutArgs, input: ItemFn) -> syn::Result<proc_macro2::To
 				loader_id: #loader_id_method,
 			}
 		}
+
+		#navigation_guard_metadata
 
 		fn #original_ident(#(#original_inputs,)* #outlet_name: #outlet_ty) #output {
 			#block

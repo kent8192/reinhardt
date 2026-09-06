@@ -1,0 +1,15 @@
+error: duplicate route option `navigation_guard`
+  --> tests/ui/component/fail/duplicate_navigation_guard_option.rs:20:2
+   |
+20 |     navigation_guard = second,
+   |     ^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Page` and `page`
+ --> tests/ui/component/fail/duplicate_navigation_guard_option.rs:2:63
+  |
+2 |     NavigationContext, NavigationDecision, NavigationGuardError, Page, component, navigation_guard,
+  |                                                                  ^^^^
+3 |     page,
+  |     ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

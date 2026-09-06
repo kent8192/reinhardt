@@ -83,13 +83,15 @@ mod handler;
 // module level are intentionally limited (see below).
 pub mod history;
 pub mod loader;
+pub mod navigation_guard;
 mod params;
 mod pattern;
 pub mod scope;
 pub mod tree;
 // Public re-exports
 pub use component::{
-	ComponentInfo, ComponentMetadata, FromLayoutRequest, LayoutInfo, LayoutMetadata,
+	ComponentInfo, ComponentMetadata, ComponentNavigationGuardMetadata, FromLayoutRequest,
+	LayoutInfo, LayoutMetadata, LayoutNavigationGuardMetadata,
 };
 pub use core::{
 	ClientRoute, ClientRouteMatch, ClientRouter, NavigationSubscription, RouteMetadata,
@@ -103,6 +105,7 @@ pub use from_request::{
 };
 pub use handler::RouteHandler;
 pub use loader::RouteLoaderId;
+pub use navigation_guard::NavigationGuardId;
 // Issue #4217: drop helper-function re-exports from this module's
 // public surface. Callers should use `Router::push()` / `ClientRouter::push()`
 // instead. The functions remain `pub` at `history::*` so reinhardt-pages

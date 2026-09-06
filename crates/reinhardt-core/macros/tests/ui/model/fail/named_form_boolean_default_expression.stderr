@@ -1,0 +1,5 @@
+error: named model form boolean defaults must be `true` or `false` literals
+  --> tests/ui/model/fail/named_form_boolean_default_expression.rs:14:20
+   |
+14 |     #[field(default = DEFAULT_ENABLED)]
+   |                       ^^^^^^^^^^^^^^^

@@ -1,0 +1,24 @@
+warning: type `marker` should have an upper camel case name
+ --> tests/ui/layout/fail/navigation_guard_marker_mismatch.rs:4:13
+  |
+4 |     pub struct marker;
+  |                ^^^^^^ help: convert the identifier to upper camel case: `Marker`
+  |
+  = note: `#[warn(non_camel_case_types)]` (part of `#[warn(nonstandard_style)]`) on by default
+
+error[E0277]: the trait bound `not_a_navigation_guard::marker: NavigationGuard` is not satisfied
+  --> tests/ui/layout/fail/navigation_guard_marker_mismatch.rs:7:1
+   |
+ 7 | / #[layout(
+ 8 | |     "/dashboard/",
+ 9 | |     name = "dashboard",
+10 | |     navigation_guard = not_a_navigation_guard,
+11 | | )]
+   | |__^ unsatisfied trait bound
+   |
+help: the trait `NavigationGuard` is not implemented for `not_a_navigation_guard::marker`
+  --> tests/ui/layout/fail/navigation_guard_marker_mismatch.rs:4:2
+   |
+ 4 |     pub struct marker;
+   |     ^^^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `layout` (in Nightly builds, run with -Z macro-backtrace for more info)

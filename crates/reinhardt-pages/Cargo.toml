@@ -23,8 +23,11 @@ pages-full = ["msgpack", "web-sys-full"]
 static = []
 urls = []
 debug-hooks = []
-uuid = ["dep:uuid"]
-chrono = ["dep:chrono"]
+# Named model-form contracts always need these crates, so they are required
+# dependencies. These features remain as compatibility markers: `dep:uuid`
+# and `dep:chrono` are invalid once the crates are no longer optional.
+uuid = []
+chrono = []
 ast = []
 # Enables the `tests/integration/spa_navigation_e2e_test.rs` integration
 # test (Refs #4088). This is a marker feature: the actual test deps
@@ -181,9 +184,9 @@ inventory = { workspace = true }
 # Optional panic hook for readable WASM console errors (used by ClientLauncher)
 console_error_panic_hook = { version = "0.1", optional = true }
 
-# Optional type support for path parameters
-uuid = { version = "1.0", optional = true, features = ["std"] }
-chrono = { version = "0.4", optional = true, default-features = false, features = ["std"] }
+# Type support for path parameters and model form contracts
+uuid = { version = "1.0", features = ["std"] }
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 
 # Web APIs
 web-sys = { version = "0.3.83", features = [
@@ -324,6 +327,8 @@ serial_test = "3"
 trybuild = "1.0"
 rstest = { workspace = true }
 tempfile = { workspace = true }
+# Compile the real model attribute in the WASM model-form proof fixture.
+reinhardt-macros = { workspace = true }
 # `form!`'s `DateField` / `TimeField` / `DateTimeField` codegen emits bare
 # `chrono::Naive*` paths, so trybuild fixtures exercising those fields need
 # `chrono` resolvable in the generated fixture binary.
@@ -445,6 +450,11 @@ required-features = []
 [[test]]
 name = "route_loader_prefetch_wasm_test"
 path = "tests/wasm/route_loader_prefetch_wasm_test.rs"
+required-features = []
+
+[[test]]
+name = "navigation_guard_wasm_test"
+path = "tests/wasm/navigation_guard_wasm_test.rs"
 required-features = []
 
 [[test]]

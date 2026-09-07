@@ -1,0 +1,222 @@
+{
+  "files": [
+    {
+      "commit": "f562c5942c567e273dd02f350858db97189ec015",
+      "fixture_path": "tests/integration/tests/fixtures/migration_source/cloud/auth/0001_initial.rs",
+      "original_path": "dashboard/migrations/auth/0001_initial.rs",
+      "relative_path": "cloud/auth/0001_initial.rs",
+      "repository": "kent8192/reinhardt-cloud",
+      "sha256": "0586804457fb6e9f76ace49fedf4609e3eac323e9776fc3c9ca894bf087898e4"
+    },
+    {
+      "commit": "f562c5942c567e273dd02f350858db97189ec015",
+      "fixture_path": "tests/integration/tests/fixtures/migration_source/cloud/auth/0002_add_email_unique.rs",
+      "original_path": "dashboard/migrations/auth/0002_add_email_unique.rs",
+      "relative_path": "cloud/auth/0002_add_email_unique.rs",
+      "repository": "kent8192/reinhardt-cloud",
+      "sha256": "1032b91019d44fed16316a9fe412f25b9e964ca06c3d673e487d166d4d5f5f15"
+    },
+    {
+      "commit": "f562c5942c567e273dd02f350858db97189ec015",
+      "fixture_path": "tests/integration/tests/fixtures/migration_source/cloud/auth/0003_initial.rs",
+      "original_path": "dashboard/migrations/auth/0003_initial.rs",
+      "relative_path": "cloud/auth/0003_initial.rs",
+      "repository": "kent8192/reinhardt-cloud",
+      "sha256": "2d676aa437eb05f84c1074a08f4adfd79f01e378204d4b3593b126213644c8f8"
+    },
+    {
+      "commit": "f562c5942c567e273dd02f350858db97189ec015",
+      "fixture_path": "tests/integration/tests/fixtures/migration_source/cloud/auth/0004_add_email_verification_tokens.rs",
+      "original_path": "dashboard/migrations/auth/0004_add_email_verification_tokens.rs",
+      "relative_path": "cloud/auth/0004_add_email_verification_tokens.rs",
+      "repository": "kent8192/reinhardt-cloud",
+      "sha256": "d98fdd0ca99ffc4c8e3455daa2df42e0f392957b10adcdbaaaaf74e6a63bcc38"
+    },
+    {
+      "commit": "f562c5942c567e273dd02f350858db97189ec015",
+      "fixture_path": "tests/integration/tests/fixtures/migration_source/cloud/auth/0005_add_social_accounts.rs",
+      "original_path": "dashboard/migrations/auth/0005_add_social_accounts.rs",
+      "relative_path": "cloud/auth/0005_add_social_accounts.rs",
+      "repository": "kent8192/reinhardt-cloud",
+      "sha256": "10d7e2aa2d91ded806baa12f09e6173e2d58ebf6395a1fca258cd496ebe97264"
+    },
+    {
+      "commit": "f562c5942c567e273dd02f350858db97189ec015",
+      "fixture_path": "tests/integration/tests/fixtures/migration_source/cloud/auth/0006_add_social_account_token_metadata.rs",
+      "original_path": "dashboard/migrations/auth/0006_add_social_account_token_metadata.rs",
+      "relative_path": "cloud/auth/0006_add_social_account_token_metadata.rs",
+      "repository": "kent8192/reinhardt-cloud",
+      "sha256": "640880b2a2b78e81cdad9a5ee657966faffef0d53e1437f46c6d8668e03786d7"
+    },
+    {
+      "commit": "f562c5942c567e273dd02f350858db97189ec015",
+      "fixture_path": "tests/integration/tests/fixtures/migration_source/cloud/auth/0007_add_api_keys.rs",
+      "original_path": "dashboard/migrations/auth/0007_add_api_keys.rs",
+      "relative_path": "cloud/auth/0007_add_api_keys.rs",
+      "repository": "kent8192/reinhardt-cloud",
+      "sha256": "35885ece7675c3049b8465ca43d0ae1583692a3ec321af9e0d670cf351794a05"
+    },
+    {
+      "commit": "f562c5942c567e273dd02f350858db97189ec015",
+      "fixture_path": "tests/integration/tests/fixtures/migration_source/cloud/clusters/0001_initial.rs",
+      "original_path": "dashboard/migrations/clusters/0001_initial.rs",
+      "relative_path": "cloud/clusters/0001_initial.rs",
+      "repository": "kent8192/reinhardt-cloud",
+      "sha256": "7d26b8f8c66bb2faa21a958346dff074beca5d8173cc1a9acd0bf85d71c1becb"
+    },
+    {
+      "commit": "f562c5942c567e273dd02f350858db97189ec015",
+      "fixture_path": "tests/integration/tests/fixtures/migration_source/cloud/clusters/0002_add_user_id.rs",
+      "original_path": "dashboard/migrations/clusters/0002_add_user_id.rs",
+      "relative_path": "cloud/clusters/0002_add_user_id.rs",
+      "repository": "kent8192/reinhardt-cloud",
+      "sha256": "3f22726028956d95326772f7598589e77ca311ad4772e2a0f7afcfde96e875a2"
+    },
+    {
+      "commit": "f562c5942c567e273dd02f350858db97189ec015",
+      "fixture_path": "tests/integration/tests/fixtures/migration_source/cloud/clusters/0003_add_token_hash.rs",
+      "original_path": "dashboard/migrations/clusters/0003_add_token_hash.rs",
+      "relative_path": "cloud/clusters/0003_add_token_hash.rs",
+      "repository": "kent8192/reinhardt-cloud",
+      "sha256": "ad4a649d5b062e221983ac3069203a8dc21c091488e03e18800cb04aad694ea0"
+    },
+    {
+      "commit": "f562c5942c567e273dd02f350858db97189ec015",
+      "fixture_path": "tests/integration/tests/fixtures/migration_source/cloud/clusters/0004_replace_user_id_with_organization_id.rs",
+      "original_path": "dashboard/migrations/clusters/0004_replace_user_id_with_organization_id.rs",
+      "relative_path": "cloud/clusters/0004_replace_user_id_with_organization_id.rs",
+      "repository": "kent8192/reinhardt-cloud",
+      "sha256": "fefcd7568d107164d7bd5290598e84161db973b89f4bb72942c26394ce7c6e1b"
+    },
+    {
+      "commit": "f562c5942c567e273dd02f350858db97189ec015",
+      "fixture_path": "tests/integration/tests/fixtures/migration_source/cloud/clusters/0005_add_constraint_clusters.rs",
+      "original_path": "dashboard/migrations/clusters/0005_add_constraint_clusters.rs",
+      "relative_path": "cloud/clusters/0005_add_constraint_clusters.rs",
+      "repository": "kent8192/reinhardt-cloud",
+      "sha256": "f39b17524a02d5ec9879637d5ca33e95b723458d7f3c71656fce1d58caa26b04"
+    },
+    {
+      "commit": "f562c5942c567e273dd02f350858db97189ec015",
+      "fixture_path": "tests/integration/tests/fixtures/migration_source/cloud/default/0001_initial.rs",
+      "original_path": "dashboard/migrations/default/0001_initial.rs",
+      "relative_path": "cloud/default/0001_initial.rs",
+      "repository": "kent8192/reinhardt-cloud",
+      "sha256": "294b9ff6d20407d928147f887d957ff5570c63b777493e045047e519a5fc7cfe"
+    },
+    {
+      "commit": "f562c5942c567e273dd02f350858db97189ec015",
+      "fixture_path": "tests/integration/tests/fixtures/migration_source/cloud/deployments/0001_initial.rs",
+      "original_path": "dashboard/migrations/deployments/0001_initial.rs",
+      "relative_path": "cloud/deployments/0001_initial.rs",
+      "repository": "kent8192/reinhardt-cloud",
+      "sha256": "aeb6b6cbd97174b53f389c2e333ba7a8feab8b733eb86d26aede40bb864927ee"
+    },
+    {
+      "commit": "f562c5942c567e273dd02f350858db97189ec015",
+      "fixture_path": "tests/integration/tests/fixtures/migration_source/cloud/deployments/0002_add_user_id.rs",
+      "original_path": "dashboard/migrations/deployments/0002_add_user_id.rs",
+      "relative_path": "cloud/deployments/0002_add_user_id.rs",
+      "repository": "kent8192/reinhardt-cloud",
+      "sha256": "f77837751e5e7c121ececa075625dcab6d5a992206e03189bc2c735acf870b06"
+    },
+    {
+      "commit": "f562c5942c567e273dd02f350858db97189ec015",
+      "fixture_path": "tests/integration/tests/fixtures/migration_source/cloud/deployments/0003_add_cluster_id_fk.rs",
+      "original_path": "dashboard/migrations/deployments/0003_add_cluster_id_fk.rs",
+      "relative_path": "cloud/deployments/0003_add_cluster_id_fk.rs",
+      "repository": "kent8192/reinhardt-cloud",
+      "sha256": "8a107fd576d81cd954dfa69cd54cd3fb56c439902779c6709e7921499358b014"
+    },
+    {
+      "commit": "f562c5942c567e273dd02f350858db97189ec015",
+      "fixture_path": "tests/integration/tests/fixtures/migration_source/cloud/deployments/0004_replace_user_id_with_organization_id.rs",
+      "original_path": "dashboard/migrations/deployments/0004_replace_user_id_with_organization_id.rs",
+      "relative_path": "cloud/deployments/0004_replace_user_id_with_organization_id.rs",
+      "repository": "kent8192/reinhardt-cloud",
+      "sha256": "cc9035e273152532c621da4cc483232b8aeade69ad4373b3411131f88d698cf4"
+    },
+    {
+      "commit": "f562c5942c567e273dd02f350858db97189ec015",
+      "fixture_path": "tests/integration/tests/fixtures/migration_source/cloud/deployments/0005_add_reinhardt_app_yaml.rs",
+      "original_path": "dashboard/migrations/deployments/0005_add_reinhardt_app_yaml.rs",
+      "relative_path": "cloud/deployments/0005_add_reinhardt_app_yaml.rs",
+      "repository": "kent8192/reinhardt-cloud",
+      "sha256": "17b0dc432ca8db959551f2a167ecf077d9ee8b4c02b9b8dd39af33291f869b2f"
+    },
+    {
+      "commit": "f562c5942c567e273dd02f350858db97189ec015",
+      "fixture_path": "tests/integration/tests/fixtures/migration_source/cloud/deployments/0006_rename_deployments_project_name_rename_depl_and_more.rs",
+      "original_path": "dashboard/migrations/deployments/0006_rename_deployments_project_name_rename_depl_and_more.rs",
+      "relative_path": "cloud/deployments/0006_rename_deployments_project_name_rename_depl_and_more.rs",
+      "repository": "kent8192/reinhardt-cloud",
+      "sha256": "15b8d9e56774324c713c07ac9a65e7ebac67a54ad3843b37612ac448f687c878"
+    },
+    {
+      "commit": "f562c5942c567e273dd02f350858db97189ec015",
+      "fixture_path": "tests/integration/tests/fixtures/migration_source/cloud/github/0001_initial.rs",
+      "original_path": "dashboard/migrations/github/0001_initial.rs",
+      "relative_path": "cloud/github/0001_initial.rs",
+      "repository": "kent8192/reinhardt-cloud",
+      "sha256": "428d890732fd07150c29784888991879b064a6b8ebe6fd5c20e67504ad99db0e"
+    },
+    {
+      "commit": "f562c5942c567e273dd02f350858db97189ec015",
+      "fixture_path": "tests/integration/tests/fixtures/migration_source/cloud/github/0002_rename_github_projects_project_name_alter_g_and_more.rs",
+      "original_path": "dashboard/migrations/github/0002_rename_github_projects_project_name_alter_g_and_more.rs",
+      "relative_path": "cloud/github/0002_rename_github_projects_project_name_alter_g_and_more.rs",
+      "repository": "kent8192/reinhardt-cloud",
+      "sha256": "d99ada6b33515af6171f98eba5e05cd688eac9a6b43b6e3c2793d281e502b3a0"
+    },
+    {
+      "commit": "f562c5942c567e273dd02f350858db97189ec015",
+      "fixture_path": "tests/integration/tests/fixtures/migration_source/cloud/organizations/0001_initial.rs",
+      "original_path": "dashboard/migrations/organizations/0001_initial.rs",
+      "relative_path": "cloud/organizations/0001_initial.rs",
+      "repository": "kent8192/reinhardt-cloud",
+      "sha256": "850894120be02b3a5d94d0b9a7de9f2ff9ea60c578a80d1b5840199fe26f6765"
+    },
+    {
+      "commit": "f562c5942c567e273dd02f350858db97189ec015",
+      "fixture_path": "tests/integration/tests/fixtures/migration_source/cloud/organizations/0002_organizations_created_by_alter_organization_and_more.rs",
+      "original_path": "dashboard/migrations/organizations/0002_organizations_created_by_alter_organization_and_more.rs",
+      "relative_path": "cloud/organizations/0002_organizations_created_by_alter_organization_and_more.rs",
+      "repository": "kent8192/reinhardt-cloud",
+      "sha256": "84cebc90a4254603daf8294dd873098bbca5ac0aedf3d2c0ad0fbb3f306c2b21"
+    },
+    {
+      "commit": "46033a5937dbd2e5f7cfdeea1cd2ef96d65cf834",
+      "fixture_path": "crates/reinhardt-db/tests/fixtures/migration_source/v0_1_4/twitter/auth/0001_initial.rs",
+      "original_path": "crates/reinhardt-db/tests/fixtures/migration_source/v0_1_4/twitter/auth/0001_initial.rs",
+      "relative_path": "twitter/auth/0001_initial.rs",
+      "repository": "kent8192/reinhardt-web",
+      "sha256": "dfb31e95d08588038a2e66c56f2665e9203568d6a1b2280ba298b17589656f91"
+    },
+    {
+      "commit": "46033a5937dbd2e5f7cfdeea1cd2ef96d65cf834",
+      "fixture_path": "crates/reinhardt-db/tests/fixtures/migration_source/v0_1_4/twitter/dm/0001_initial.rs",
+      "original_path": "crates/reinhardt-db/tests/fixtures/migration_source/v0_1_4/twitter/dm/0001_initial.rs",
+      "relative_path": "twitter/dm/0001_initial.rs",
+      "repository": "kent8192/reinhardt-web",
+      "sha256": "40d2c453ad54984c43350a4b2a2ac292c53904c928567ccbfb62591e75ddf369"
+    },
+    {
+      "commit": "46033a5937dbd2e5f7cfdeea1cd2ef96d65cf834",
+      "fixture_path": "crates/reinhardt-db/tests/fixtures/migration_source/v0_1_4/twitter/profile/0001_initial.rs",
+      "original_path": "crates/reinhardt-db/tests/fixtures/migration_source/v0_1_4/twitter/profile/0001_initial.rs",
+      "relative_path": "twitter/profile/0001_initial.rs",
+      "repository": "kent8192/reinhardt-web",
+      "sha256": "e3322107a52cf3f9f927ea0488ab10536b2aae7dcd2448e7565ce8562dd56c42"
+    },
+    {
+      "commit": "46033a5937dbd2e5f7cfdeea1cd2ef96d65cf834",
+      "fixture_path": "crates/reinhardt-db/tests/fixtures/migration_source/v0_1_4/twitter/tweet/0001_initial.rs",
+      "original_path": "crates/reinhardt-db/tests/fixtures/migration_source/v0_1_4/twitter/tweet/0001_initial.rs",
+      "relative_path": "twitter/tweet/0001_initial.rs",
+      "repository": "kent8192/reinhardt-web",
+      "sha256": "11a73baf76e73602541fca84d9dace005dec0d39a6aca1376bbeb8a88e1ffc47"
+    }
+  ],
+  "framework_commit": "0790cf420cf803a428b704c4711f59ac427dacae",
+  "oracle_lock_sha256": "2f686ef49af90c776a00ece56dbcedf483aeb62c17de2ef3cae43d7515fd5a3e"
+}

@@ -450,3 +450,128 @@ async fn execute_outside_project_root_errors_before_writing() {
 		"project-root guard must run before creating migration files"
 	);
 }
+
+#[rstest]
+#[tokio::test]
+#[serial(command_current_dir)]
+async fn upgraded_legacy_history_preserves_independent_model_check() {
+	use reinhardt_db::backends::DatabaseConnection;
+	use reinhardt_db::migrations::{
+		DatabaseMigrationExecutor, FilesystemSource, MigrationSource, upgrade_source,
+	};
+
+	const BASELINE: &str = r#"// reinhardt-migration-source: 1
+fn migration() -> Migration {
+    Migration::new("0001_initial", "legacy").add_operation(Operation::CreateTable {
+        name: "items".to_string(),
+        columns: vec![ColumnDefinition::new("name", FieldType::Text)],
+        constraints: vec![], without_rowid: None,
+        partition: None, interleave_in_parent: None,
+    })
+}
+"#;
+	const ORIGINAL: &str = r#"fn migration() -> Migration {
+    Migration::new("0001_initial", "legacy")
+        .add_operation(Operation::CreateTable {
+            name: "items".to_string(),
+            columns: vec![
+                ColumnDefinition {
+                    name: "name".to_string(), type_definition: FieldType::Text,
+                    not_null: false, unique: false, primary_key: false,
+                    auto_increment: false, default: None,
+                },
+                ColumnDefinition {
+                    name: "obsolete".to_string(), type_definition: FieldType::Integer,
+                    not_null: false, unique: false, primary_key: false,
+                    auto_increment: false, default: None,
+                },
+            ],
+            constraints: vec![], without_rowid: None,
+            partition: None, interleave_in_parent: None,
+        })
+        .add_operation(Operation::DropColumn {
+            table: "items".into(), column: "obsolete".into(),
+        })
+}
+"#;
+
+	// Arrange: the model metadata is authored independently of migration replay.
+	let _registry = ModelRegistryGuard::clear();
+	let project_dir = create_project_root();
+	let _cwd = ProjectDirGuard::enter(project_dir.path());
+	let migrations_dir = project_dir.path().join("migrations");
+	let app_dir = migrations_dir.join("legacy");
+	std::fs::create_dir_all(&app_dir).expect("legacy migration directory should be created");
+	let path = app_dir.join("0001_initial.rs");
+	let mut model = ModelMetadata::new("legacy", "Items", "items");
+	model.add_field(
+		"name".into(),
+		FieldMetadata::new(FieldType::Text).with_nullable(true),
+	);
+	global_registry().register_model(model.clone());
+	let mut ctx = makemigrations_context(Some("legacy"), &migrations_dir);
+	ctx.set_option("check".into(), "true".into());
+
+	std::fs::write(&path, BASELINE).expect("current baseline should be written");
+	MakeMigrationsCommand
+		.execute(&ctx)
+		.await
+		.expect("independently authored current baseline has zero drift");
+	assert_eq!(
+		migration_file_names(&migrations_dir, "legacy"),
+		vec!["0001_initial.rs"]
+	);
+	assert_eq!(
+		std::fs::read(&path).expect("current baseline should be readable"),
+		BASELINE.as_bytes()
+	);
+
+	// Act: convert the different historical representation and apply it.
+	let upgraded = upgrade_source(ORIGINAL).expect("legacy source should upgrade");
+	std::fs::write(&path, &upgraded.source).expect("upgraded source should be written");
+	let migrations = FilesystemSource::new(&migrations_dir)
+		.all_migrations()
+		.await
+		.expect("upgraded source should load through the public source API");
+	assert_eq!(migrations.len(), 1);
+	let connection = DatabaseConnection::connect_sqlite("sqlite::memory:")
+		.await
+		.expect("SQLite connection should open");
+	let applied = DatabaseMigrationExecutor::new(connection)
+		.apply_migrations(&migrations)
+		.await
+		.expect("upgraded migration should apply");
+	assert_eq!(applied.failed, None);
+	assert_eq!(applied.applied.len(), 1);
+	MakeMigrationsCommand
+		.execute(&ctx)
+		.await
+		.expect("unchanged independent model stays at zero drift");
+	assert_eq!(
+		std::fs::read(&path).expect("upgraded source should remain readable"),
+		upgraded.source.as_bytes()
+	);
+
+	// Assert: a real model change fails the identical check without writing.
+	model.add_field(
+		"extra".into(),
+		FieldMetadata::new(FieldType::Integer).with_nullable(true),
+	);
+	global_registry().register_model(model);
+	let error = MakeMigrationsCommand
+		.execute(&ctx)
+		.await
+		.expect_err("adding a field should require exactly one migration");
+	assert_eq!(
+		error.to_string(),
+		"Execution error: 1 migration(s) would be created"
+	);
+	assert_eq!(
+		migration_file_names(&migrations_dir, "legacy"),
+		vec!["0001_initial.rs"]
+	);
+	assert_eq!(
+		std::fs::read(&path).expect("check mode should preserve the upgraded source"),
+		upgraded.source.as_bytes()
+	);
+}

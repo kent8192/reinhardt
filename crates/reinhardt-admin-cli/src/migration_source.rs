@@ -380,6 +380,80 @@ mod tests {
 	use super::*;
 	use rstest::rstest;
 
+	const LEGACY_DROP_COLUMN: &str = r#"fn migration() -> Migration {
+    Migration::new("0002_remove_owner", "app").add_operation(Operation::DropColumn {
+        table: "items".into(), column: "owner_id".into()
+    })
+}
+"#;
+
+	#[test]
+	fn legacy_drop_column_check_upgrade_and_repeat() {
+		let directory = tempfile::tempdir().unwrap();
+		let path = directory.path().join("0002_remove_owner.rs");
+		fs::write(&path, LEGACY_DROP_COLUMN).unwrap();
+
+		let error = run(UpgradeSourceArgs {
+			path: directory.path().into(),
+			check: true,
+		})
+		.unwrap_err();
+		assert_eq!(
+			error.to_string(),
+			MigrationSourceError::Preflight("1 migration source file(s) require upgrade".into())
+				.to_string()
+		);
+		assert_eq!(fs::read(&path).unwrap(), LEGACY_DROP_COLUMN.as_bytes());
+		run(UpgradeSourceArgs {
+			path: directory.path().into(),
+			check: false,
+		})
+		.unwrap();
+		let upgraded = fs::read(&path).unwrap();
+		assert_ne!(upgraded, LEGACY_DROP_COLUMN.as_bytes());
+		for check in [true, false] {
+			run(UpgradeSourceArgs {
+				path: directory.path().into(),
+				check,
+			})
+			.unwrap();
+			assert_eq!(fs::read(&path).unwrap(), upgraded);
+		}
+		assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+	}
+
+	#[rstest]
+	#[case::check(true)]
+	#[case::write(false)]
+	fn malformed_current_drop_column_prevents_all_writes(#[case] check: bool) {
+		let directory = tempfile::tempdir().unwrap();
+		let valid = directory.path().join("0001_legacy.rs");
+		let invalid = directory.path().join("0002_inconsistent.rs");
+		let inconsistent = format!("// reinhardt-migration-source: 1\n{LEGACY_DROP_COLUMN}");
+		fs::write(&valid, LEGACY_DROP_COLUMN).unwrap();
+		fs::write(&invalid, &inconsistent).unwrap();
+		let before = [fs::read(&valid).unwrap(), fs::read(&invalid).unwrap()];
+
+		let error = run(UpgradeSourceArgs {
+			path: directory.path().into(),
+			check,
+		})
+		.unwrap_err();
+
+		assert_eq!(
+			error.to_string(),
+			MigrationSourceError::Preflight(
+				"0002_inconsistent.rs: Invalid migration: source format marker is current but legacy struct-literal syntax remains".into()
+			)
+			.to_string()
+		);
+		assert_eq!(
+			[fs::read(&valid).unwrap(), fs::read(&invalid).unwrap()],
+			before
+		);
+		assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 2);
+	}
+
 	#[test]
 	fn check_reports_drift_without_writing() {
 		let directory = tempfile::tempdir().expect("temporary directory");

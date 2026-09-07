@@ -175,6 +175,8 @@ Stable native widget coverage includes the following `form!` DSL items:
 |---|---|---|
 | `MonthInput` | `<input type="month">` | string field |
 | `WeekInput` | `<input type="week">` | string field |
+| `RadioInput` | one `<input type="radio">` | `ChoiceField<String>` |
+| `RadioSelect` | a group of `<input type="radio">` controls | choice field |
 | `ResetButton` | `<button type="reset">` | none |
 | `Button` | `<button type="button">` | none |
 | `ImageInput` | `<input type="image">` | none |
@@ -183,6 +185,23 @@ Stable native widget coverage includes the following `form!` DSL items:
 | `Output` | `<output>` | none |
 | `Meter` | `<meter>` | none |
 | `Progress` | `<progress>` | none |
+
+`RadioInput` is one radio button for a string-valued `ChoiceField`, with the
+field's name and ID. Its option value is `"on"` by default; supply exactly one
+static option, such as `choices: [("yes", "Yes")]`, to choose another value.
+The associated label uses the field label, the option label, or the field name,
+in that order. An option marked `disabled` disables the control. Empty or
+multiple options, grouped options, dynamic choices, and other field types are
+rejected. Use `RadioSelect` with `choices_from` for a radio group and
+`CheckboxInput` for a boolean value.
+
+The single radio is checked when the field value equals the option value. On
+WASM, selecting it updates the field; an unchecked change event leaves the
+value unchanged. Programmatic signal updates and runtime `reset()` synchronize
+the checked state, with reset restoring the current defaults. Clicking a
+selected radio does not clear it. Scalar fields also follow native form resets,
+restoring the values captured when the page was created. For scalar fields,
+`bind: false` renders the current value without installing two-way binding.
 
 Typed native attributes are accepted for the controls that support them:
 

@@ -1,0 +1,5 @@
+error: RadioInput is only supported on ChoiceField<String>
+ --> tests/ui/form/fail/radio_input_integer_field.rs:8:4
+  |
+8 |             answer: IntegerField {
+  |             ^^^^^^

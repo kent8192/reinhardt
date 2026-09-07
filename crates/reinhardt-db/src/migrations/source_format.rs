@@ -340,6 +340,9 @@ fn outermost_target_structs(expression: &Expr) -> Vec<ExprStruct> {
 }
 
 fn is_target_struct(expression: &ExprStruct) -> bool {
+	if is_legacy_drop_column(expression) {
+		return true;
+	}
 	let Some(name) = expression
 		.path
 		.segments
@@ -384,6 +387,47 @@ fn is_target_struct(expression: &ExprStruct) -> bool {
 		)
 }
 
+fn is_legacy_drop_column(expression: &ExprStruct) -> bool {
+	if optional_field_expression(expression, "old_definition").is_some() {
+		return false;
+	}
+	is_drop_column(expression)
+}
+
+fn is_drop_column(expression: &ExprStruct) -> bool {
+	let paths: &[&[&str]] = &[
+		&["Operation", "DropColumn"],
+		&["reinhardt", "db", "migrations", "Operation", "DropColumn"],
+		&[
+			"reinhardt",
+			"db",
+			"migrations",
+			"operations",
+			"Operation",
+			"DropColumn",
+		],
+		&["reinhardt_db", "migrations", "Operation", "DropColumn"],
+		&[
+			"reinhardt_db",
+			"migrations",
+			"operations",
+			"Operation",
+			"DropColumn",
+		],
+		&["crate", "migrations", "Operation", "DropColumn"],
+		&[
+			"crate",
+			"migrations",
+			"operations",
+			"Operation",
+			"DropColumn",
+		],
+	];
+	paths
+		.iter()
+		.any(|path| path_matches(&expression.path, path))
+}
+
 fn path_matches(path: &syn::Path, expected: &[&str]) -> bool {
 	path.segments.len() == expected.len()
 		&& path
@@ -402,6 +446,7 @@ fn convert_struct(expression: &ExprStruct) -> Result<TokenStream> {
 		.ok_or_else(|| invalid_shape("generated struct literal has no type name"))?;
 	match name.as_str() {
 		"Migration" => convert_migration(expression),
+		"DropColumn" if is_legacy_drop_column(expression) => convert_drop_column(expression),
 		"PartitionDef" => convert_partition_def(expression),
 		"InterleaveSpec" => convert_interleave_spec(expression),
 		"ColumnDefinition" => convert_column_definition(expression),
@@ -409,6 +454,52 @@ fn convert_struct(expression: &ExprStruct) -> Result<TokenStream> {
 		"BulkLoadOptions" => convert_bulk_load_options(expression),
 		_ => Err(invalid_shape("unsupported generated struct literal")),
 	}
+}
+
+fn convert_drop_column(expression: &ExprStruct) -> Result<TokenStream> {
+	if !expression.attrs.is_empty()
+		|| expression.qself.is_some()
+		|| expression
+			.path
+			.segments
+			.iter()
+			.any(|segment| !matches!(segment.arguments, syn::PathArguments::None))
+	{
+		return Err(invalid_shape(
+			"legacy DropColumn has unsupported attributes or type syntax",
+		));
+	}
+	validate_fields(expression, &["table", "column"])?;
+	field_expression(expression, "table")?;
+	field_expression(expression, "column")?;
+	let mut normalized = expression.clone();
+	for field in &mut normalized.fields {
+		if matches!(&field.member, syn::Member::Named(member) if member == "table" || member == "column")
+		{
+			field.expr = normalize_legacy_drop_column_string(field.expr.clone());
+		}
+	}
+	normalized
+		.fields
+		.push(syn::parse_quote!(old_definition: None));
+	Ok(quote!(#normalized))
+}
+
+fn normalize_legacy_drop_column_string(expression: Expr) -> Expr {
+	if let Expr::MethodCall(ref call) = expression
+		&& call.method == "into"
+		&& call.args.is_empty()
+		&& matches!(
+			&*call.receiver,
+			Expr::Lit(syn::ExprLit {
+				lit: syn::Lit::Str(_),
+				..
+			})
+		) {
+		let receiver = &call.receiver;
+		return syn::parse_quote!(#receiver.to_string());
+	}
+	expression
 }
 
 fn convert_migration(expression: &ExprStruct) -> Result<TokenStream> {
@@ -1646,5 +1737,165 @@ fn migration() -> Migration {
 		assert!(!is_target_struct(&nested_application));
 		assert!(is_target_struct(&framework));
 		assert!(is_target_struct(&framework_module));
+	}
+
+	#[rstest]
+	#[case::unversioned("", None)]
+	#[case::format_zero("// reinhardt-migration-source: 0\n", Some(0))]
+	fn upgrades_legacy_drop_column(#[case] prefix: &str, #[case] from_version: Option<u32>) {
+		use super::super::{Operation, ast_parser::extract_migration_metadata_strict};
+
+		let paths = [
+			"Operation::DropColumn",
+			"reinhardt::db::migrations::Operation::DropColumn",
+			"::reinhardt::db::migrations::operations::Operation::DropColumn",
+			"reinhardt_db::migrations::Operation::DropColumn",
+			"reinhardt_db::migrations::operations::Operation::DropColumn",
+			"crate::migrations::Operation::DropColumn",
+			"crate::migrations::operations::Operation::DropColumn",
+		];
+		for path in paths {
+			let source = format!(
+				r#"{prefix}fn migration() -> Migration {{
+    Migration::new("0002_remove_owner", "app")
+        .add_dependency("app", "0001_initial")
+        .add_operation({path} {{
+            table: "items".into(),
+            // Preserve the historical absence of an explicit definition.
+            column: "owner_id".into(),
+        }})
+}}
+fn unrelated() -> u32 {{ 7 }}
+"#
+			);
+
+			let upgraded = upgrade_source(&source).expect("legacy DropColumn upgrades");
+			let migration = extract_migration_metadata_strict(
+				&syn::parse_file(&upgraded.source).unwrap(),
+				"app",
+				"0002_remove_owner",
+			)
+			.unwrap();
+
+			assert_eq!(upgraded.changed, true);
+			assert_eq!(upgraded.from_version, from_version);
+			assert_eq!(upgraded.to_version, 1);
+			assert_eq!(
+				migration.dependencies,
+				vec![("app".into(), "0001_initial".into())]
+			);
+			assert_eq!(
+				migration.operations,
+				vec![Operation::DropColumn {
+					table: "items".into(),
+					column: "owner_id".into(),
+					old_definition: None,
+				}]
+			);
+			assert!(upgraded.source.contains("table : \"items\" . to_string ()"));
+			assert!(
+				upgraded
+					.source
+					.contains("column : \"owner_id\" . to_string ()")
+			);
+			assert_eq!(
+				upgraded
+					.source
+					.matches("// Preserve the historical absence of an explicit definition.")
+					.count(),
+				1
+			);
+			assert_eq!(
+				upgraded.source.lines().last(),
+				Some("fn unrelated() -> u32 { 7 }")
+			);
+			let repeated = upgrade_source(&upgraded.source).unwrap();
+			assert_eq!(repeated.changed, false);
+			assert_eq!(repeated.source, upgraded.source);
+		}
+	}
+
+	#[test]
+	fn preserves_explicit_drop_column_definitions() {
+		use super::super::{ColumnDefinition, FieldType, Operation};
+		let cases = [
+			("None", None),
+			(
+				r#"Some(ColumnDefinition {
+                name: "owner_id".to_string(), type_definition: FieldType::Uuid,
+                not_null: true, unique: false, primary_key: false,
+                auto_increment: false, default: None,
+            })"#,
+				Some(ColumnDefinition::new("owner_id", FieldType::Uuid).with_not_null(true)),
+			),
+		];
+		for (value, expected) in cases {
+			let source = format!(
+				r#"fn migration() -> Migration {{
+                Migration::new("0002_remove_owner", "app")
+                    .add_operation(Operation::DropColumn {{
+                        table: "items".to_string(), column: "owner_id".to_string(),
+                        old_definition: {value},
+                    }})
+            }}"#
+			);
+			let upgraded = upgrade_source(&source).unwrap();
+			let migration = super::super::ast_parser::extract_migration_metadata_strict(
+				&syn::parse_file(&upgraded.source).unwrap(),
+				"app",
+				"0002_remove_owner",
+			)
+			.unwrap();
+			assert_eq!(
+				migration.operations,
+				vec![Operation::DropColumn {
+					table: "items".into(),
+					column: "owner_id".into(),
+					old_definition: expected,
+				}]
+			);
+			let repeated = upgrade_source(&upgraded.source).unwrap();
+			assert_eq!(repeated.changed, false);
+			assert_eq!(repeated.source, upgraded.source);
+		}
+	}
+
+	#[test]
+	fn rejects_malformed_legacy_drop_column() {
+		let fields = [
+			r#"table: "items".into()"#,
+			r#"column: "owner_id".into()"#,
+			r#"table: "items".into(), column: "owner_id".into(), extra: true"#,
+			r#"table: "items".into(), table: "other".into(), column: "owner_id".into()"#,
+			r#"table: "items".into(), #[cfg(any())] column: "owner_id".into()"#,
+			r#"table: "items".into(), column: "owner_id".into(), ..previous"#,
+		];
+		for fields in fields {
+			let source = format!(
+				"fn migration() -> Migration {{ Migration::new(\"0002\", \"app\")\
+             .add_operation(Operation::DropColumn {{ {fields} }}) }}"
+			);
+			assert_eq!(upgrade_source(&source).is_err(), true, "{source}");
+		}
+		let incomplete = r#"fn migration() -> Migration {
+        Migration::new("0002", "app").add_operation(Operation::DropColumn {
+            table: "items".into(), column: "owner_id".into()
+        })
+    }"#;
+		let current = format!("// reinhardt-migration-source: 1\n{incomplete}");
+		assert_eq!(
+			upgrade_source(&current).unwrap_err().to_string(),
+			"Invalid migration: source format marker is current but legacy struct-literal syntax remains"
+		);
+		let unknown_path = incomplete.replace("Operation::DropColumn", "application::DropColumn");
+		assert_eq!(upgrade_source(&unknown_path).is_err(), true);
+		for unsupported in [
+			"#[cfg(any())] Operation::DropColumn",
+			"Operation::<()>::DropColumn",
+			"<Operation as Trait>::DropColumn",
+		] {
+			let source = incomplete.replace("Operation::DropColumn", unsupported);
+			assert_eq!(upgrade_source(&source).is_err(), true, "{source}");
+		}
 	}
 }

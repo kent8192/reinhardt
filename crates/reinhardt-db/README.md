@@ -54,6 +54,14 @@ reinhardt-admin migrations upgrade-source --check migrations
 `--check` performs a preflight and exits unsuccessfully when conversion is
 needed; neither form opens a database connection.
 
+Pre-0.4 generated `DropColumn` operations without `old_definition` are upgraded
+with `old_definition: None`. Explicit definitions retain their meaning; the
+existing rollback path can recover a missing definition from prior migration
+state. A current-format file missing a required field is rejected. Install a
+compatible admin CLI, upgrade and review migration source, then update the
+application dependency and validate compilation, migration application, and
+`makemigrations --check` against unchanged models.
+
 - **Pool**: Connection pool management
   - Database connection pooling
   - Connection lifecycle management

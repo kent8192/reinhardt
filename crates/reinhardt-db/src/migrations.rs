@@ -129,6 +129,15 @@
 //! `reinhardt-admin migrations upgrade-source migrations`; add `--check` to
 //! fail when any file still needs conversion. The upgrader edits only known
 //! generated spans and leaves surrounding application code and comments intact.
+//!
+//! Pre-0.4 generated `DropColumn` operations without `old_definition` are
+//! upgraded with `old_definition: None`. Explicit definitions retain their
+//! meaning; the existing rollback path can recover a missing definition from
+//! prior migration state. A current-format file missing a required field is
+//! rejected. Install a compatible admin CLI, upgrade and review migration
+//! source, then update the application dependency and validate compilation,
+//! migration application, and `makemigrations --check` against unchanged
+//! models.
 
 pub mod ast_parser;
 pub mod auto_migration;

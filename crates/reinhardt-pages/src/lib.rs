@@ -95,6 +95,13 @@
 //! tracked for dirty/touched state without treating the file payload as a
 //! serializable scalar.
 //!
+//! Generated native HTML includes current field values, checkbox state, textarea
+//! content, and selected options. Bound controls synchronize signal updates and
+//! runtime reset through their existing DOM nodes. `bind: false` renders only
+//! a value snapshot without ongoing synchronization. File inputs remain clear-only for
+//! programmatic updates. Optional temporal/UUID/IP values render empty for
+//! `None`; datetime-local uses `T`, and JSON values use compact serialization.
+//!
 //! Stable native widget coverage includes the following `form!` DSL items:
 //!
 //! | DSL item | HTML output | Value state |

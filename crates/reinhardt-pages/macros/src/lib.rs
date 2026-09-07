@@ -1475,8 +1475,20 @@ pub fn head(input: TokenStream) -> TokenStream {
 ///
 /// ## Two-way Binding
 ///
-/// Control automatic @input handler generation with the `bind` property.
-/// Default is `true` (automatic binding enabled).
+/// The `bind` property controls both DOM-to-signal events and signal-to-DOM
+/// synchronization. It defaults to `true`. Signal changes and runtime reset
+/// update existing controls without replacing them. Native HTML includes the
+/// current value, checked state, textarea content, and selected options.
+/// `bind: false` renders a value snapshot with no ongoing binding. Ordinary and
+/// grouped fields snapshot in `into_page()`; collections snapshot when rows render.
+/// File/image controls never serialize a value or accept a programmatic file
+/// selection; setting their signal to `None` clears the mounted input.
+///
+/// Strings and numbers use their display values, optional date/time/UUID/IP
+/// values render empty for `None`, datetime-local uses `T` with fractional
+/// seconds when present, and JSON uses compact serialization. Month/week
+/// widgets accept string values in native HTML syntax. Native browser value
+/// constraints still apply; rejected typed edits keep the prior Rust value.
 ///
 /// ```ignore
 /// fields: {

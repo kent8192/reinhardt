@@ -21,10 +21,14 @@
 //! let html = view.render_to_string();
 //! ```
 
+#[doc(hidden)]
+pub mod control_binding;
 pub mod event;
 pub mod head;
 mod util;
 
+#[doc(hidden)]
+pub use control_binding::{ControlBinding, ControlKind, ControlValue};
 pub use event::EventType;
 pub use head::{Head, LinkTag, MetaTag, ScriptTag, StyleTag};
 pub(crate) use util::html_escape;
@@ -252,6 +256,8 @@ pub struct PageElement {
 	is_void: bool,
 	/// Event handlers attached to this element.
 	event_handlers: Vec<(EventType, PageEventHandler)>,
+	/// A generated form control's retained state binding.
+	control_binding: Option<ControlBinding>,
 }
 
 impl std::fmt::Debug for PageElement {
@@ -262,6 +268,7 @@ impl std::fmt::Debug for PageElement {
 			.field("children", &self.children)
 			.field("is_void", &self.is_void)
 			.field("event_handlers_count", &self.event_handlers.len())
+			.field("control_binding", &self.control_binding)
 			.finish()
 	}
 }
@@ -291,6 +298,7 @@ impl PageElement {
 			children: Vec::new(),
 			is_void,
 			event_handlers: Vec::new(),
+			control_binding: None,
 		}
 	}
 
@@ -374,6 +382,19 @@ impl PageElement {
 	pub fn on(mut self, event_type: EventType, handler: PageEventHandler) -> Self {
 		self.event_handlers.push((event_type, handler));
 		self
+	}
+
+	/// Attaches the retained state binding used by generated form controls.
+	#[doc(hidden)]
+	pub fn control_binding(mut self, binding: ControlBinding) -> Self {
+		self.control_binding = Some(binding);
+		self
+	}
+
+	/// Returns the retained state binding without changing `into_parts`.
+	#[doc(hidden)]
+	pub fn bound_control(&self) -> Option<&ControlBinding> {
+		self.control_binding.as_ref()
 	}
 
 	/// Adds an event listener using string event name (convenience method).

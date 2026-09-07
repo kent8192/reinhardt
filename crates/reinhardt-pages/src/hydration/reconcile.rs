@@ -247,16 +247,16 @@ fn reconcile_at_path(
 	path: ReconcilePath,
 ) -> Result<(), ReconcileError> {
 	match view {
-		Page::Element(el_view) => reconcile_element_at_path(element, el_view, path),
+		Page::Element(el_view) => reconcile_element_at_path(element, el_view, path, false),
 		Page::Text(expected_text) => reconcile_text_at_path(
 			element.text_content().unwrap_or_default(),
 			expected_text,
 			path,
 		),
-		Page::Fragment(views) => reconcile_children_at_path(element, views, path),
+		Page::Fragment(views) => reconcile_children_at_path(element, views, path, false),
 		Page::KeyedFragment(views) => {
 			let child_views: Vec<Page> = views.iter().map(|(_, view)| view.clone()).collect();
-			reconcile_children_at_path(element, &child_views, path)
+			reconcile_children_at_path(element, &child_views, path, false)
 		}
 		Page::Empty => Ok(()),
 		Page::WithHead { view, .. } => {
@@ -288,6 +288,7 @@ fn reconcile_element_at_path(
 	element: &Element,
 	el_view: &PageElement,
 	path: ReconcilePath,
+	controlled_select: bool,
 ) -> Result<(), ReconcileError> {
 	let actual_tag = element.tag_name().to_lowercase();
 	let expected_tag = el_view.tag_name().to_lowercase();
@@ -301,8 +302,25 @@ fn reconcile_element_at_path(
 		});
 	}
 
-	reconcile_attrs_at_path(element, el_view, element_path.clone())?;
-	reconcile_children_at_path(element, el_view.child_views(), element_path)
+	reconcile_attrs_at_path(element, el_view, element_path.clone(), controlled_select)?;
+	if el_view.bound_control().is_some() && expected_tag == "textarea" {
+		// Textarea contents are the browser's reset value, not its live state.
+		return Ok(());
+	}
+	let controlled_select = controlled_select
+		|| el_view.bound_control().is_some_and(|binding| {
+			matches!(
+				binding.kind(),
+				crate::component::ControlKind::SelectOne
+					| crate::component::ControlKind::SelectMany
+			)
+		});
+	reconcile_children_at_path(
+		element,
+		el_view.child_views(),
+		element_path,
+		controlled_select,
+	)
 }
 
 #[cfg(wasm)]
@@ -310,11 +328,17 @@ fn reconcile_dom_node_at_path(
 	node: &web_sys::Node,
 	view: &Page,
 	path: ReconcilePath,
+	controlled_select: bool,
 ) -> Result<(), ReconcileError> {
 	match view {
 		Page::Element(el_view) => {
 			if let Some(element) = node.dyn_ref::<web_sys::Element>() {
-				reconcile_element_at_path(&Element::new(element.clone()), el_view, path)
+				reconcile_element_at_path(
+					&Element::new(element.clone()),
+					el_view,
+					path,
+					controlled_select,
+				)
 			} else {
 				Err(ReconcileError::TagMismatch {
 					path,
@@ -328,7 +352,12 @@ fn reconcile_dom_node_at_path(
 		}
 		Page::Fragment(views) => {
 			if let Some(element) = node.dyn_ref::<web_sys::Element>() {
-				reconcile_children_at_path(&Element::new(element.clone()), views, path)
+				reconcile_children_at_path(
+					&Element::new(element.clone()),
+					views,
+					path,
+					controlled_select,
+				)
 			} else {
 				let mut expected_children = Vec::new();
 				collect_expected_children(views, &path, &mut expected_children);
@@ -337,6 +366,7 @@ fn reconcile_dom_node_at_path(
 						node,
 						&expected_children[0].1,
 						expected_children[0].0.clone(),
+						controlled_select,
 					)
 				} else {
 					Err(ReconcileError::ChildCountMismatch {
@@ -350,7 +380,12 @@ fn reconcile_dom_node_at_path(
 		Page::KeyedFragment(views) => {
 			let child_views: Vec<Page> = views.iter().map(|(_, view)| view.clone()).collect();
 			if let Some(element) = node.dyn_ref::<web_sys::Element>() {
-				reconcile_children_at_path(&Element::new(element.clone()), &child_views, path)
+				reconcile_children_at_path(
+					&Element::new(element.clone()),
+					&child_views,
+					path,
+					controlled_select,
+				)
 			} else {
 				let mut expected_children = Vec::new();
 				collect_expected_children(&child_views, &path, &mut expected_children);
@@ -359,6 +394,7 @@ fn reconcile_dom_node_at_path(
 						node,
 						&expected_children[0].1,
 						expected_children[0].0.clone(),
+						controlled_select,
 					)
 				} else {
 					Err(ReconcileError::ChildCountMismatch {
@@ -370,18 +406,20 @@ fn reconcile_dom_node_at_path(
 			}
 		}
 		Page::Empty => Ok(()),
-		Page::WithHead { view, .. } => reconcile_dom_node_at_path(node, view, path),
+		Page::WithHead { view, .. } => {
+			reconcile_dom_node_at_path(node, view, path, controlled_select)
+		}
 		Page::ReactiveIf(reactive_if) => {
 			let branch_view = if reactive_if.condition() {
 				reactive_if.then_view()
 			} else {
 				reactive_if.else_view()
 			};
-			reconcile_dom_node_at_path(node, &branch_view, path)
+			reconcile_dom_node_at_path(node, &branch_view, path, controlled_select)
 		}
 		Page::Reactive(reactive) => {
 			let rendered_view = reactive.render();
-			reconcile_dom_node_at_path(node, &rendered_view, path)
+			reconcile_dom_node_at_path(node, &rendered_view, path, controlled_select)
 		}
 	}
 }
@@ -391,9 +429,26 @@ fn reconcile_attrs_at_path(
 	element: &Element,
 	el_view: &PageElement,
 	path: ReconcilePath,
+	controlled_select: bool,
 ) -> Result<(), ReconcileError> {
 	for (name, value) in el_view.attrs() {
 		let name_str = name.as_ref();
+		let controlled_default = el_view.bound_control().is_some_and(|binding| {
+			use crate::component::ControlKind;
+			match binding.kind() {
+				ControlKind::Text => name_str.eq_ignore_ascii_case("value"),
+				ControlKind::Checkbox | ControlKind::Radio => {
+					name_str.eq_ignore_ascii_case("checked")
+				}
+				ControlKind::SelectOne | ControlKind::SelectMany | ControlKind::File => false,
+			}
+		}) || (controlled_select
+			&& el_view.tag_name().eq_ignore_ascii_case("option")
+			&& name_str.eq_ignore_ascii_case("selected"));
+		if controlled_default {
+			// Retained bindings adopt the live property after structural validation.
+			continue;
+		}
 		let expected = expected_dom_attr_value(name_str, value.as_ref());
 		let actual = element.get_attribute(name_str);
 
@@ -415,6 +470,7 @@ fn reconcile_children_at_path(
 	element: &Element,
 	child_views: &[Page],
 	path: ReconcilePath,
+	controlled_select: bool,
 ) -> Result<(), ReconcileError> {
 	let actual_nodes = relevant_child_nodes(element);
 	let mut expected_children = Vec::new();
@@ -424,7 +480,12 @@ fn reconcile_children_at_path(
 		let Some(actual_node) = actual_nodes.get(index) else {
 			return Err(ReconcileError::ElementNotFound { path, index });
 		};
-		reconcile_dom_node_at_path(actual_node, child_view, child_path.clone())?;
+		reconcile_dom_node_at_path(
+			actual_node,
+			child_view,
+			child_path.clone(),
+			controlled_select,
+		)?;
 	}
 
 	if actual_nodes.len() != expected_children.len() {
@@ -701,7 +762,7 @@ fn reconcile_options_children_at_path(
 			)?;
 		} else if matches!(child_view, Page::Element(_))
 			&& let Err(err) =
-				reconcile_dom_node_at_path(actual_node, child_view, child_path.clone())
+				reconcile_dom_node_at_path(actual_node, child_view, child_path.clone(), false)
 		{
 			handle_reconcile_error(err, options)?;
 		}

@@ -1867,6 +1867,12 @@ pub fn head(input: TokenStream) -> TokenStream {
 ///
 /// Load choice options dynamically from a server function using `choices_loader`.
 /// Map loaded data to radio buttons or selects using field properties.
+/// Dynamic `RadioSelect` fields render a `<fieldset>` named by a `<legend>`
+/// containing the field label (or field name when no label is declared).
+/// Each radio keeps its own option label and indexed input ID. Styling classes
+/// are preserved. Custom wrappers keep their tag and attributes, with
+/// `aria-labelledby` pointing to a caption `<span>` and a default `group` role
+/// unless a wrapper role is explicit. Phrasing wrappers retain valid HTML.
 ///
 /// | Attribute | Level | Description |
 /// |-----------|-------|-------------|

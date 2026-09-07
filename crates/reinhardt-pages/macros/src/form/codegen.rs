@@ -4780,16 +4780,29 @@ fn generate_field_view(
 		(None, TokenStream::new(), TokenStream::new())
 	};
 
-	// Generate label element (skip for hidden inputs)
+	let is_radio_group =
+		matches!(field.widget, TypedWidget::RadioSelect) && field.choices_config.is_some();
+	let group_label_id = format!("{field_name_str}--label");
+
+	// Native radio groups use legends; custom wrappers need a non-label caption.
 	let label_element = if matches!(field.widget, TypedWidget::HiddenInput) {
 		quote! {}
 	} else {
+		let (label_tag, label_target) = if is_radio_group {
+			if field.wrapper.is_some() {
+				("span", quote! { .attr("id", #group_label_id) })
+			} else {
+				("legend", TokenStream::new())
+			}
+		} else {
+			("label", quote! { .attr("for", #field_name_str) })
+		};
 		// If icon position is Label, include the icon inside the label
 		let icon_child = icon_in_label.unwrap_or_default();
 		quote! {
 			.child(
-				PageElement::new("label")
-					.attr("for", #field_name_str)
+				PageElement::new(#label_tag)
+					#label_target
 					.attr("class", #label_class)
 					#icon_child
 					.child(#label_text)
@@ -4801,17 +4814,28 @@ fn generate_field_view(
 	if matches!(field.widget, TypedWidget::HiddenInput) {
 		input_element
 	} else {
-		// Use custom wrapper if specified, otherwise default to div
+		// Custom wrappers can be phrasing elements that cannot contain a fieldset.
 		let wrapper_attrs = generate_wrapper_attrs(&field.wrapper, wrapper_class);
 		let wrapper_tag = field
 			.wrapper
 			.as_ref()
 			.map(|w| w.tag.as_str())
-			.unwrap_or("div");
+			.unwrap_or(if is_radio_group { "fieldset" } else { "div" });
+		let group_attrs = if is_radio_group && field.wrapper.is_some() {
+			let has_role = field
+				.wrapper
+				.as_ref()
+				.is_some_and(|wrapper| wrapper.attrs.iter().any(|attr| attr.name == "role"));
+			let role = (!has_role).then(|| quote! { .attr("role", "group") });
+			quote! { #role .attr("aria-labelledby", #group_label_id) }
+		} else {
+			TokenStream::new()
+		};
 
 		quote! {
 			PageElement::new(#wrapper_tag)
 				#wrapper_attrs
+				#group_attrs
 				#label_element
 				#icon_left
 				.child(#input_element)

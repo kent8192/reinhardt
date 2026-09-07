@@ -249,7 +249,7 @@ jobs:
             cargo test --target wasm32-unknown-unknown \
               --features testing \
               --test csrf_wasm_test --test server_fn_wasm_test \
-              --test client_launcher_navigation_test
+              --test client_launcher_navigation_test --test form_radio_group
 
       - name: Run WASM observer-system tests (reinhardt-urls)
         working-directory: crates/reinhardt-urls

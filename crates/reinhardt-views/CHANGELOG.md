@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.4.0-alpha.13...reinhardt-views@v0.4.0-alpha.14) - 2026-09-07
+
+### Fixed
+
+- *(deps)* align quick-xml with the plist dependency
+
 ## [0.4.0-alpha.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.4.0-alpha.10...reinhardt-views@v0.4.0-alpha.11) - 2026-08-27
 
 ### Documentation

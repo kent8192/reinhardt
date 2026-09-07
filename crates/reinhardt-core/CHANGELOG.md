@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.4.0-alpha.13...reinhardt-core@v0.4.0-alpha.14) - 2026-09-07
+
+### Fixed
+
+- *(macros)* complete leftover develop merge conflict markers
+- *(macros)* keep Model field_metadata reachable beside metadata fields
+- *(deps)* remove resolved tinyvec compatibility pins
+- *(forms)* reconcile validation with named form contracts
+- *(forms)* normalize raw primary keys before update validation
+- *(pages)* scope multipart validation to endpoint fields
+- *(deps)* align quick-xml with the plist dependency
+- *(forms)* reject nonfinite defaulted floats on WASM
+- *(forms)* expose pending uploads to model validation
+- *(macros)* restore upload metadata in model form test fixtures
+
+### Maintenance
+
+- merge develop/0.4.0 into constraint violation design
+- merge develop/0.4.0 into model form validation
+- merge develop/0.4.0 into semantic input bindings
+
+### Other
+
+- resolve merge conflicts with develop/0.4.0
+
+### Testing
+
+- pin tinyvec 1.12.0 in isolated consumer fixtures
+
 ### Fixed
 
 - *(macros)* reject named form fields that generate reserved `Self` variants

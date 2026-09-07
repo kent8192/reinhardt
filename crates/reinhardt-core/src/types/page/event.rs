@@ -57,6 +57,8 @@ pub enum EventType {
 	Change,
 	/// Form is submitted
 	Submit,
+	/// Form is reset to its default values
+	Reset,
 	/// Element gains focus
 	Focus,
 	/// Element loses focus
@@ -134,6 +136,7 @@ impl EventType {
 			EventType::Input => "input",
 			EventType::Change => "change",
 			EventType::Submit => "submit",
+			EventType::Reset => "reset",
 			EventType::Focus => "focus",
 			EventType::Blur => "blur",
 
@@ -210,6 +213,7 @@ impl std::str::FromStr for EventType {
 			"input" => Ok(EventType::Input),
 			"change" => Ok(EventType::Change),
 			"submit" => Ok(EventType::Submit),
+			"reset" => Ok(EventType::Reset),
 			"focus" => Ok(EventType::Focus),
 			"blur" => Ok(EventType::Blur),
 
@@ -248,6 +252,7 @@ mod tests {
 		assert_eq!(EventType::Click.as_str(), "click");
 		assert_eq!(EventType::MouseDown.as_str(), "mousedown");
 		assert_eq!(EventType::Input.as_str(), "input");
+		assert_eq!(EventType::Reset.as_str(), "reset");
 		assert_eq!(EventType::KeyDown.as_str(), "keydown");
 		assert_eq!(EventType::TouchStart.as_str(), "touchstart");
 	}
@@ -259,5 +264,10 @@ mod tests {
 
 		let event_ref: &str = EventType::MouseDown.as_ref();
 		assert_eq!(event_ref, "mousedown");
+
+		assert_eq!(
+			EventType::Reset.as_str().parse::<EventType>(),
+			Ok(EventType::Reset)
+		);
 	}
 }

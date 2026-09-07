@@ -395,6 +395,7 @@ fn generate_event(event: &PageEvent, pages_crate: &TokenStream) -> TokenStream {
 		"input" => quote!(Input),
 		"change" => quote!(Change),
 		"submit" => quote!(Submit),
+		"reset" => quote!(Reset),
 		"focus" => quote!(Focus),
 		"blur" => quote!(Blur),
 		// Touch events
@@ -935,10 +936,11 @@ mod tests {
 	}
 
 	#[test]
-	fn test_generate_element_with_attr() {
+	fn test_generate_element_with_attr_and_reset_event() {
 		let input = quote::quote!(|| {
-			div {
+			form {
 				class: "container",
+				@reset: |event| { event.prevent_default(); },
 				"hello"
 			}
 		});
@@ -949,6 +951,7 @@ mod tests {
 		assert!(output_str.contains(". with_attrs"));
 		assert!(output_str.contains("\"class\""));
 		assert!(output_str.contains("\"container\""));
+		assert_eq!(output_str.matches("EventType :: Reset").count(), 1);
 	}
 
 	#[test]

@@ -7,8 +7,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+#[cfg(any(wasm, test))]
+use crate::dom::EventType;
 #[cfg(wasm)]
-use crate::dom::{Element, EventHandle, EventType};
+use crate::dom::{Element, EventHandle};
 
 /// A binding between an event and its handler.
 #[derive(Debug, Clone)]
@@ -343,7 +345,7 @@ pub(super) fn attach_events(
 /// Returns `None` if the event type string is not recognized. Unknown event
 /// types are logged as warnings rather than silently falling back to a
 /// default value.
-#[cfg(wasm)]
+#[cfg(any(wasm, test))]
 fn event_type_from_string(s: &str) -> Option<EventType> {
 	match s {
 		// Mouse events
@@ -364,6 +366,7 @@ fn event_type_from_string(s: &str) -> Option<EventType> {
 		"input" => Some(EventType::Input),
 		"change" => Some(EventType::Change),
 		"submit" => Some(EventType::Submit),
+		"reset" => Some(EventType::Reset),
 		"focus" => Some(EventType::Focus),
 		"blur" => Some(EventType::Blur),
 		// Touch events
@@ -459,11 +462,15 @@ mod tests {
 
 	#[test]
 	fn test_event_binding_new() {
-		let binding = EventBinding::new("click", "rh-0");
-		assert_eq!(binding.event_type, "click");
+		let binding = EventBinding::new("reset", "rh-0");
+		assert_eq!(binding.event_type, "reset");
 		assert_eq!(binding.element_id, "rh-0");
 		assert!(!binding.capture);
 		assert!(!binding.once);
+		assert_eq!(
+			event_type_from_string(&binding.event_type),
+			Some(EventType::Reset)
+		);
 	}
 
 	#[test]

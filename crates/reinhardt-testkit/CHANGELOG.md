@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-testkit@v0.4.0-alpha.13...reinhardt-testkit@v0.4.0-alpha.14) - 2026-09-07
+
+### Maintenance
+
+- merge develop/0.4.0 into migration source PR
+
 ## [0.4.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-testkit@v0.4.0-alpha.6...reinhardt-testkit@v0.4.0-alpha.7) - 2026-08-19
 
 ### Fixed

@@ -968,6 +968,9 @@ fn validate_control_binding_structure(
 		{
 			Some("a bound text or number input cannot specify a `value` attribute")
 		}
+		TypedControlBindingKind::File if find_typed_attr(attrs, "value").is_some() => Some(
+			"a bound file input cannot specify a `value` attribute because file selection is browser-owned",
+		),
 		TypedControlBindingKind::Text
 			if element_tag == "textarea" && find_typed_attr(attrs, "value").is_some() =>
 		{
@@ -1829,8 +1832,8 @@ mod tests {
 				"a bound select requires a static `multiple`",
 			),
 			(
-				quote::quote!({ input { type: "file", bind: value } }),
-				"`bind:` does not support input type `file`",
+				quote::quote!({ input { type: "submit", bind: value } }),
+				"`bind:` does not support input type `submit`",
 			),
 			(
 				quote::quote!({
@@ -1852,6 +1855,10 @@ mod tests {
 					}
 				}),
 				"a bound text or number input cannot specify a `value` attribute",
+			),
+			(
+				quote::quote!({ input { type: "file", value: "initial", bind: value } }),
+				"a bound file input cannot specify a `value` attribute because file selection is browser-owned",
 			),
 			(
 				quote::quote!({ input { type: "checkbox", checked: true, bind: value } }),
@@ -1952,8 +1959,8 @@ mod tests {
 		"a bound select requires a static `multiple`"
 	)]
 	#[case(
-		quote::quote!({ input { type: "file", bind: value } }),
-		"`bind:` does not support input type `file`"
+		quote::quote!({ input { type: "submit", bind: value } }),
+		"`bind:` does not support input type `submit`"
 	)]
 	#[case(
 		quote::quote!({ textarea { bind: number(value, error) } }),
@@ -1966,6 +1973,10 @@ mod tests {
 	#[case(
 		quote::quote!({ input { value: "initial", bind: value } }),
 		"a bound text or number input cannot specify a `value` attribute"
+	)]
+	#[case(
+		quote::quote!({ input { type: "file", value: "initial", bind: value } }),
+		"a bound file input cannot specify a `value` attribute because file selection is browser-owned"
 	)]
 	#[case(
 		quote::quote!({ input { type: "checkbox", checked: true, bind: value } }),
@@ -2290,6 +2301,11 @@ mod tests {
 	#[case(
 		quote::quote!({ input { a11y: off, type: "range", bind: value } }),
 		TypedControlBindingKind::Number,
+		false
+	)]
+	#[case(
+		quote::quote!({ input { a11y: off, type: "file", bind: value } }),
+		TypedControlBindingKind::File,
 		false
 	)]
 	#[case(

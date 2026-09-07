@@ -253,12 +253,16 @@ node; removing a script cannot undo side effects that already executed.
 
 ### Controlled form elements
 
-Use `bind:` when a signal should own a native control after hydration. The
+Use `bind:` when a signal should own a native control after hydration, except
+that file inputs adopt their live browser selection. The
 control shape determines the signal type: `String` for string-valued inputs
 (`text`, `search`, `tel`, `url`, `email`, `password`, `color`, `date`,
 `datetime-local`, `month`, `week`, and `time`), radio, and single-select
 controls; `bool` for checkboxes; a supported numeric primitive for `number`
-and `range` inputs; and `Vec<String>` for multiple selects.
+and `range` inputs; `Vec<String>` for multiple selects; and `Vec<EventFile>`
+for both single and `multiple` file inputs.
+This `page!` contract does not expand `form!`, `ClientForm`, or `ModelForm`;
+their file fields retain the existing `Option<web_sys::File>` contract.
 Signal bindings accept owned handles, shared references, and mutable references,
 including both signals passed to `number(value, error)`.
 
@@ -267,11 +271,15 @@ bindings on inputs with a missing, empty, or unknown `type` remove line breaks
 just like `type="text"`.
 
 ```rust
+use reinhardt_pages::event::EventFile;
 use reinhardt_pages::prelude::*;
+use reinhardt_pages::reactive::Signal;
 
 let query = Signal::new(String::new());
 let parse_error = Signal::new(None::<NumberParseError>);
 let amount = Signal::new(0_f64);
+let files = Signal::new(Vec::<EventFile>::new());
+let attachments = Signal::new(Vec::<EventFile>::new());
 
 let _controls = page!({
     input { aria_label: "Search", bind: query, placeholder: "Search" }
@@ -280,6 +288,8 @@ let _controls = page!({
         type: "number",
         bind: number(amount, parse_error),
     }
+    input { aria_label: "Avatar", type: "file", bind: files }
+    input { aria_label: "Attachments", type: "file", multiple: true, bind: attachments }
 });
 ```
 
@@ -324,6 +334,12 @@ shared peers even when the changed control keeps its value. Without an explicit
 value is normalized. See the
 [React migration guide](docs/react_to_reinhardt.md#controlled-and-uncontrolled-form-controls)
 for event ordering, IME, numeric-error, and low-level escape-hatch details.
+For file inputs, a browser change replaces the signal with the full ordered
+selection. An empty signal clears the control, but a non-empty signal cannot
+populate a browser file input and is normalized to the live DOM selection.
+Hydration adopts live DOM files. A normal form reset clears the signal after
+default handling; a prevented reset preserves the selection. SSR emits neither
+file metadata nor a file value.
 For `input[type=number]`, the binding combines `beforeinput` metadata with the
 browser value so parse errors retain incomplete editor states when their edit
 position is known. Only unmodified Arrow/Home/End keyboard moves are predicted;

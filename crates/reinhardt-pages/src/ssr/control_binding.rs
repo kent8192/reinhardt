@@ -41,6 +41,7 @@ pub(crate) fn project(binding: Option<&ControlBinding>) -> SsrControlProjection 
 		(ControlKind::SelectMany, ControlValue::SelectedValues(values)) => {
 			projection.selected_values = values;
 		}
+		(ControlKind::File, ControlValue::Files(_)) => {}
 		_ => {}
 	}
 
@@ -175,8 +176,27 @@ mod tests {
 	use std::cell::Cell;
 	use std::rc::Rc;
 
+	use reinhardt_core::types::page::{EventFile, NativeEventFile};
+	use rstest::rstest;
+
 	use super::*;
-	use crate::component::IntoPage;
+	use crate::component::{ControlBinding, IntoPage};
+	use crate::reactive::{ReactiveScope, Signal};
+
+	#[rstest]
+	fn bound_file_input_omits_file_metadata_and_value() {
+		ReactiveScope::run(|| {
+			let file =
+				EventFile::from(&NativeEventFile::new("secret.txt", "text/plain", 12, 1_000));
+			let html = PageElement::new("input")
+				.attr("type", "file")
+				.control_binding(ControlBinding::file(Signal::new(vec![file])))
+				.into_page()
+				.render_to_string();
+
+			assert_eq!(html, r#"<input type="file" />"#);
+		});
+	}
 
 	#[test]
 	fn inferred_value_does_not_invoke_reactive_factory() {

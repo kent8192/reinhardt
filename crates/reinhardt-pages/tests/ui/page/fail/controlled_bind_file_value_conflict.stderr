@@ -1,0 +1,5 @@
+error: a bound file input cannot specify a `value` attribute because file selection is browser-owned
+  --> tests/ui/page/fail/controlled_bind_file_value_conflict.rs:10:10
+   |
+10 |             bind: files,
+   |                   ^^^^^

@@ -2247,10 +2247,15 @@ fn render_element_opening(
 		&& element
 			.bound_control()
 			.is_some_and(|binding| binding.kind() == ControlKind::Text);
+	let omits_bound_file_value = element.tag_name().eq_ignore_ascii_case("input")
+		&& element
+			.bound_control()
+			.is_some_and(|binding| binding.kind() == ControlKind::File);
 
 	let projects_value = element.tag_name().eq_ignore_ascii_case("input")
 		&& projection.value.is_some()
-		&& !omits_bound_password_value;
+		&& !omits_bound_password_value
+		&& !omits_bound_file_value;
 	let projects_checked = element.bound_control().is_some_and(|binding| {
 		matches!(binding.kind(), ControlKind::Checkbox | ControlKind::Radio)
 	});
@@ -2270,7 +2275,8 @@ fn render_element_opening(
 				|| reactive_input_type_is_supported)
 			&& (!(name.eq_ignore_ascii_case("multiple") && reactive_select_multiple.is_some())
 				|| reactive_select_multiple_is_supported);
-		if (name.eq_ignore_ascii_case("value") && (projects_value || omits_bound_password_value))
+		if (name.eq_ignore_ascii_case("value")
+			&& (projects_value || omits_bound_password_value || omits_bound_file_value))
 			|| (name.eq_ignore_ascii_case("checked") && projects_checked)
 			|| (name.eq_ignore_ascii_case("selected") && projected_option_selection.is_some())
 			|| (omits_bound_password_value
@@ -2287,6 +2293,9 @@ fn render_element_opening(
 		push_escaped_attribute(&mut html, name, value);
 	}
 	for (index, attribute) in element.reactive_attrs().iter().enumerate() {
+		if omits_bound_file_value && attribute.name().eq_ignore_ascii_case("value") {
+			continue;
+		}
 		if crate::component::into_page::controlled_attribute_is_overridden(
 			element.bound_control(),
 			attribute.name(),
@@ -2626,7 +2635,7 @@ mod tests {
 	use crate::reactive::hooks::use_retained_effect;
 	use crate::reactive::runtime::with_runtime;
 	use reinhardt_core::deps;
-	use reinhardt_core::types::page::DeferredNode;
+	use reinhardt_core::types::page::{DeferredNode, EventFile, NativeEventFile};
 	use rstest::rstest;
 	use serial_test::serial;
 
@@ -2715,6 +2724,39 @@ mod tests {
 			assert_eq!(
 				render_element_opening(&element, &projection, None),
 				"<input type=\"password\" data-rh-password-omitted=\"true\""
+			);
+		});
+	}
+
+	#[cfg(native)]
+	#[rstest]
+	fn render_element_opening_omits_bound_file_values() {
+		ReactiveScope::run(|| {
+			// Arrange
+			let file =
+				EventFile::from(&NativeEventFile::new("secret.txt", "text/plain", 12, 1_000));
+			let empty = PageElement::new("input")
+				.attr("type", "file")
+				.attr("value", "secret.txt")
+				.control_binding(ControlBinding::file(Signal::new(Vec::new())));
+			let selected = PageElement::new("input")
+				.attr("type", "file")
+				.attr("multiple", "multiple")
+				.reactive_attr("value", || Some("secret.txt".into()))
+				.control_binding(ControlBinding::file(Signal::new(vec![file])));
+
+			// Act
+			let openings = [empty, selected].map(|element| {
+				render_element_opening(&element, &project(element.bound_control()), None)
+			});
+
+			// Assert
+			assert_eq!(
+				openings,
+				[
+					r#"<input type="file""#.to_owned(),
+					r#"<input type="file" multiple="multiple""#.to_owned(),
+				]
 			);
 		});
 	}

@@ -194,6 +194,8 @@ pub enum TypedControlBindingKind {
 	Checkbox,
 	/// Radio input.
 	Radio,
+	/// File input.
+	File,
 	/// Single-select control.
 	SelectOne,
 	/// Multi-select control.

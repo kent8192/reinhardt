@@ -1,0 +1,47 @@
+error[E0308]: mismatched types
+  --> tests/ui/page/fail/controlled_bind_file_wrong_signal_type.rs:5:10
+   |
+ 5 |       let _ = page!({
+   |  _____________^
+ 6 | |         input {
+ 7 | |             a11y: off,
+ 8 | |             type: "file",
+...  |
+11 | |     });
+   | |      ^
+   | |      |
+   | |______expected `Signal<Vec<EventFile>>`, found `Signal<String>`
+   |        arguments to this function are incorrect
+   |
+   = note: expected struct `reinhardt_pages::Signal<Vec<EventFile>>`
+              found struct `reinhardt_pages::Signal<std::string::String>`
+note: associated function defined here
+  --> $WORKSPACE/crates/reinhardt-core/src/types/page/control_binding.rs
+   |
+   |     pub fn file(signal: Signal<Vec<EventFile>>) -> Self {
+   |            ^^^^
+   = note: this error originates in the macro `page` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+  --> tests/ui/page/fail/controlled_bind_file_wrong_signal_type.rs:14:10
+   |
+14 |       let _ = page!({
+   |  _____________^
+15 | |         input {
+16 | |             a11y: off,
+17 | |             type: "file",
+...  |
+20 | |     });
+   | |      ^
+   | |      |
+   | |______expected `Signal<Vec<EventFile>>`, found `Signal<Option<EventFile>>`
+   |        arguments to this function are incorrect
+   |
+   = note: expected struct `reinhardt_pages::Signal<Vec<EventFile>>`
+              found struct `reinhardt_pages::Signal<std::option::Option<EventFile>>`
+note: associated function defined here
+  --> $WORKSPACE/crates/reinhardt-core/src/types/page/control_binding.rs
+   |
+   |     pub fn file(signal: Signal<Vec<EventFile>>) -> Self {
+   |            ^^^^
+   = note: this error originates in the macro `page` (in Nightly builds, run with -Z macro-backtrace for more info)

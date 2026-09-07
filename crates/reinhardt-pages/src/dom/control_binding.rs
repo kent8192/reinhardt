@@ -263,13 +263,15 @@ fn restore_rejected_number_snapshot(element: &Element, snapshot: &RejectedNumber
 pub(crate) struct ControlBindingController {
 	effect: Effect,
 	_listeners: Vec<EventHandle>,
-	_password_reset_listener: Option<PasswordResetListener>,
+	_reset_listener: Option<ControlResetListener>,
 	_option_observer: Option<SelectOptionObserver>,
 	_number_binding_registration: Option<NumberBindingRegistration>,
+	_state: Rc<RefCell<CompositionState>>,
 }
 
 impl Drop for ControlBindingController {
 	fn drop(&mut self) {
+		self._state.borrow_mut().active = false;
 		self.effect.dispose();
 	}
 }
@@ -380,77 +382,118 @@ impl Drop for SelectOptionObserver {
 	}
 }
 
-struct PasswordResetListener {
-	document: web_sys::Document,
+struct ControlResetListener {
+	targets: Vec<web_sys::EventTarget>,
 	callback: Closure<dyn FnMut(web_sys::Event)>,
 }
 
-impl Drop for PasswordResetListener {
+impl Drop for ControlResetListener {
 	fn drop(&mut self) {
-		let _ = self.document.remove_event_listener_with_callback_and_bool(
-			"reset",
-			self.callback.as_ref().unchecked_ref(),
-			true,
-		);
+		for target in &self.targets {
+			let _ = target.remove_event_listener_with_callback_and_bool(
+				"reset",
+				self.callback.as_ref().unchecked_ref(),
+				true,
+			);
+		}
 	}
 }
 
-fn install_password_reset_listener(
+fn install_control_reset_listener(
 	element: &Element,
 	binding: &ControlBinding,
 	state: &Rc<RefCell<CompositionState>>,
-) -> Option<PasswordResetListener> {
-	if binding.kind() != ControlKind::Text {
+	form_owner: Option<web_sys::HtmlFormElement>,
+) -> Option<ControlResetListener> {
+	if !matches!(binding.kind(), ControlKind::Text | ControlKind::File) {
 		return None;
 	}
 	let input = element
 		.as_web_sys()
 		.dyn_ref::<web_sys::HtmlInputElement>()?
 		.clone();
-	let document = input.owner_document()?;
+	let document_target: web_sys::EventTarget = input.owner_document()?.unchecked_into();
+	let fallback = if binding.kind() == ControlKind::File {
+		input
+			.form()
+			.or(form_owner)
+			.map(|form| form.unchecked_into::<web_sys::EventTarget>())
+	} else {
+		None
+	};
+	let callback_document = document_target.clone();
+	let element = element.clone();
 	let binding = binding.clone();
 	let state = Rc::downgrade(state);
-	// Capture also covers form= reassociation and reset handlers that stop propagation.
-	let callback = Closure::wrap(Box::new(move |event: web_sys::Event| {
-		if !input.type_().eq_ignore_ascii_case("password")
-			|| !input.form().is_some_and(|form| {
-				event
-					.target()
-					.is_some_and(|target| target == form.unchecked_into::<web_sys::EventTarget>())
-			}) {
-			return;
-		}
-		let input = input.clone();
-		let binding = binding.clone();
-		let state = state.clone();
-		// Real user events can flush microtasks before reset handlers and default actions.
-		// A task waits for both cancellation and the browser's value reset to complete.
-		let after_reset = gloo_timers::future::TimeoutFuture::new(0);
-		crate::platform::spawn_task(async move {
-			after_reset.await;
-			let Some(state) = state.upgrade() else {
+	let callback =
+		Closure::wrap(Box::new(move |event: web_sys::Event| {
+			let accepts_reset = match binding.kind() {
+				ControlKind::Text => input.type_().eq_ignore_ascii_case("password"),
+				ControlKind::File => input.type_().eq_ignore_ascii_case("file"),
+				_ => false,
+			};
+			let Some(form) = input.form() else {
 				return;
 			};
-			if event.default_prevented()
-				|| !with_runtime(|runtime| runtime.has_node(binding.target()))
-			{
+			if !accepts_reset
+				|| event.target() != Some(form.clone().unchecked_into::<web_sys::EventTarget>())
+				|| (event.current_target() != Some(callback_document.clone())
+					&& event.composed_path().iter().any(|target| {
+						js_sys::Object::is(target.as_ref(), callback_document.as_ref())
+					})) {
 				return;
 			}
-			{
-				let mut state = state.borrow_mut();
-				state.composing = false;
-				state.skip_next_input = None;
-			}
-			let value = ControlValue::Text(input.value());
-			if untracked(|| binding.read()) != value {
-				let _ = write_binding_from_input(&binding, &state, value);
-			}
-		});
-	}) as Box<dyn FnMut(web_sys::Event)>);
-	document
-		.add_event_listener_with_callback_and_bool("reset", callback.as_ref().unchecked_ref(), true)
-		.ok()?;
-	Some(PasswordResetListener { document, callback })
+			let element = element.clone();
+			let binding = binding.clone();
+			let state = state.clone();
+			// Real activation may flush microtasks before the reset default action.
+			let after_reset = gloo_timers::future::TimeoutFuture::new(0);
+			crate::platform::spawn_task(async move {
+				after_reset.await;
+				let Some(state) = state.upgrade() else {
+					return;
+				};
+				if event.default_prevented()
+					|| !state.borrow().active
+					|| !with_runtime(|runtime| runtime.has_node(binding.target()))
+				{
+					return;
+				}
+				{
+					let mut state = state.borrow_mut();
+					state.composing = false;
+					state.skip_next_input = None;
+				}
+				let Ok(actual) = read_control(&element, binding.kind()) else {
+					return;
+				};
+				let expected = untracked(|| binding.read());
+				let unchanged = match (&expected, &actual) {
+					(ControlValue::Files(left), ControlValue::Files(right)) => {
+						same_file_selection(left, right)
+					}
+					_ => expected == actual,
+				};
+				if !unchanged {
+					let _ = write_binding_from_input(&binding, &state, actual);
+				}
+			});
+		}) as Box<dyn FnMut(web_sys::Event)>);
+	let mut listener = ControlResetListener {
+		targets: Vec::new(),
+		callback,
+	};
+	for target in std::iter::once(document_target).chain(fallback) {
+		target
+			.add_event_listener_with_callback_and_bool(
+				"reset",
+				listener.callback.as_ref().unchecked_ref(),
+				true,
+			)
+			.ok()?;
+		listener.targets.push(target);
+	}
+	Some(listener)
 }
 
 impl std::fmt::Debug for ControlBindingController {
@@ -463,6 +506,7 @@ impl std::fmt::Debug for ControlBindingController {
 
 #[derive(Default)]
 struct CompositionState {
+	active: bool,
 	composing: bool,
 	applying_input: bool,
 	skip_next_input: Option<CompletedComposition>,
@@ -507,6 +551,14 @@ impl ControlBindingController {
 		element: Element,
 		binding: ControlBinding,
 	) -> Result<Self, ControlBindingError> {
+		Self::mount_with_form_owner(element, binding, None)
+	}
+
+	pub(crate) fn mount_with_form_owner(
+		element: Element,
+		binding: ControlBinding,
+		form_owner: Option<web_sys::HtmlFormElement>,
+	) -> Result<Self, ControlBindingError> {
 		validate_control(&element, binding.kind())?;
 		write_radio_value(&element, &binding)?;
 		let number_binding_registration = NumberBindingRegistration::register(&element, &binding);
@@ -515,7 +567,14 @@ impl ControlBindingController {
 			.map(|registration| registration.position);
 		let rejected_number_snapshot = take_rejected_number_snapshot(&binding, number_position);
 		let initial_value = untracked(|| binding.read());
-		write_control_and_reconcile(&element, &binding, &initial_value)?;
+		if binding.kind() == ControlKind::File {
+			let live_value = read_control(&element, ControlKind::File)?;
+			if initial_value != live_value {
+				binding.write(live_value)?;
+			}
+		} else {
+			write_control_and_reconcile(&element, &binding, &initial_value)?;
+		}
 		if let Some(snapshot) = rejected_number_snapshot.as_ref() {
 			restore_rejected_number_snapshot(&element, snapshot);
 		}
@@ -526,6 +585,7 @@ impl ControlBindingController {
 			rejected_number_snapshot.as_ref(),
 			number_position,
 			number_binding_registration,
+			form_owner,
 		)?;
 		Ok(controller)
 	}
@@ -551,6 +611,27 @@ impl ControlBindingController {
 		let (listeners, state) = install_listeners(&element, &binding, None, number_position);
 		let live_value = hydration_radio_value(&element)
 			.map_or_else(|| read_control(&element, binding.kind()), Ok)?;
+		if binding.kind() == ControlKind::File {
+			let snapshot = binding.snapshot();
+			let outcome = write_binding_from_input(&binding, &state, live_value)?;
+			commit_or_stage_hydration_snapshot(snapshot);
+			if matches!(outcome, ControlWriteOutcome::Committed) {
+				record_hydration_target_adoption(&binding);
+			}
+			let reset_listener = install_control_reset_listener(&element, &binding, &state, None);
+			let effect = install_effect(element, binding, true, Rc::clone(&state));
+			return Ok((
+				Self {
+					effect,
+					_listeners: listeners,
+					_reset_listener: reset_listener,
+					_option_observer: None,
+					_number_binding_registration: number_binding_registration,
+					_state: state,
+				},
+				matches!(outcome, ControlWriteOutcome::Committed),
+			));
+		}
 		let password_value_was_omitted = password_value_was_omitted
 			&& binding.kind() == ControlKind::Text
 			&& element
@@ -600,8 +681,8 @@ impl ControlBindingController {
 			write_control(&element, binding.kind(), &untracked(|| binding.read()))?;
 		}
 		let option_observer = install_select_option_observer(&element, &binding);
-		let password_reset_listener = install_password_reset_listener(&element, &binding, &state);
-		let effect = install_effect(element, binding, true, state);
+		let reset_listener = install_control_reset_listener(&element, &binding, &state, None);
+		let effect = install_effect(element, binding, true, Rc::clone(&state));
 		if let Some(registration) = &number_binding_registration {
 			registration.set_effect(effect);
 		}
@@ -609,9 +690,10 @@ impl ControlBindingController {
 			Self {
 				effect,
 				_listeners: listeners,
-				_password_reset_listener: password_reset_listener,
+				_reset_listener: reset_listener,
 				_option_observer: option_observer,
 				_number_binding_registration: number_binding_registration,
+				_state: state,
 			},
 			refresh_required,
 		))
@@ -624,6 +706,7 @@ impl ControlBindingController {
 		rejected_number_snapshot: Option<&RejectedNumberSnapshot>,
 		number_position: Option<usize>,
 		number_binding_registration: Option<NumberBindingRegistration>,
+		form_owner: Option<web_sys::HtmlFormElement>,
 	) -> Result<Self, ControlBindingError> {
 		let (listeners, state) = install_listeners(
 			&element,
@@ -632,17 +715,18 @@ impl ControlBindingController {
 			number_position,
 		);
 		let option_observer = install_select_option_observer(&element, &binding);
-		let password_reset_listener = install_password_reset_listener(&element, &binding, &state);
-		let effect = install_effect(element, binding, skip_first_write, state);
+		let reset_listener = install_control_reset_listener(&element, &binding, &state, form_owner);
+		let effect = install_effect(element, binding, skip_first_write, Rc::clone(&state));
 		if let Some(registration) = &number_binding_registration {
 			registration.set_effect(effect);
 		}
 		Ok(Self {
 			effect,
 			_listeners: listeners,
-			_password_reset_listener: password_reset_listener,
+			_reset_listener: reset_listener,
 			_option_observer: option_observer,
 			_number_binding_registration: number_binding_registration,
+			_state: state,
 		})
 	}
 }
@@ -702,7 +786,7 @@ fn select_has_option_values(element: &Element, value: &ControlValue) -> bool {
 		ControlValue::SelectedValues(values) => values
 			.iter()
 			.all(|value| available.iter().any(|option| option == value)),
-		ControlValue::Checked(_) => true,
+		ControlValue::Checked(_) | ControlValue::Files(_) => true,
 	}
 }
 
@@ -763,6 +847,17 @@ fn install_effect(
 			if initial_run && skip_first_write {
 				return;
 			}
+			if let (ControlKind::File, ControlValue::Files(expected)) = (binding.kind(), &value) {
+				if expected.is_empty() {
+					let _ = write_control(&element, binding.kind(), &value);
+				} else if let Ok(ControlValue::Files(actual)) =
+					read_control(&element, ControlKind::File)
+					&& !same_file_selection(expected, &actual)
+				{
+					let _ = write_binding_from_input(&binding, &state, ControlValue::Files(actual));
+				}
+				return;
+			}
 			{
 				let mut state = state.borrow_mut();
 				if !state.applying_input
@@ -814,6 +909,7 @@ fn install_listeners(
 		None
 	};
 	let state = Rc::new(RefCell::new(CompositionState {
+		active: true,
 		number_editor,
 		number_position,
 		..CompositionState::default()
@@ -914,7 +1010,9 @@ fn install_listeners(
 						.as_ref()
 						.is_some_and(|completed| match &completed.value {
 							ControlValue::Text(raw) => !raw.is_empty(),
-							ControlValue::Checked(_) | ControlValue::SelectedValues(_) => true,
+							ControlValue::Checked(_)
+							| ControlValue::SelectedValues(_)
+							| ControlValue::Files(_) => true,
 						});
 					let Ok(value) = read_input_event_value(
 						&input_element,
@@ -978,19 +1076,35 @@ fn install_listeners(
 		ControlKind::Checkbox
 		| ControlKind::Radio
 		| ControlKind::SelectOne
-		| ControlKind::SelectMany => {
+		| ControlKind::SelectMany
+		| ControlKind::File => {
 			let change_element = element.clone();
 			let change_binding = binding.clone();
+			let change_state = Rc::clone(&state);
 			listeners.push(element.add_event_listener_with_event("change", move |_| {
 				let Ok(value) = read_control(&change_element, change_binding.kind()) else {
 					return;
 				};
-				let _ = change_binding.write(value);
+				let _ = write_binding_from_input(&change_binding, &change_state, value);
 			}));
 		}
 	}
 
 	(listeners, state)
+}
+
+fn same_file_selection(
+	expected: &[crate::event::EventFile],
+	actual: &[crate::event::EventFile],
+) -> bool {
+	#[cfg(wasm)]
+	{
+		expected.len() == actual.len()
+			&& expected
+				.iter()
+				.zip(actual)
+				.all(|(left, right)| js_sys::Object::is(left.raw().as_ref(), right.raw().as_ref()))
+	}
 }
 
 struct ApplyingInputGuard {
@@ -1296,6 +1410,13 @@ pub(crate) fn validate_control(
 		ControlKind::Radio => input_has_type(element, &tag, "radio"),
 		ControlKind::SelectOne => select_has_multiple(element, &tag, false),
 		ControlKind::SelectMany => select_has_multiple(element, &tag, true),
+		ControlKind::File => {
+			tag == "input"
+				&& element
+					.as_web_sys()
+					.dyn_ref::<web_sys::HtmlInputElement>()
+					.is_some_and(|input| crate::control_binding::is_file_input_type(&input.type_()))
+		}
 	};
 	if supported {
 		Ok(())
@@ -1372,6 +1493,22 @@ pub(crate) fn read_control(
 				}
 			}
 			Ok(ControlValue::SelectedValues(values))
+		}
+		ControlKind::File => {
+			let input = element
+				.as_web_sys()
+				.dyn_ref::<web_sys::HtmlInputElement>()
+				.ok_or_else(|| missing(kind, "files"))?;
+			let files = input.files().ok_or_else(|| missing(kind, "files"))?;
+			let selected = (0..files.length())
+				.map(|index| {
+					files
+						.get(index)
+						.map(crate::event::EventFile::from)
+						.ok_or_else(|| missing(kind, "files"))
+				})
+				.collect::<Result<Vec<_>, _>>()?;
+			Ok(ControlValue::Files(selected))
 		}
 	}
 }
@@ -1475,12 +1612,26 @@ pub(crate) fn write_control(
 			}
 			Ok(changed)
 		}
+		(ControlKind::File, ControlValue::Files(files)) if files.is_empty() => {
+			let input = element
+				.as_web_sys()
+				.dyn_ref::<web_sys::HtmlInputElement>()
+				.ok_or_else(|| missing(kind, "value"))?;
+			if input.value().is_empty() {
+				Ok(false)
+			} else {
+				input.set_value("");
+				Ok(true)
+			}
+		}
+		(ControlKind::File, ControlValue::Files(_)) => Ok(false),
 		(_, actual) => Err(ControlBindingError::ValueKindMismatch {
 			control: kind,
 			actual: match actual {
 				ControlValue::Text(_) => "text",
 				ControlValue::Checked(_) => "checked",
 				ControlValue::SelectedValues(_) => "selected-values",
+				ControlValue::Files(_) => "files",
 			},
 		}),
 	}

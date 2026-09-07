@@ -805,6 +805,11 @@ fn generate_control_binding(
 		(TypedControlBindingKind::Checkbox, _) => {
 			quote_spanned!(binding_span=> #private::into_control_binding::<#private::CheckboxBinding, _>(#value, ()))
 		}
+		(TypedControlBindingKind::File, _) => quote_spanned!(binding_span=>
+			#pages_crate::component::ControlBinding::file(
+				#pages_crate::reactive::copy_signal_handle(#value)
+			)
+		),
 		(TypedControlBindingKind::SelectOne, _) => {
 			quote_spanned!(binding_span=> #private::into_control_binding::<#private::SelectOneBinding, _>(#value, ()))
 		}

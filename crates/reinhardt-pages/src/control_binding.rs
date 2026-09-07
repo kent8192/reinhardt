@@ -3,8 +3,21 @@
 //! The `bind:` directive accepts owned or borrowed [`Signal`](crate::reactive::Signal)
 //! values directly for string-valued (`text`, `search`, `tel`, `url`, `email`,
 //! `password`, `color`, `date`, `datetime-local`, `month`, `week`, and `time`),
-//! numeric (`number` and `range`), checkbox, radio, and select controls. Numeric
-//! controls can additionally report rejected input through [`NumberParseError`].
+//! numeric (`number` and `range`), checkbox, radio, select, and
+//! file controls. File controls use `Signal<Vec<crate::event::EventFile>>` for
+//! both single and `multiple` inputs. A browser change replaces the signal with
+//! the full ordered selection. File bindings observe the browser-owned selection.
+//! Clearing the Signal clears its input; a non-empty Signal cannot populate the
+//! control. Successful form reset synchronizes the live selection after a browser
+//! task, so reset handlers and their microtasks can still observe the previous
+//! Signal. Cancelled reset and disposed bindings do not receive a reset-driven
+//! write. Listener ownership is shared with password bindings and released when
+//! the controller is dropped.
+//! This `page!` contract does not expand `form!`, `ClientForm`, or `ModelForm`;
+//! their file fields retain the existing `Option<web_sys::File>` contract.
+//! Hydration adopts live DOM files. SSR emits neither file metadata nor a file
+//! value. Numeric controls can additionally report rejected input through
+//! [`NumberParseError`].
 //! Binding lowering passes these `Copy` signal handles by value, so generated
 //! call sites remain clean under Clippy's `clone_on_copy` lint.
 //!
@@ -480,4 +493,9 @@ pub mod __private {
 				.unwrap_or_else(|| panic!("field {:?} cannot bind to {label} control", field))
 		}
 	}
+}
+
+#[cfg(any(wasm, test, feature = "testing"))]
+pub(crate) fn is_file_input_type(input_type: &str) -> bool {
+	input_type.eq_ignore_ascii_case("file")
 }

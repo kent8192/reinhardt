@@ -4,11 +4,13 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gloo_timers::future::TimeoutFuture;
+use js_sys::{Array, Function, Reflect};
 use reinhardt_pages::component::{
 	Component, ControlBinding, ControlBindingError, ControlKind, ControlValue, IntoPage,
 	MountError, NumberParseError, NumberParseErrorKind, Page, PageExt,
 };
 use reinhardt_pages::dom::Element;
+use reinhardt_pages::event::EventFile;
 use reinhardt_pages::prelude::defer_yield;
 use reinhardt_pages::reactive::{ReactiveScope, Signal, with_runtime};
 use reinhardt_pages::{PageElement, page};
@@ -1280,6 +1282,29 @@ fn hydration_initial_reactive_attributes_preserve_rejected_numeric_edits() {
 	});
 }
 
+struct ReactiveCleanupGuard {
+	root: Option<web_sys::Element>,
+}
+
+impl ReactiveCleanupGuard {
+	fn new() -> Self {
+		Self { root: None }
+	}
+
+	fn attach_root(&mut self, root: &web_sys::Element) {
+		self.root = Some(root.clone());
+	}
+}
+
+impl Drop for ReactiveCleanupGuard {
+	fn drop(&mut self) {
+		reinhardt_pages::cleanup_reactive_nodes();
+		if let Some(root) = self.root.take() {
+			root.remove();
+		}
+	}
+}
+
 #[rstest]
 #[wasm_bindgen_test]
 fn hydration_initial_reactive_range_constraint_reconciles_browser_sanitization() {
@@ -2102,6 +2127,32 @@ fn reactive_invalid_nonselect_binding_is_omitted() {
 }
 
 #[wasm_bindgen_test]
+fn invalid_file_binding_is_omitted_before_form_ownership_is_established() {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let root = Element::new(document.create_element("div").expect("root"));
+		let page = PageElement::new("div")
+			.control_binding(ControlBinding::file(Signal::new(Vec::new())))
+			.into_page();
+
+		let error = page.mount(&root).expect_err("file binding mismatch");
+
+		assert_eq!(
+			error,
+			MountError::ControlBinding(ControlBindingError::UnsupportedElement {
+				control: ControlKind::File,
+				actual_tag: "div".to_owned(),
+			})
+		);
+		assert_eq!(root.as_web_sys().first_element_child(), None);
+		reinhardt_pages::cleanup_reactive_nodes();
+	});
+}
+
+#[wasm_bindgen_test]
 fn reactive_nonselect_mount_keeps_parent_when_a_child_mount_fails() {
 	ReactiveScope::run(|| {
 		let document = web_sys::window()
@@ -2277,6 +2328,1211 @@ fn failed_plain_parent_mount_drops_detached_reactive_children() {
 		assert_eq!(root.as_web_sys().first_element_child(), None);
 		assert_eq!(render_count.get(), renders_after_failure);
 		assert!(weak_listener_owner.upgrade().is_none());
+	});
+}
+
+fn browser_file(name: &str, contents: &str) -> web_sys::File {
+	let bits = Array::new();
+	bits.push(&JsValue::from_str(contents));
+	let options = js_sys::Object::new();
+	Reflect::set(
+		&options,
+		&JsValue::from_str("type"),
+		&JsValue::from_str("text/plain"),
+	)
+	.expect("file media type");
+	Reflect::set(
+		&options,
+		&JsValue::from_str("lastModified"),
+		&JsValue::from_f64(1_000.0),
+	)
+	.expect("file modification time");
+	let args = Array::new();
+	args.push(&bits);
+	args.push(&JsValue::from_str(name));
+	args.push(&options);
+	let constructor = Reflect::get(&js_sys::global(), &JsValue::from_str("File"))
+		.expect("File constructor")
+		.dyn_into::<Function>()
+		.expect("File constructor type");
+	Reflect::construct(&constructor, &args)
+		.expect("browser file")
+		.unchecked_into()
+}
+
+fn assign_files(input: &web_sys::HtmlInputElement, files: &[web_sys::File]) {
+	let transfer = web_sys::DataTransfer::new().expect("data transfer");
+	let items =
+		Reflect::get(transfer.as_ref(), &JsValue::from_str("items")).expect("data transfer items");
+	let add = Reflect::get(&items, &JsValue::from_str("add"))
+		.expect("data transfer add")
+		.dyn_into::<Function>()
+		.expect("data transfer add function");
+	for file in files {
+		add.call1(&items, file.as_ref()).expect("add file");
+	}
+	input.set_files(transfer.files().as_ref());
+}
+
+fn file_reset_form(
+	binding: ControlBinding,
+	hydrate: bool,
+) -> (
+	AttachedRootCleanup,
+	web_sys::HtmlFormElement,
+	web_sys::HtmlInputElement,
+) {
+	let document = web_sys::window()
+		.expect("window")
+		.document()
+		.expect("document");
+	let container = document.create_element("div").expect("container");
+	let cleanup = AttachedRootCleanup(container.clone());
+	document
+		.body()
+		.expect("body")
+		.append_child(&container)
+		.expect("attach form");
+	let page = PageElement::new("form")
+		.child(
+			PageElement::new("input")
+				.attr("type", "file")
+				.control_binding(binding),
+		)
+		.child(PageElement::new("button").attr("type", "reset"))
+		.into_page();
+	if hydrate {
+		container.set_inner_html(&page.render_to_string());
+		let root = Element::new(container.first_element_child().expect("SSR form"));
+		let _state = SsrStateElement::install(&document);
+		reinhardt_pages::hydration::hydrate(&HydratedControlPage(page), &root)
+			.expect("hydrate file form");
+	} else {
+		page.mount(&Element::new(container.clone()))
+			.expect("mount file form");
+	}
+	let form: web_sys::HtmlFormElement = container
+		.first_element_child()
+		.expect("form")
+		.unchecked_into();
+	let input = form
+		.query_selector("input")
+		.expect("query file input")
+		.expect("file input")
+		.unchecked_into();
+	(cleanup, form, input)
+}
+
+fn shadow_file_reset_form(
+	binding: ControlBinding,
+	hydrate: bool,
+) -> (
+	AttachedRootCleanup,
+	web_sys::HtmlFormElement,
+	web_sys::HtmlInputElement,
+) {
+	let document = web_sys::window()
+		.expect("window")
+		.document()
+		.expect("document");
+	let host = document.create_element("div").expect("shadow host");
+	let cleanup = AttachedRootCleanup(host.clone());
+	document
+		.body()
+		.expect("body")
+		.append_child(&host)
+		.expect("attach shadow host");
+	let shadow = host
+		.attach_shadow(&web_sys::ShadowRootInit::new(web_sys::ShadowRootMode::Open))
+		.expect("attach shadow root");
+	let container = document.create_element("div").expect("container");
+	shadow
+		.append_child(&container)
+		.expect("attach form container");
+	let page = PageElement::new("form")
+		.child(
+			PageElement::new("input")
+				.attr("type", "file")
+				.control_binding(binding),
+		)
+		.into_page();
+	if hydrate {
+		container.set_inner_html(&page.render_to_string());
+		let root = Element::new(container.first_element_child().expect("SSR form"));
+		let _state = SsrStateElement::install(&document);
+		reinhardt_pages::hydration::hydrate(&HydratedControlPage(page), &root)
+			.expect("hydrate shadow file form");
+	} else {
+		page.mount(&Element::new(container.clone()))
+			.expect("mount shadow file form");
+	}
+	let form: web_sys::HtmlFormElement = container
+		.first_element_child()
+		.expect("form")
+		.unchecked_into();
+	let input = form
+		.query_selector("input")
+		.expect("query file input")
+		.expect("file input")
+		.unchecked_into();
+	(cleanup, form, input)
+}
+
+fn nested_file_reset_form(
+	binding: ControlBinding,
+	attached_shadow_root: bool,
+	reactive_branch: bool,
+) -> (
+	AttachedRootCleanup,
+	web_sys::HtmlFormElement,
+	web_sys::HtmlInputElement,
+) {
+	let document = web_sys::window()
+		.expect("window")
+		.document()
+		.expect("document");
+	let host = document.create_element("div").expect("host");
+	let cleanup = AttachedRootCleanup(host.clone());
+	let container = if attached_shadow_root {
+		document
+			.body()
+			.expect("body")
+			.append_child(&host)
+			.expect("attach shadow host");
+		let shadow = host
+			.attach_shadow(&web_sys::ShadowRootInit::new(web_sys::ShadowRootMode::Open))
+			.expect("attach shadow root");
+		let container = document.create_element("div").expect("container");
+		shadow
+			.append_child(&container)
+			.expect("attach form container");
+		container
+	} else {
+		host.clone()
+	};
+	let input = move || {
+		PageElement::new("input")
+			.attr("type", "file")
+			.control_binding(binding.clone())
+			.into_page()
+	};
+	let input = if reactive_branch {
+		Page::reactive_if(|| true, input, || Page::Empty)
+	} else {
+		input()
+	};
+	PageElement::new("form")
+		.child(PageElement::new("div").child(input))
+		.into_page()
+		.mount(&Element::new(container.clone()))
+		.expect("mount nested file form");
+	let form: web_sys::HtmlFormElement = container
+		.first_element_child()
+		.expect("form")
+		.unchecked_into();
+	let input = form
+		.query_selector("input")
+		.expect("query file input")
+		.expect("file input")
+		.unchecked_into();
+	(cleanup, form, input)
+}
+
+#[rstest]
+#[case::mount_form_reset(false, false)]
+#[case::mount_reset_button(false, true)]
+#[case::hydrate_form_reset(true, false)]
+#[case::hydrate_reset_button(true, true)]
+#[test_attr(wasm_bindgen_test)]
+async fn bound_file_reset_waits_for_task_and_respects_cancellation(
+	#[case] hydrate: bool,
+	#[case] use_reset_button: bool,
+) {
+	// Arrange
+	let scope = ReactiveScope::new();
+	let files = scope.enter(|| Signal::new(Vec::<EventFile>::new()));
+	let (_cleanup, form, input) =
+		scope.enter(|| file_reset_form(ControlBinding::file(files), hydrate));
+	let selected = browser_file("selected.txt", "selected");
+	assign_files(&input, &[selected.clone()]);
+	input
+		.dispatch_event(&web_sys::Event::new("change").expect("change"))
+		.expect("dispatch selection");
+	let cancel = Rc::new(Cell::new(true));
+	let cancel_handler = Rc::clone(&cancel);
+	let _handler = Element::new(form.clone().unchecked_into()).add_event_listener_with_event(
+		"reset",
+		move |event| {
+			event.stop_propagation();
+			if cancel_handler.get() {
+				event.prevent_default();
+			}
+		},
+	);
+	let reset = || {
+		if use_reset_button {
+			form.query_selector("button")
+				.expect("query reset button")
+				.expect("reset button")
+				.unchecked_into::<web_sys::HtmlElement>()
+				.click();
+		} else {
+			form.reset();
+		}
+	};
+
+	// Act: cancellation must not publish a reset value.
+	reset();
+	TimeoutFuture::new(0).await;
+
+	// Assert
+	assert_eq!(files.get().len(), 1);
+	assert!(js_sys::Object::is(
+		files.get()[0].raw().as_ref(),
+		selected.as_ref()
+	));
+	assert_eq!(input.files().expect("files").length(), 1);
+
+	// Act: complete reset while preserving event/microtask ordering.
+	cancel.set(false);
+	reset();
+	defer_yield().await;
+	yield_microtask().await;
+
+	// Assert: the Signal changes only at the task boundary.
+	assert_eq!(files.get().len(), 1);
+	assert_eq!(input.files().expect("files").length(), 0);
+	TimeoutFuture::new(0).await;
+	with_runtime(|runtime| runtime.flush_updates());
+	assert_eq!(files.get().len(), 0);
+}
+
+#[rstest]
+#[case::mount(false)]
+#[case::hydrate(true)]
+#[test_attr(wasm_bindgen_test)]
+async fn bound_file_reset_inside_attached_shadow_root_waits_for_task(#[case] hydrate: bool) {
+	// Arrange
+	let scope = ReactiveScope::new();
+	let files = scope.enter(|| Signal::new(Vec::<EventFile>::new()));
+	let (_cleanup, form, input) =
+		scope.enter(|| shadow_file_reset_form(ControlBinding::file(files), hydrate));
+	let selected = browser_file("shadow.txt", "shadow");
+	assign_files(&input, &[selected.clone()]);
+	input
+		.dispatch_event(&web_sys::Event::new("change").expect("change"))
+		.expect("dispatch selection");
+	let cancel = Rc::new(Cell::new(true));
+	let cancel_handler = Rc::clone(&cancel);
+	let _handler = Element::new(form.clone().unchecked_into()).add_event_listener_with_event(
+		"reset",
+		move |event| {
+			if cancel_handler.get() {
+				event.prevent_default();
+			}
+		},
+	);
+
+	// Act: cancellation preserves the browser selection and Signal.
+	form.reset();
+	TimeoutFuture::new(0).await;
+	with_runtime(|runtime| runtime.flush_updates());
+
+	// Assert
+	assert_eq!(input.files().expect("files").length(), 1);
+	assert_eq!(files.get().len(), 1);
+	assert!(js_sys::Object::is(
+		files.get()[0].raw().as_ref(),
+		selected.as_ref()
+	));
+
+	// Act: a successful reset remains deferred until the browser task.
+	cancel.set(false);
+	form.reset();
+	defer_yield().await;
+	yield_microtask().await;
+
+	// Assert
+	assert_eq!(input.files().expect("files").length(), 0);
+	assert_eq!(files.get().len(), 1);
+	TimeoutFuture::new(0).await;
+	with_runtime(|runtime| runtime.flush_updates());
+	assert_eq!(input.files().expect("files").length(), 0);
+	assert_eq!(files.get().len(), 0);
+}
+
+#[rstest]
+#[case::detached_nested(false, false)]
+#[case::attached_shadow_nested(true, false)]
+#[case::detached_reactive_branch(false, true)]
+#[test_attr(wasm_bindgen_test)]
+async fn bound_nested_file_reset_uses_its_final_form_owner(
+	#[case] attached_shadow_root: bool,
+	#[case] reactive_branch: bool,
+) {
+	// Arrange
+	let scope = ReactiveScope::new();
+	let files = scope.enter(|| Signal::new(Vec::<EventFile>::new()));
+	let (_cleanup, form, input) = scope.enter(|| {
+		nested_file_reset_form(
+			ControlBinding::file(files),
+			attached_shadow_root,
+			reactive_branch,
+		)
+	});
+	let selected = browser_file("nested.txt", "nested");
+	assign_files(&input, &[selected.clone()]);
+	input
+		.dispatch_event(&web_sys::Event::new("change").expect("change"))
+		.expect("dispatch selection");
+	let cancel = Rc::new(Cell::new(true));
+	let cancel_handler = Rc::clone(&cancel);
+	let _handler = Element::new(form.clone().unchecked_into()).add_event_listener_with_event(
+		"reset",
+		move |event| {
+			if cancel_handler.get() {
+				event.prevent_default();
+			}
+		},
+	);
+
+	// Act: cancellation preserves the raw browser selection and Signal.
+	form.reset();
+	TimeoutFuture::new(0).await;
+	with_runtime(|runtime| runtime.flush_updates());
+
+	// Assert
+	let dom_file = input
+		.files()
+		.expect("files")
+		.get(0)
+		.expect("selected DOM file");
+	assert!(js_sys::Object::is(dom_file.as_ref(), selected.as_ref()));
+	assert_eq!(files.get().len(), 1);
+	assert!(js_sys::Object::is(
+		files.get()[0].raw().as_ref(),
+		selected.as_ref()
+	));
+
+	// Act: successful reset clears the DOM before the deferred binding update.
+	cancel.set(false);
+	form.reset();
+	defer_yield().await;
+	yield_microtask().await;
+
+	// Assert
+	assert_eq!(input.files().expect("files").length(), 0);
+	assert_eq!(files.get().len(), 1);
+	assert!(js_sys::Object::is(
+		files.get()[0].raw().as_ref(),
+		selected.as_ref()
+	));
+	TimeoutFuture::new(0).await;
+	with_runtime(|runtime| runtime.flush_updates());
+	assert_eq!(input.files().expect("files").length(), 0);
+	assert!(files.get().is_empty());
+}
+
+#[wasm_bindgen_test(async)]
+async fn bound_file_reset_follows_form_reassociation() {
+	// Arrange
+	let scope = ReactiveScope::new();
+	let files = scope.enter(|| Signal::new(Vec::<EventFile>::new()));
+	let (_cleanup, original_form, input) =
+		scope.enter(|| file_reset_form(ControlBinding::file(files), false));
+	let selected = browser_file("selected.txt", "selected");
+	assign_files(&input, &[selected.clone()]);
+	input
+		.dispatch_event(&web_sys::Event::new("change").expect("change"))
+		.expect("dispatch selection");
+	let document = web_sys::window()
+		.expect("window")
+		.document()
+		.expect("document");
+	let current_form: web_sys::HtmlFormElement = document
+		.create_element("form")
+		.expect("current form")
+		.unchecked_into();
+	current_form.set_id("reinhardt-file-reset-current-owner");
+	original_form
+		.parent_element()
+		.expect("form container")
+		.append_child(&current_form)
+		.expect("attach current form");
+	input
+		.set_attribute("form", "reinhardt-file-reset-current-owner")
+		.expect("reassociate file input");
+
+	// Act: resetting the former owner must not synchronize this control.
+	original_form.reset();
+	TimeoutFuture::new(0).await;
+	with_runtime(|runtime| runtime.flush_updates());
+
+	// Assert
+	assert_eq!(files.get().len(), 1);
+	assert!(js_sys::Object::is(
+		files.get()[0].raw().as_ref(),
+		selected.as_ref()
+	));
+	assert_eq!(input.files().expect("files").length(), 1);
+
+	// Act: the current owner resets the DOM and binding.
+	current_form.reset();
+	TimeoutFuture::new(0).await;
+	with_runtime(|runtime| runtime.flush_updates());
+
+	// Assert
+	assert_eq!(input.files().expect("files").length(), 0);
+	assert_eq!(files.get().len(), 0);
+}
+
+#[wasm_bindgen_test(async)]
+async fn bound_file_reset_writes_once_for_an_attached_form() {
+	// Arrange
+	let scope = ReactiveScope::new();
+	let files = scope.enter(|| Signal::new(Vec::<EventFile>::new()));
+	let writes = Rc::new(Cell::new(0_usize));
+	let reads = Rc::new(Cell::new(0_usize));
+	let inner = scope.enter(|| ControlBinding::file(files));
+	let read_binding = inner.clone();
+	let write_binding = inner.clone();
+	let write_count = Rc::clone(&writes);
+	let read_count = Rc::clone(&reads);
+	let binding = scope.enter(|| {
+		ControlBinding::from_parts(
+			ControlKind::File,
+			None,
+			inner.target(),
+			move || {
+				read_count.set(read_count.get() + 1);
+				read_binding.read()
+			},
+			move |value| {
+				write_count.set(write_count.get() + 1);
+				write_binding.write(value)
+			},
+			move || {
+				let previous = files.get();
+				Box::new(move || files.set(previous))
+			},
+		)
+	});
+	let (_cleanup, form, input) = scope.enter(|| file_reset_form(binding, false));
+	assign_files(&input, &[browser_file("selected.txt", "selected")]);
+	input
+		.dispatch_event(&web_sys::Event::new("change").expect("change"))
+		.expect("dispatch selection");
+	writes.set(0);
+
+	// Act
+	form.reset();
+	TimeoutFuture::new(0).await;
+	with_runtime(|runtime| runtime.flush_updates());
+
+	// Assert
+	assert_eq!(writes.get(), 1);
+	assert_eq!(input.files().expect("files").length(), 0);
+	assert_eq!(files.get().len(), 0);
+
+	// Act: an already-empty reset performs one reconciliation read and no write.
+	reads.set(0);
+	form.reset();
+	TimeoutFuture::new(0).await;
+	with_runtime(|runtime| runtime.flush_updates());
+
+	// Assert
+	assert_eq!(reads.get(), 1);
+	assert_eq!(writes.get(), 1);
+}
+
+#[wasm_bindgen_test(async)]
+async fn bound_file_reset_adopts_a_different_file_with_the_same_metadata() {
+	// Arrange
+	let scope = ReactiveScope::new();
+	let files = scope.enter(|| Signal::new(Vec::<EventFile>::new()));
+	let (_cleanup, form, input) =
+		scope.enter(|| file_reset_form(ControlBinding::file(files), false));
+	let first = browser_file("same.txt", "same");
+	let second = browser_file("same.txt", "same");
+	assert!(!js_sys::Object::is(first.as_ref(), second.as_ref()));
+	assign_files(&input, &[first.clone()]);
+	input
+		.dispatch_event(&web_sys::Event::new("change").expect("change"))
+		.expect("dispatch selection");
+	let input_for_reset = input.clone();
+	let second_for_reset = second.clone();
+	let _handler = Element::new(form.clone().unchecked_into()).add_event_listener_with_event(
+		"reset",
+		move |_| {
+			let input = input_for_reset.clone();
+			let second = second_for_reset.clone();
+			let assign = wasm_bindgen::closure::Closure::once_into_js(move || {
+				assign_files(&input, &[second]);
+			});
+			let promise = js_sys::Promise::resolve(&JsValue::UNDEFINED);
+			let then = Reflect::get(promise.as_ref(), &JsValue::from_str("then"))
+				.expect("Promise.then")
+				.unchecked_into::<Function>();
+			then.call1(promise.as_ref(), &assign)
+				.expect("queue reset microtask");
+		},
+	);
+
+	// Act
+	form.reset();
+	TimeoutFuture::new(0).await;
+	with_runtime(|runtime| runtime.flush_updates());
+
+	// Assert
+	assert_eq!(input.files().expect("files").length(), 1);
+	assert_eq!(files.get().len(), 1);
+	assert!(js_sys::Object::is(
+		files.get()[0].raw().as_ref(),
+		second.as_ref()
+	));
+}
+
+async fn yield_microtask() {
+	JsFuture::from(js_sys::Promise::resolve(&JsValue::UNDEFINED))
+		.await
+		.expect("microtask");
+}
+
+#[wasm_bindgen_test(async)]
+async fn bound_file_input_syncs_the_signal_after_a_normal_form_reset() {
+	let _cleanup = ReactiveCleanupGuard::new();
+	let scope = ReactiveScope::new();
+	let (root, files) = scope.enter(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let root = Element::new(document.create_element("div").expect("root"));
+		let files = Signal::new(Vec::new());
+		let files_for_reset = files.clone();
+		let files_seen_by_reset = Rc::new(RefCell::new(Vec::new()));
+		let files_seen_by_reset_handler = Rc::clone(&files_seen_by_reset);
+		page!({
+			form {
+				@reset: move |_| {
+					*files_seen_by_reset_handler.borrow_mut() = files_for_reset
+						.get()
+						.iter()
+						.map(|file| file.name().to_owned())
+						.collect()
+				},
+				input {
+					a11y: off,
+					type: "file",
+					bind: files,
+				}
+			}
+		})
+		.mount(&root)
+		.expect("mount");
+		let form: web_sys::HtmlFormElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("form")
+			.unchecked_into();
+		let input: web_sys::HtmlInputElement =
+			form.first_element_child().expect("input").unchecked_into();
+		let selected = browser_file("selected.txt", "selected");
+		assign_files(&input, &[selected]);
+		input
+			.dispatch_event(&web_sys::Event::new("change").expect("change"))
+			.expect("dispatch");
+
+		assert_eq!(files.get().len(), 1);
+		form.reset();
+		assert_eq!(&*files_seen_by_reset.borrow(), &["selected.txt"]);
+
+		(root, files)
+	});
+
+	TimeoutFuture::new(0).await;
+	with_runtime(|runtime| runtime.flush_updates());
+
+	let input: web_sys::HtmlInputElement = root
+		.as_web_sys()
+		.first_element_child()
+		.expect("form")
+		.first_element_child()
+		.expect("input")
+		.unchecked_into();
+	assert_eq!(input.files().expect("files").length(), 0);
+	assert!(files.get().is_empty());
+}
+
+#[wasm_bindgen_test(async)]
+async fn bound_file_input_preserves_the_signal_when_form_reset_is_prevented() {
+	let _cleanup = ReactiveCleanupGuard::new();
+	let scope = ReactiveScope::new();
+	let (root, files, selected) = scope.enter(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let root = Element::new(document.create_element("div").expect("root"));
+		let files = Signal::new(Vec::new());
+		let reset_seen = Rc::new(Cell::new(false));
+		let reset_seen_handler = Rc::clone(&reset_seen);
+		page!({
+			form {
+				@reset: move |event| {
+					reset_seen_handler.set(true);
+					event.prevent_default();
+				},
+				input {
+					a11y: off,
+					type: "file",
+					bind: files,
+				}
+			}
+		})
+		.mount(&root)
+		.expect("mount");
+		let form: web_sys::HtmlFormElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("form")
+			.unchecked_into();
+		let input: web_sys::HtmlInputElement =
+			form.first_element_child().expect("input").unchecked_into();
+		let selected = browser_file("selected.txt", "selected");
+		assign_files(&input, &[selected.clone()]);
+		input
+			.dispatch_event(&web_sys::Event::new("change").expect("change"))
+			.expect("dispatch");
+
+		form.reset();
+		assert!(reset_seen.get());
+
+		(root, files, selected)
+	});
+
+	TimeoutFuture::new(0).await;
+	with_runtime(|runtime| runtime.flush_updates());
+
+	let input: web_sys::HtmlInputElement = root
+		.as_web_sys()
+		.first_element_child()
+		.expect("form")
+		.first_element_child()
+		.expect("input")
+		.unchecked_into();
+	let dom_file = input
+		.files()
+		.expect("files")
+		.get(0)
+		.expect("selected DOM file");
+	assert!(js_sys::Object::is(dom_file.as_ref(), selected.as_ref()));
+	assert_eq!(files.get().len(), 1);
+	assert!(js_sys::Object::is(
+		files.get()[0].raw().as_ref(),
+		selected.as_ref()
+	));
+}
+
+#[wasm_bindgen_test]
+fn bound_file_input_fresh_mount_normalizes_nonempty_signal_to_empty() {
+	ReactiveScope::run(|| {
+		// Arrange
+		let _cleanup = ReactiveCleanupGuard::new();
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let root = Element::new(document.create_element("div").expect("root"));
+		let files = Signal::new(vec![reinhardt_pages::event::EventFile::from(browser_file(
+			"stale.txt",
+			"stale",
+		))]);
+
+		// Act
+		PageElement::new("input")
+			.attr("type", "file")
+			.control_binding(ControlBinding::file(files.clone()))
+			.into_page()
+			.mount(&root)
+			.expect("mount");
+		let input: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("input")
+			.unchecked_into();
+
+		// Assert
+		assert!(files.get().is_empty());
+		assert_eq!(input.files().expect("files").length(), 0);
+	});
+}
+
+#[wasm_bindgen_test]
+fn hydration_clears_stale_file_signal_when_live_file_list_is_empty() {
+	ReactiveScope::run(|| {
+		// Arrange
+		let _cleanup = ReactiveCleanupGuard::new();
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw = document.create_element("input").expect("input");
+		let input: web_sys::HtmlInputElement = raw.clone().unchecked_into();
+		input.set_type("file");
+		let root = Element::new(raw);
+		let files = Signal::new(vec![reinhardt_pages::event::EventFile::from(browser_file(
+			"server.txt",
+			"server",
+		))]);
+		let _state = SsrStateElement::install(&document);
+
+		// Act
+		reinhardt_pages::hydration::hydrate(
+			&HydratedFileInput {
+				files: files.clone(),
+			},
+			&root,
+		)
+		.expect("hydrate empty file input");
+
+		// Assert
+		assert_eq!(input.files().expect("files").length(), 0);
+		assert!(files.get().is_empty());
+	});
+}
+
+#[wasm_bindgen_test]
+fn bound_file_input_clears_signal_after_picker_returns_empty_selection() {
+	ReactiveScope::run(|| {
+		// Arrange
+		let _cleanup = ReactiveCleanupGuard::new();
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let root = Element::new(document.create_element("div").expect("root"));
+		let files = Signal::new(Vec::new());
+		PageElement::new("input")
+			.attr("type", "file")
+			.control_binding(ControlBinding::file(files.clone()))
+			.into_page()
+			.mount(&root)
+			.expect("mount");
+		let input: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("input")
+			.unchecked_into();
+		assign_files(&input, &[browser_file("selected.txt", "selected")]);
+		input
+			.dispatch_event(&web_sys::Event::new("change").expect("change"))
+			.expect("dispatch selection");
+		assert_eq!(files.get().len(), 1);
+
+		// Act
+		assign_files(&input, &[]);
+		input
+			.dispatch_event(&web_sys::Event::new("change").expect("change"))
+			.expect("dispatch empty selection");
+
+		// Assert
+		assert!(files.get().is_empty());
+		assert_eq!(input.files().expect("files").length(), 0);
+	});
+}
+
+#[wasm_bindgen_test]
+fn bound_file_input_keeps_focus_when_cleared_reactively() {
+	ReactiveScope::run(|| {
+		// Arrange
+		let mut cleanup = ReactiveCleanupGuard::new();
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_root = document.create_element("div").expect("root");
+		cleanup.attach_root(&raw_root);
+		document
+			.body()
+			.expect("body")
+			.append_child(&raw_root)
+			.expect("attach root");
+		let root = Element::new(raw_root.clone());
+		let files = Signal::new(Vec::new());
+		PageElement::new("input")
+			.attr("type", "file")
+			.control_binding(ControlBinding::file(files.clone()))
+			.into_page()
+			.mount(&root)
+			.expect("mount");
+		let input: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("input")
+			.unchecked_into();
+		let node: web_sys::Element = input.clone().unchecked_into();
+		assign_files(&input, &[browser_file("selected.txt", "selected")]);
+		input
+			.dispatch_event(&web_sys::Event::new("change").expect("change"))
+			.expect("dispatch selection");
+		input.focus().expect("focus");
+
+		// Act
+		files.set(Vec::new());
+
+		// Assert
+		assert_eq!(input.files().expect("files").length(), 0);
+		assert!(
+			node.is_same_node(
+				root.as_web_sys()
+					.first_element_child()
+					.as_ref()
+					.map(|element| &**element)
+			)
+		);
+		assert!(
+			document
+				.active_element()
+				.is_some_and(|active| active.is_same_node(Some(&node)))
+		);
+	});
+}
+
+#[wasm_bindgen_test(async)]
+async fn bound_file_input_removes_its_form_reset_listener_on_cleanup() {
+	let scope = ReactiveScope::new();
+	let files = scope.enter(|| Signal::new(Vec::<EventFile>::new()));
+	let (cleanup, form, input) =
+		scope.enter(|| file_reset_form(ControlBinding::file(files), false));
+	let selected = browser_file("selected.txt", "selected");
+	assign_files(&input, &[selected.clone()]);
+	input
+		.dispatch_event(&web_sys::Event::new("change").expect("change"))
+		.expect("dispatch selection");
+	assert_eq!(files.get().len(), 1);
+	drop(cleanup);
+
+	form.reset();
+	TimeoutFuture::new(0).await;
+	with_runtime(|runtime| runtime.flush_updates());
+
+	assert_eq!(files.get().len(), 1);
+	assert!(js_sys::Object::is(
+		files.get()[0].raw().as_ref(),
+		selected.as_ref()
+	));
+}
+
+#[wasm_bindgen_test(async)]
+async fn bound_file_input_does_not_write_after_cleanup_when_form_reset_is_pending() {
+	let signal_scope = ReactiveScope::new();
+	let files = signal_scope.enter(|| Signal::new(Vec::<EventFile>::new()));
+	let binding_scope = ReactiveScope::new();
+	let (cleanup, form, input) =
+		binding_scope.enter(|| file_reset_form(ControlBinding::file(files), false));
+	let effects = with_runtime(|runtime| runtime.debug_subscribers(files.id()));
+	let selected = browser_file("selected.txt", "selected");
+	assign_files(&input, &[selected.clone()]);
+	input
+		.dispatch_event(&web_sys::Event::new("change").expect("change"))
+		.expect("dispatch selection");
+	assert_eq!(files.get().len(), 1);
+
+	form.reset();
+	drop(cleanup);
+	TimeoutFuture::new(0).await;
+	with_runtime(|runtime| runtime.flush_updates());
+
+	assert_eq!(
+		with_runtime(|runtime| runtime.subscriber_count(files.id())),
+		0
+	);
+	assert!(
+		effects
+			.iter()
+			.all(|effect| !with_runtime(|runtime| runtime.has_node(*effect)))
+	);
+	assert_eq!(files.get().len(), 1);
+	assert!(js_sys::Object::is(
+		files.get()[0].raw().as_ref(),
+		selected.as_ref()
+	));
+	assert_eq!(input.files().expect("files").length(), 0);
+}
+
+#[wasm_bindgen_test(async)]
+async fn bound_file_input_does_not_write_after_signal_disposal_when_reset_is_pending() {
+	let signal_scope = ReactiveScope::new();
+	let files = signal_scope.enter(|| Signal::new(Vec::<EventFile>::new()));
+	let binding_scope = ReactiveScope::new();
+	let (_cleanup, form, input) =
+		binding_scope.enter(|| file_reset_form(ControlBinding::file(files), false));
+	assign_files(&input, &[browser_file("selected.txt", "selected")]);
+	input
+		.dispatch_event(&web_sys::Event::new("change").expect("change"))
+		.expect("dispatch selection");
+	assert_eq!(files.get().len(), 1);
+
+	form.reset();
+	drop(signal_scope);
+	TimeoutFuture::new(0).await;
+	with_runtime(|runtime| runtime.flush_updates());
+
+	assert_eq!(
+		with_runtime(|runtime| runtime.subscriber_count(files.id())),
+		0
+	);
+	assert!(files.try_get_untracked().is_err());
+	assert_eq!(input.files().expect("files").length(), 0);
+}
+
+#[wasm_bindgen_test]
+fn bound_file_input_reads_data_transfer_order_before_change_handler() {
+	ReactiveScope::run(|| {
+		let _cleanup = ReactiveCleanupGuard::new();
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let root = Element::new(document.create_element("div").expect("root"));
+		let files = Signal::new(Vec::new());
+		let observed = Rc::new(RefCell::new(Vec::new()));
+		let observed_handler = Rc::clone(&observed);
+		let files_handler = files.clone();
+		page!({
+			input {
+				a11y: off,
+				type: "file",
+				multiple: true,
+				bind: files,
+				@change: move |_| *observed_handler.borrow_mut() = files_handler.get(),
+			}
+		})
+		.mount(&root)
+		.expect("mount");
+		let input: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("input")
+			.unchecked_into();
+		let first = browser_file("first.txt", "one");
+		let second = browser_file("second.txt", "two");
+		assign_files(&input, &[first, second]);
+		input
+			.dispatch_event(&web_sys::Event::new("change").expect("change"))
+			.expect("dispatch");
+
+		assert_eq!(
+			files
+				.get()
+				.iter()
+				.map(|file| file.name())
+				.collect::<Vec<_>>(),
+			vec!["first.txt", "second.txt"]
+		);
+		assert_eq!(
+			observed
+				.borrow()
+				.iter()
+				.map(|file| file.name())
+				.collect::<Vec<_>>(),
+			vec!["first.txt", "second.txt"]
+		);
+	});
+}
+
+#[wasm_bindgen_test]
+fn bound_file_input_clears_without_replacing_the_dom_node() {
+	ReactiveScope::run(|| {
+		let _cleanup = ReactiveCleanupGuard::new();
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let root = Element::new(document.create_element("div").expect("root"));
+		let files = Signal::new(Vec::new());
+		PageElement::new("input")
+			.attr("type", "file")
+			.control_binding(ControlBinding::file(files.clone()))
+			.into_page()
+			.mount(&root)
+			.expect("mount");
+		let input: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("input")
+			.unchecked_into();
+		let node: web_sys::Element = input.clone().unchecked_into();
+		assign_files(&input, &[browser_file("selected.txt", "selected")]);
+		input
+			.dispatch_event(&web_sys::Event::new("change").expect("change"))
+			.expect("dispatch");
+		files.set(Vec::new());
+
+		assert_eq!(input.files().expect("files").length(), 0);
+		assert!(
+			node.is_same_node(
+				root.as_web_sys()
+					.first_element_child()
+					.as_ref()
+					.map(|element| &**element)
+			)
+		);
+	});
+}
+
+#[wasm_bindgen_test]
+fn bound_file_input_normalizes_nonempty_signal_to_live_selection() {
+	ReactiveScope::run(|| {
+		let _cleanup = ReactiveCleanupGuard::new();
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let root = Element::new(document.create_element("div").expect("root"));
+		let files = Signal::new(Vec::new());
+		PageElement::new("input")
+			.attr("type", "file")
+			.control_binding(ControlBinding::file(files.clone()))
+			.into_page()
+			.mount(&root)
+			.expect("mount");
+		let input: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.first_element_child()
+			.expect("input")
+			.unchecked_into();
+		let selected = browser_file("selected.txt", "selected");
+		assign_files(&input, &[selected.clone()]);
+		input
+			.dispatch_event(&web_sys::Event::new("change").expect("change"))
+			.expect("dispatch");
+		files.set(vec![reinhardt_pages::event::EventFile::from(browser_file(
+			"other.txt",
+			"other",
+		))]);
+
+		assert!(js_sys::Object::is(
+			files.get()[0].raw().as_ref(),
+			selected.as_ref()
+		));
+	});
+}
+
+struct HydratedFileInput {
+	files: Signal<Vec<reinhardt_pages::event::EventFile>>,
+}
+
+struct FailingHydrationAfterFile {
+	files: Signal<Vec<reinhardt_pages::event::EventFile>>,
+}
+
+impl Component for HydratedFileInput {
+	fn name() -> &'static str {
+		"HydratedFileInput"
+	}
+
+	fn render(&self) -> Page {
+		PageElement::new("input")
+			.attr("type", "file")
+			.control_binding(ControlBinding::file(self.files.clone()))
+			.into_page()
+	}
+}
+
+impl Component for FailingHydrationAfterFile {
+	fn name() -> &'static str {
+		"FailingHydrationAfterFile"
+	}
+
+	fn render(&self) -> Page {
+		PageElement::new("div")
+			.child(
+				PageElement::new("input")
+					.attr("type", "file")
+					.control_binding(ControlBinding::file(self.files.clone())),
+			)
+			.child(Page::Element(
+				PageElement::new("select")
+					.control_binding(ControlBinding::checkbox(Signal::new(false))),
+			))
+			.into_page()
+	}
+}
+
+#[wasm_bindgen_test]
+fn hydration_adopts_preselected_live_file_list() {
+	ReactiveScope::run(|| {
+		let _cleanup = ReactiveCleanupGuard::new();
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw = document.create_element("input").expect("input");
+		let input: web_sys::HtmlInputElement = raw.clone().unchecked_into();
+		input.set_type("file");
+		let selected = browser_file("hydrated.txt", "hydrated");
+		assign_files(&input, &[selected.clone()]);
+		let root = Element::new(raw);
+		let files = Signal::new(vec![reinhardt_pages::event::EventFile::from(browser_file(
+			"server.txt",
+			"server",
+		))]);
+		let _state = SsrStateElement::install(&document);
+
+		reinhardt_pages::hydration::hydrate(
+			&HydratedFileInput {
+				files: files.clone(),
+			},
+			&root,
+		)
+		.expect("hydrate file input");
+
+		assert_eq!(files.get().len(), 1);
+		assert!(js_sys::Object::is(
+			files.get()[0].raw().as_ref(),
+			selected.as_ref()
+		));
+	});
+}
+
+#[wasm_bindgen_test]
+fn failed_hydration_restores_the_file_signal() {
+	ReactiveScope::run(|| {
+		let document = web_sys::window()
+			.expect("window")
+			.document()
+			.expect("document");
+		let raw_root = document.create_element("div").expect("root");
+		let raw_input = document.create_element("input").expect("input");
+		let input: web_sys::HtmlInputElement = raw_input.clone().unchecked_into();
+		input.set_type("file");
+		let live_file = browser_file("live.txt", "live");
+		assign_files(&input, &[live_file]);
+		raw_root.append_child(&raw_input).expect("file input");
+		raw_root
+			.append_child(&document.create_element("select").expect("select"))
+			.expect("invalid sibling");
+		let server_file =
+			reinhardt_pages::event::EventFile::from(browser_file("server.txt", "server"));
+		let files = Signal::new(vec![server_file.clone()]);
+		let root = Element::new(raw_root);
+		let _state = SsrStateElement::install(&document);
+
+		reinhardt_pages::hydration::hydrate(
+			&FailingHydrationAfterFile {
+				files: files.clone(),
+			},
+			&root,
+		)
+		.expect_err("later invalid binding");
+
+		assert_eq!(files.get().len(), 1);
+		assert!(js_sys::Object::is(
+			files.get()[0].raw().as_ref(),
+			server_file.raw().as_ref()
+		));
 	});
 }
 

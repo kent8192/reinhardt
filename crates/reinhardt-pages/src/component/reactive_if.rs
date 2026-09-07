@@ -22,6 +22,8 @@ use std::cell::RefCell;
 #[cfg(native)]
 use std::future::Future;
 use std::rc::Rc;
+#[cfg(wasm)]
+use wasm_bindgen::JsCast;
 
 pub(crate) type ReactiveNodeStore = Rc<RefCell<Vec<Box<dyn std::any::Any>>>>;
 
@@ -287,6 +289,22 @@ impl ReactiveIfNode {
 		then_view: std::sync::Arc<dyn Fn() -> Page + 'static>,
 		else_view: std::sync::Arc<dyn Fn() -> Page + 'static>,
 	) -> Self {
+		Self::new_with_form_owner(
+			parent,
+			condition,
+			then_view,
+			else_view,
+			containing_form(parent.as_web_sys()),
+		)
+	}
+
+	pub(crate) fn new_with_form_owner(
+		parent: &crate::dom::Element,
+		condition: std::sync::Arc<dyn Fn() -> bool + 'static>,
+		then_view: std::sync::Arc<dyn Fn() -> Page + 'static>,
+		else_view: std::sync::Arc<dyn Fn() -> Page + 'static>,
+		form_owner: Option<web_sys::HtmlFormElement>,
+	) -> Self {
 		// Create a comment node as a marker/anchor point
 		let document = web_sys::window()
 			.expect("window should be available")
@@ -299,7 +317,7 @@ impl ReactiveIfNode {
 			.inner()
 			.append_child(&marker)
 			.expect("should append marker");
-		Self::new_with_markers(marker, None, condition, then_view, else_view)
+		Self::new_with_markers(marker, None, condition, then_view, else_view, form_owner)
 	}
 
 	fn new_before_marker(
@@ -307,6 +325,7 @@ impl ReactiveIfNode {
 		condition: std::sync::Arc<dyn Fn() -> bool + 'static>,
 		then_view: std::sync::Arc<dyn Fn() -> Page + 'static>,
 		else_view: std::sync::Arc<dyn Fn() -> Page + 'static>,
+		form_owner: Option<web_sys::HtmlFormElement>,
 	) -> Self {
 		let document = web_sys::window()
 			.expect("window should be available")
@@ -321,7 +340,14 @@ impl ReactiveIfNode {
 		parent
 			.insert_before(&marker, Some(anchor))
 			.expect("should insert marker");
-		Self::new_with_markers(marker, Some(start_marker), condition, then_view, else_view)
+		Self::new_with_markers(
+			marker,
+			Some(start_marker),
+			condition,
+			then_view,
+			else_view,
+			form_owner,
+		)
 	}
 
 	fn new_with_markers(
@@ -330,6 +356,7 @@ impl ReactiveIfNode {
 		condition: std::sync::Arc<dyn Fn() -> bool + 'static>,
 		then_view: std::sync::Arc<dyn Fn() -> Page + 'static>,
 		else_view: std::sync::Arc<dyn Fn() -> Page + 'static>,
+		form_owner: Option<web_sys::HtmlFormElement>,
 	) -> Self {
 		// Shared state for the Effect
 		let current_nodes: Rc<RefCell<Vec<web_sys::Node>>> = Rc::new(RefCell::new(Vec::new()));
@@ -342,6 +369,7 @@ impl ReactiveIfNode {
 		let reactive_nodes = new_reactive_node_store();
 		let effect_reactive_node_store = current_reactive_node_store();
 		let branch_reactive_node_store = reactive_nodes.clone();
+		let branch_form_owner = form_owner.clone();
 
 		// Create the Effect that will re-run when condition dependencies change
 		let effect = Effect::new_with_timing(
@@ -383,7 +411,9 @@ impl ReactiveIfNode {
 						};
 
 						// Mount new nodes before the marker
-						mount_before_marker(&marker_clone, view)
+						let form_owner = containing_form_for_marker(&marker_clone)
+							.or_else(|| branch_form_owner.clone());
+						mount_before_marker_with_form_owner(&marker_clone, view, form_owner)
 					});
 					*current_nodes_clone.borrow_mut() = new_nodes;
 				});
@@ -580,6 +610,14 @@ impl ReactiveNode {
 		parent: &crate::dom::Element,
 		render: std::sync::Arc<dyn Fn() -> Page + 'static>,
 	) -> Self {
+		Self::new_with_form_owner(parent, render, containing_form(parent.as_web_sys()))
+	}
+
+	pub(crate) fn new_with_form_owner(
+		parent: &crate::dom::Element,
+		render: std::sync::Arc<dyn Fn() -> Page + 'static>,
+		form_owner: Option<web_sys::HtmlFormElement>,
+	) -> Self {
 		// Create a comment node as a marker/anchor point
 		let document = web_sys::window()
 			.expect("window should be available")
@@ -592,12 +630,13 @@ impl ReactiveNode {
 			.inner()
 			.append_child(&marker)
 			.expect("should append marker");
-		Self::new_with_markers(marker, None, render)
+		Self::new_with_markers(marker, None, render, form_owner)
 	}
 
 	fn new_before_marker(
 		anchor: &web_sys::Comment,
 		render: std::sync::Arc<dyn Fn() -> Page + 'static>,
+		form_owner: Option<web_sys::HtmlFormElement>,
 	) -> Self {
 		let document = web_sys::window()
 			.expect("window should be available")
@@ -612,13 +651,14 @@ impl ReactiveNode {
 		parent
 			.insert_before(&marker, Some(anchor))
 			.expect("should insert marker");
-		Self::new_with_markers(marker, Some(start_marker), render)
+		Self::new_with_markers(marker, Some(start_marker), render, form_owner)
 	}
 
 	fn new_with_markers(
 		marker: web_sys::Comment,
 		start_marker: Option<web_sys::Comment>,
 		render: std::sync::Arc<dyn Fn() -> Page + 'static>,
+		form_owner: Option<web_sys::HtmlFormElement>,
 	) -> Self {
 		// Shared state for the Effect
 		let current_nodes: Rc<RefCell<Vec<web_sys::Node>>> = Rc::new(RefCell::new(Vec::new()));
@@ -632,6 +672,7 @@ impl ReactiveNode {
 		let mount_reactive_node_store = reactive_nodes.clone();
 		let hydrated_nodes_preserved = Rc::new(Cell::new(true));
 		let hydrated_nodes_preserved_clone = hydrated_nodes_preserved.clone();
+		let render_form_owner = form_owner.clone();
 		#[cfg(feature = "i18n")]
 		let i18n_context = crate::i18n::current_i18n_callback_context();
 
@@ -674,7 +715,9 @@ impl ReactiveNode {
 						// Mount new nodes before the marker
 						let new_nodes = scope.enter(|| {
 							with_reactive_node_store(&mount_reactive_node_store, || {
-								mount_before_marker(&marker_clone, view)
+								let form_owner = containing_form_for_marker(&marker_clone)
+									.or_else(|| render_form_owner.clone());
+								mount_before_marker_with_form_owner(&marker_clone, view, form_owner)
 							})
 						});
 						with_reactive_node_store(&mount_reactive_node_store, || {
@@ -1121,8 +1164,36 @@ fn update_activity_boundary_attrs(
 /// nodes before the marker comment node.
 #[cfg(wasm)]
 fn mount_before_marker(marker: &web_sys::Comment, view: Page) -> Vec<web_sys::Node> {
-	use wasm_bindgen::JsCast;
+	let form_owner = containing_form_for_marker(marker);
+	mount_before_marker_with_form_owner(marker, view, form_owner)
+}
 
+#[cfg(wasm)]
+fn containing_form_for_marker(marker: &web_sys::Comment) -> Option<web_sys::HtmlFormElement> {
+	marker
+		.parent_node()
+		.and_then(|parent| parent.dyn_into::<web_sys::Element>().ok())
+		.and_then(|parent| containing_form(&parent))
+}
+
+#[cfg(wasm)]
+fn containing_form(element: &web_sys::Element) -> Option<web_sys::HtmlFormElement> {
+	let mut current = Some(element.clone());
+	while let Some(element) = current {
+		if element.tag_name().eq_ignore_ascii_case("form") {
+			return element.dyn_into().ok();
+		}
+		current = element.parent_element();
+	}
+	None
+}
+
+#[cfg(wasm)]
+fn mount_before_marker_with_form_owner(
+	marker: &web_sys::Comment,
+	view: Page,
+	form_owner: Option<web_sys::HtmlFormElement>,
+) -> Vec<web_sys::Node> {
 	let document = web_sys::window()
 		.expect("window should be available")
 		.document()
@@ -1137,7 +1208,11 @@ fn mount_before_marker(marker: &web_sys::Comment, view: Page) -> Vec<web_sys::No
 			if !is_safe_html_element_name(el.tag_name()) {
 				let (_, _, _, children, _, _, _) = el.into_parts_with_control_binding();
 				for child in children {
-					nodes.extend(mount_before_marker(marker, child));
+					nodes.extend(mount_before_marker_with_form_owner(
+						marker,
+						child,
+						form_owner.clone(),
+					));
 				}
 				return nodes;
 			}
@@ -1155,6 +1230,11 @@ fn mount_before_marker(marker: &web_sys::Comment, view: Page) -> Vec<web_sys::No
 				let element = document
 					.create_element(&tag)
 					.expect("should create element");
+				let child_form_owner = if tag.eq_ignore_ascii_case("form") {
+					element.clone().dyn_into::<web_sys::HtmlFormElement>().ok()
+				} else {
+					form_owner.clone()
+				};
 
 				// Set attributes
 				for (index, (name, value)) in attrs.iter().enumerate() {
@@ -1276,10 +1356,18 @@ fn mount_before_marker(marker: &web_sys::Comment, view: Page) -> Vec<web_sys::No
 				let binding_controller = control_binding
 					.clone()
 					.map(|binding| {
-						crate::dom::control_binding::ControlBindingController::mount(
-							element_wrapper.clone(),
-							binding,
-						)
+						if form_owner.is_some() {
+							crate::dom::control_binding::ControlBindingController::mount_with_form_owner(
+								element_wrapper.clone(),
+								binding,
+								form_owner.clone(),
+							)
+						} else {
+							crate::dom::control_binding::ControlBindingController::mount(
+								element_wrapper.clone(),
+								binding,
+							)
+						}
 					})
 					.transpose()?;
 				let mut event_handles = Vec::new();
@@ -1309,7 +1397,11 @@ fn mount_before_marker(marker: &web_sys::Comment, view: Page) -> Vec<web_sys::No
 						.append_child(&child_marker)
 						.map_err(|_| MountError::AppendChildFailed)?;
 					for child in children {
-						mount_before_marker(&child_marker, child);
+						mount_before_marker_with_form_owner(
+							&child_marker,
+							child,
+							child_form_owner.clone(),
+						);
 					}
 					let _ = element.remove_child(&child_marker);
 				}
@@ -1336,18 +1428,28 @@ fn mount_before_marker(marker: &web_sys::Comment, view: Page) -> Vec<web_sys::No
 		}
 		Page::Fragment(children) => {
 			for child in children {
-				nodes.extend(mount_before_marker(marker, child));
+				nodes.extend(mount_before_marker_with_form_owner(
+					marker,
+					child,
+					form_owner.clone(),
+				));
 			}
 		}
 		Page::KeyedFragment(children) => {
 			for (_, child) in children {
-				nodes.extend(mount_before_marker(marker, child));
+				nodes.extend(mount_before_marker_with_form_owner(
+					marker,
+					child,
+					form_owner.clone(),
+				));
 			}
 		}
 		Page::Outlet(outlet) => {
 			let id = outlet.id().map(str::to_string);
 			if let Some(child) = outlet.into_child() {
-				nodes.extend(mount_before_marker(marker, child));
+				nodes.extend(mount_before_marker_with_form_owner(
+					marker, child, form_owner,
+				));
 			} else if let Some(id) = id {
 				let element = document
 					.create_element("reinhardt-outlet")
@@ -1368,28 +1470,41 @@ fn mount_before_marker(marker: &web_sys::Comment, view: Page) -> Vec<web_sys::No
 					web_sys::console::error_1(&wasm_bindgen::JsValue::from_str(&error.to_string()));
 				}
 			}
-			nodes.extend(mount_before_marker(marker, *view));
+			nodes.extend(mount_before_marker_with_form_owner(
+				marker, *view, form_owner,
+			));
 		}
 		#[cfg(feature = "hmr")]
 		Page::DevTemplate { view, .. } | Page::DevSlot { view, .. } => {
-			nodes.extend(mount_before_marker(marker, *view));
+			nodes.extend(mount_before_marker_with_form_owner(
+				marker, *view, form_owner,
+			));
 		}
 		Page::ReactiveIf(reactive_if) => {
 			let (condition, then_view, else_view) = reactive_if.into_parts();
-			let nested_node =
-				ReactiveIfNode::new_before_marker(marker, condition, then_view, else_view);
+			let nested_node = ReactiveIfNode::new_before_marker(
+				marker, condition, then_view, else_view, form_owner,
+			);
 			store_reactive_node(nested_node);
 		}
 		Page::Reactive(reactive) => {
 			let render = reactive.into_render();
-			let nested_node = ReactiveNode::new_before_marker(marker, render);
+			let nested_node = ReactiveNode::new_before_marker(marker, render, form_owner);
 			store_reactive_node(nested_node);
 		}
 		Page::Suspense(node) => {
-			nodes.extend(mount_before_marker(marker, node.render_branch()));
+			nodes.extend(mount_before_marker_with_form_owner(
+				marker,
+				node.render_branch(),
+				form_owner,
+			));
 		}
 		Page::Deferred(node) => {
-			nodes.extend(mount_before_marker(marker, node.content()));
+			nodes.extend(mount_before_marker_with_form_owner(
+				marker,
+				node.content(),
+				form_owner,
+			));
 		}
 	}
 

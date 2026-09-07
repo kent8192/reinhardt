@@ -24,6 +24,7 @@
 /// Controlled form-element binding descriptors.
 pub mod control_binding;
 pub mod event;
+pub mod event_file;
 pub mod head;
 #[cfg(feature = "page-hot-reload")]
 pub mod hot_reload;
@@ -36,6 +37,7 @@ pub use control_binding::{
 	ControlWriteOutcome, NumberParseError, NumberParseErrorKind, NumberValue,
 };
 pub use event::{EventInterface, EventName, EventType};
+pub use event_file::EventFile;
 pub use head::{Head, LinkTag, MetaTag, ScriptTag, StyleTag};
 #[cfg(feature = "page-hot-reload")]
 pub use hot_reload::DevTemplateMetadata;
@@ -1241,6 +1243,8 @@ impl Page {
 				let omits_bound_password_value = el.tag_name().eq_ignore_ascii_case("input")
 					&& input_type_is_password
 					&& binding.is_some_and(|binding| binding.kind() == ControlKind::Text);
+				let omits_bound_file_value = el.tag_name().eq_ignore_ascii_case("input")
+					&& binding.is_some_and(|binding| binding.kind() == ControlKind::File);
 				let projected_input_value = if omits_bound_password_value {
 					None
 				} else {
@@ -1275,7 +1279,7 @@ impl Page {
 					// Skip boolean attributes with falsy values (empty, "false", "0")
 					let name_str: &str = name.as_ref();
 					if (name_str.eq_ignore_ascii_case("value")
-						&& (projects_value || omits_bound_password_value))
+						&& (projects_value || omits_bound_password_value || omits_bound_file_value))
 						|| (name_str.eq_ignore_ascii_case("checked") && binding.is_some())
 						|| (name_str.eq_ignore_ascii_case("selected") && selection.is_some())
 						|| (omits_bound_password_value
@@ -1295,7 +1299,7 @@ impl Page {
 				for (index, attribute) in el.reactive_attrs().iter().enumerate() {
 					let name = attribute.name();
 					if (name.eq_ignore_ascii_case("value")
-						&& (projects_value || omits_bound_password_value))
+						&& (projects_value || omits_bound_password_value || omits_bound_file_value))
 						|| (name.eq_ignore_ascii_case("checked") && binding.is_some())
 						|| (name.eq_ignore_ascii_case("selected") && selection.is_some())
 						|| (omits_bound_password_value
@@ -2084,6 +2088,48 @@ mod tests {
 				html,
 				"<input type=\"password\" data-rh-password-omitted=\"true\" />"
 			);
+		});
+	}
+
+	#[cfg(native)]
+	#[rstest]
+	fn render_to_string_omits_bound_file_values() {
+		ReactiveScope::run(|| {
+			// Arrange
+			let file =
+				EventFile::from(&NativeEventFile::new("secret.txt", "text/plain", 12, 1_000));
+			let input = PageElement::new("input")
+				.attr("type", "file")
+				.attr("value", "secret.txt")
+				.control_binding(ControlBinding::file(Signal::new(vec![file])))
+				.into_page();
+
+			// Act
+			let html = input.render_to_string();
+
+			// Assert
+			assert_eq!(html, r#"<input type="file" />"#);
+		});
+	}
+
+	#[cfg(native)]
+	#[rstest]
+	fn render_to_string_omits_bound_file_values_with_reactive_attribute() {
+		ReactiveScope::run(|| {
+			// Arrange
+			let file =
+				EventFile::from(&NativeEventFile::new("secret.txt", "text/plain", 12, 1_000));
+			let input = PageElement::new("input")
+				.attr("type", "file")
+				.reactive_attr("value", || Some("secret.txt".into()))
+				.control_binding(ControlBinding::file(Signal::new(vec![file])))
+				.into_page();
+
+			// Act
+			let html = input.render_to_string();
+
+			// Assert
+			assert_eq!(html, r#"<input type="file" />"#);
 		});
 	}
 

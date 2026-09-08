@@ -52,7 +52,6 @@ type MemoFn<T> = Box<dyn FnMut() -> T + 'static>;
 struct MemoSlot<T: Clone + 'static> {
 	f: Option<MemoFn<T>>,
 	value: Option<T>,
-	deps_notifier: Option<super::effect::Effect>,
 	run_scope: Option<super::scope::ReactiveScope>,
 }
 
@@ -143,28 +142,16 @@ impl<T: Clone + 'static> Memo<T> {
 	where
 		F: FnMut() -> T + 'static,
 	{
-		let memo = Self::allocate(Box::new(move || {
+		Self::allocate(Box::new(move || {
+			// Register on the Memo itself so propagation invalidates it before
+			// consumers run, including reads inside an explicit batch.
+			with_runtime(|rt| {
+				for &dep in deps.as_slice() {
+					rt.track_dependency(dep);
+				}
+			});
 			super::runtime::run_without_observer(&mut f)
-		}));
-		let notifier = if deps.as_slice().is_empty() {
-			None
-		} else {
-			let memo_id = memo.id();
-			Some(super::effect::Effect::new_with_deps_and_timing::<_, fn()>(
-				move || {
-					mark_memo_dirty_by_id(memo_id);
-					None
-				},
-				deps,
-				EffectTiming::Layout,
-			))
-		};
-		with_node_mut::<MemoSlot<T>, _>(memo.key, |slot| {
-			slot.deps_notifier = notifier;
-		})
-		.unwrap_or_else(|err| panic!("{err}"));
-		set_node_dirty(memo.key, false).unwrap_or_else(|err| panic!("{err}"));
-		memo
+		}))
 	}
 
 	#[doc(hidden)]
@@ -185,7 +172,6 @@ impl<T: Clone + 'static> Memo<T> {
 			MemoSlot {
 				f: Some(f),
 				value: None,
-				deps_notifier: None,
 				run_scope: None,
 			},
 		);
@@ -304,27 +290,17 @@ impl<T: Clone + 'static> Memo<T> {
 		self.key.node_id()
 	}
 
-	/// Dispose this memo and its explicit dependency notifier.
+	/// Dispose this memo and unsubscribe its dependencies.
 	pub fn dispose(&self) {
-		let Ok((f, value, notifier, run_scope)) =
-			with_node_mut::<MemoSlot<T>, _>(self.key, |slot| {
-				(
-					slot.f.take(),
-					slot.value.take(),
-					slot.deps_notifier.take(),
-					slot.run_scope.take(),
-				)
-			})
-		else {
+		let Ok((f, value, run_scope)) = with_node_mut::<MemoSlot<T>, _>(self.key, |slot| {
+			(slot.f.take(), slot.value.take(), slot.run_scope.take())
+		}) else {
 			return;
 		};
 		let _ = mark_node_disposed(self.key);
 		drop(f);
 		drop(value);
 		drop(run_scope);
-		if let Some(notifier) = notifier {
-			notifier.dispose();
-		}
 		let _ = try_with_runtime(|rt| rt.remove_node(self.id()));
 	}
 }

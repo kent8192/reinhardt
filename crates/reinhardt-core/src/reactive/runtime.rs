@@ -232,7 +232,8 @@ impl Runtime {
 	/// Notify that a Signal has changed
 	///
 	/// This schedules all subscribers (Effects/Memos that depend on this Signal) for re-execution.
-	/// Layout effects are executed synchronously, while passive effects are scheduled asynchronously.
+	/// Outside explicit batches, layout effects execute synchronously and passive
+	/// effects are scheduled asynchronously. Batches defer both until the outermost exit.
 	///
 	/// # Arguments
 	///
@@ -260,9 +261,14 @@ impl Runtime {
 			// Drop the borrow before executing effects
 			drop(graph);
 
-			// Execute layout effects synchronously
+			// Explicit batches must not expose intermediate values to layout effects.
+			let batched = *self.batch_depth.borrow() > 0;
 			for effect_id in layout_effects {
-				super::effect::Effect::execute_effect(effect_id);
+				if batched {
+					self.schedule_update(effect_id);
+				} else {
+					super::effect::Effect::execute_effect(effect_id);
+				}
 			}
 
 			// Schedule passive effects asynchronously
@@ -849,5 +855,43 @@ mod tests {
 		super::subscribe_node_to_observer(node, observer);
 		let subs2 = super::with_runtime(|rt| rt.debug_subscribers(node));
 		assert_eq!(subs2.len(), 1, "subscribe must be idempotent");
+	}
+
+	#[test]
+	#[serial(reactive_batch)]
+	fn nested_batches_defer_layout_effects_until_all_values_are_ready() {
+		use crate::reactive::{Effect, Signal};
+		use std::{cell::RefCell, rc::Rc};
+
+		// Arrange
+		let first = Signal::new(0);
+		let second = Signal::new(0);
+		let observed = Rc::new(RefCell::new(Vec::new()));
+		let effect_first = first.clone();
+		let effect_second = second.clone();
+		let effect_observed = Rc::clone(&observed);
+		let _effect = Effect::new_with_timing(
+			move || {
+				effect_observed
+					.borrow_mut()
+					.push((effect_first.get(), effect_second.get()))
+			},
+			EffectTiming::Layout,
+		);
+
+		// Act and assert: nested batches expose only the final snapshot at outer exit.
+		batch(|| {
+			first.set(1);
+			batch(|| {
+				second.set(2);
+				first.set(3);
+			});
+			assert_eq!(*observed.borrow(), [(0, 0)]);
+		});
+		assert_eq!(*observed.borrow(), [(0, 0), (3, 2)]);
+
+		// Layout effects remain synchronous outside a batch.
+		second.set(4);
+		assert_eq!(*observed.borrow(), [(0, 0), (3, 2), (3, 4)]);
 	}
 }

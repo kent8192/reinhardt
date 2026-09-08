@@ -123,6 +123,10 @@ Available features:
 - `page`: Page types (requires `types` and `security`)
 - `reactive`: Reactive types
 
+With `reactive`, explicit `batch()` calls defer both layout and passive effects
+until the outermost batch exits. Layout effects remain synchronous outside a
+batch, so observers see complete form reset snapshots without intermediate edits.
+
 ## Usage
 
 ### Handler and Middleware

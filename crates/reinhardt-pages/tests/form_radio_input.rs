@@ -138,7 +138,7 @@ fn native_radio_reset_epoch_clears_runtime_state_after_nested_batches() {
 	use reinhardt_pages::{FieldError, RevalidateOn, reactive::batch};
 	use std::{cell::Cell, rc::Rc};
 
-	// Arrange: preserve a dirty collection to distinguish reset sync from runtime.reset().
+	// Arrange: metadata synchronization must compute dirtiness from the final source snapshot.
 	let radio = form! {
 		name: ResetEpochRadios,
 		fields: {
@@ -419,6 +419,168 @@ mod browser {
 		gloo_timers::future::TimeoutFuture::new(0).await;
 		assert_eq!(runtime.get_values().answer, "");
 		assert!(!container.input("answer").checked());
+	}
+
+	#[wasm_bindgen_test]
+	async fn native_radio_reset_restores_mixed_fields_and_collection_paths() {
+		struct LoadedFields {
+			answer: String,
+			name: String,
+			enabled: bool,
+		}
+		async fn load_fields() -> Result<LoadedFields, reinhardt_pages::ServerFnError> {
+			Ok(LoadedFields {
+				answer: String::from("yes"),
+				name: String::from("loaded name"),
+				enabled: false,
+			})
+		}
+
+		// Arrange: scalar and collection controls share one native reset boundary.
+		let radio = form! {
+			name: MixedNativeReset,
+			initial_loader: load_fields,
+			fields: {
+				answer: ChoiceField<String> {
+					widget: RadioInput,
+					choices: [("yes", "Yes")],
+					initial_from: "answer",
+				}
+				name: CharField {
+					initial: "initial name",
+					initial_from: "name"
+				}
+				enabled: BooleanField {
+					initial: true,
+					initial_from: "enabled"
+				}
+				unbound: CharField { bind: false }
+				answers: FieldArray {
+					fields: {
+						name: CharField {}
+						enabled: BooleanField {}
+						answer: ChoiceField<String> {
+							widget: RadioInput,
+							choices: [("yes", "Yes")],
+						}
+						unbound: CharField { bind: false }
+					}
+				}
+			}
+		};
+		let runtime = use_form(&radio).revalidate_on(RevalidateOn::Change).build();
+		let mut item = radio.new_answers_item();
+		item.name = String::from("mounted row");
+		item.enabled = true;
+		item.answer = String::from("yes");
+		let key = runtime.push_item(radio.answers_collection(), item);
+		let mut second_item = radio.new_answers_item();
+		second_item.name = String::from("second row");
+		let second_key = runtime.push_item(radio.answers_collection(), second_item);
+		let name_path = radio.answers_name_path(key);
+		let name_watch = runtime.watch_path::<String>(name_path.clone());
+		let container = TestContainer::mount(radio.clone().into_page());
+		radio.unbound().set(String::from("unbound scalar kept"));
+		runtime.set_path_value(
+			radio.answers_unbound_path(key),
+			String::from("unbound row kept"),
+		);
+		runtime.reset_default_values();
+		let event_count = Rc::new(Cell::new(0));
+		let observed_events = Rc::clone(&event_count);
+		let _subscription =
+			runtime.subscribe(move |_| observed_events.set(observed_events.get() + 1));
+
+		// Act: reset edits to a row that has no persisted loader defaults yet.
+		container.input("answer").click();
+		container.input("name").set_value("edited name");
+		container
+			.input("name")
+			.dispatch_event(&web_sys::Event::new("input").unwrap())
+			.unwrap();
+		runtime.set_value(radio.enabled_field(), false);
+		runtime.set_path_value(name_path.clone(), String::from("edited row"));
+		runtime.set_path_value(radio.answers_enabled_path(key), false);
+		runtime.set_path_value(radio.answers_answer_path(key), String::new());
+		runtime.set_error(radio.name_field(), FieldError::new("name error"));
+		runtime.set_path_error(name_path.clone(), FieldError::new("row error"));
+		event_count.set(0);
+		container.native_form().reset();
+		gloo_timers::future::TimeoutFuture::new(0).await;
+
+		// Assert: values, DOM, and existing path handles all reflect their reset values.
+		assert_eq!(runtime.get_values().name, "initial name");
+		assert_eq!(container.input("name").value(), "initial name");
+		assert!(runtime.get_values().enabled);
+		assert!(container.input("enabled").checked());
+		assert_eq!(runtime.get_values().answer, "");
+		assert!(!container.input("answer").checked());
+		assert_eq!(name_watch.get(), "mounted row");
+		assert_eq!(container.input("answers_0_name").value(), "mounted row");
+		assert!(runtime.get_values().answers[0].enabled);
+		assert!(container.input("answers_0_enabled").checked());
+		assert_eq!(runtime.get_values().answers[0].answer, "yes");
+		assert!(container.input("answers_0_answer").checked());
+		assert_eq!(radio.answers().get_untracked()[0].key(), key);
+		assert_eq!(runtime.get_values().unbound, "unbound scalar kept");
+		assert_eq!(runtime.get_values().answers[0].unbound, "unbound row kept");
+		assert!(!runtime.form_state().is_dirty.get());
+		assert!(!runtime.form_state().is_touched.get());
+		assert_eq!(runtime.get_path_state(name_path.clone()).error, None);
+		assert_eq!(runtime.form_state().error.get(), None);
+		assert_eq!(event_count.get(), 0);
+
+		// A later loader refresh persists current collection defaults as well as scalars.
+		runtime.set_path_value(name_path.clone(), String::from("loaded row"));
+		runtime.set_path_value(radio.answers_enabled_path(key), false);
+		runtime.set_path_value(
+			radio.answers_name_path(second_key),
+			String::from("other loaded row"),
+		);
+		radio.load_initial_values().await.unwrap();
+		assert_eq!(
+			runtime.move_item(radio.answers_collection(), key, 1),
+			Some((0, 1))
+		);
+		let name_watch = runtime.watch_path::<String>(name_path.clone());
+		runtime.reset_default_values();
+		runtime.set_value(radio.name_field(), String::from("changed again"));
+		runtime.set_value(radio.enabled_field(), true);
+		runtime.set_value(radio.answer_field(), String::new());
+		runtime.set_path_value(name_path.clone(), String::from("changed row again"));
+		runtime.set_path_value(
+			radio.answers_name_path(second_key),
+			String::from("other changed row"),
+		);
+		runtime.set_path_value(radio.answers_enabled_path(key), true);
+		event_count.set(0);
+		container.native_form().reset();
+		gloo_timers::future::TimeoutFuture::new(0).await;
+		assert_eq!(runtime.watch().get().name, "loaded name");
+		assert_eq!(container.input("name").value(), "loaded name");
+		assert_eq!(runtime.get_values().answer, "yes");
+		assert!(container.input("answer").checked());
+		assert!(!runtime.get_values().enabled);
+		assert!(!container.input("enabled").checked());
+		assert_eq!(name_watch.get(), "loaded row");
+		assert_eq!(container.input("answers_1_name").value(), "loaded row");
+		assert_eq!(
+			container.input("answers_0_name").value(),
+			"other loaded row"
+		);
+		assert!(!runtime.get_values().answers[1].enabled);
+		assert!(!container.input("answers_1_enabled").checked());
+		assert_eq!(radio.answers().get_untracked()[1].key(), key);
+		assert_eq!(radio.answers().get_untracked()[0].key(), second_key);
+		assert!(!runtime.form_state().is_dirty.get());
+		assert!(!runtime.form_state().is_touched.get());
+		assert_eq!(event_count.get(), 0);
+		runtime.set_path_value(name_path, String::from("observed after reset"));
+		assert_eq!(name_watch.get(), "observed after reset");
+		assert_eq!(
+			container.input("answers_1_name").value(),
+			"observed after reset"
+		);
 	}
 
 	#[wasm_bindgen_test]

@@ -1729,6 +1729,10 @@ fn generate_form_runtime_contract(
 				}
 			}
 
+			fn runtime_native_reset_epoch(&self) -> u64 {
+				self.__native_reset_epoch.get()
+			}
+
 			fn runtime_current_values(&self) -> Self::Values {
 				#values_ident {
 					#(#values_fields)*
@@ -4513,6 +4517,7 @@ pub(super) fn generate(
 	let runtime_initial_values_field_decl = if runtime_contract_supported {
 		quote! {
 			__initial_values: ::std::rc::Rc<::std::cell::RefCell<#values_ident>>,
+			__native_reset_epoch: #pages_crate::reactive::Signal<u64>,
 		}
 	} else {
 		quote! {}
@@ -4534,6 +4539,7 @@ pub(super) fn generate(
 				},
 			));
 			quote! {
+				__native_reset_epoch: #pages_crate::reactive::Signal::new(0),
 				__initial_values: ::std::rc::Rc::new(
 					::std::cell::RefCell::new(#values_ident {
 						#(#initial_fields)*
@@ -5827,33 +5833,34 @@ fn generate_into_page(macro_ast: &TypedFormMacro, pages_crate: &TokenStream) -> 
 		.iter()
 		.filter(|field| field.bind && matches!(field.widget, TypedWidget::RadioInput))
 		.collect();
-	let (radio_reset_setup, radio_reset_listener) = if radio_fields.is_empty() {
-		(TokenStream::new(), TokenStream::new())
-	} else {
-		let names: Vec<_> = radio_fields.iter().map(|field| &field.name).collect();
-		(
-			quote! {
-				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-				let __radio_resets = ::std::vec![
-					#((self.#names.clone(), self.#names.get_untracked())),*
-				];
-			},
-			quote! {
-				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-				let form_element = form_element.listener("reset", move |event| {
-					let __radio_resets = __radio_resets.clone();
-					// Run after the native reset and honor cancellation by other listeners.
-					#pages_crate::platform::spawn_task(async move {
-						if !event.default_prevented() {
-							for (signal, value) in __radio_resets {
-								signal.set(value);
+	let (radio_reset_setup, radio_reset_listener) =
+		if radio_fields.is_empty() || !supports_form_runtime_contract(&macro_ast.fields) {
+			(TokenStream::new(), TokenStream::new())
+		} else {
+			let names: Vec<_> = radio_fields.iter().map(|field| &field.name).collect();
+			(
+				quote! {
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					let __radio_form = self.clone();
+				},
+				quote! {
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					let form_element = form_element.listener("reset", move |event| {
+						let __radio_form = __radio_form.clone();
+						// Run after the native reset and honor cancellation by other listeners.
+						#pages_crate::platform::spawn_task(async move {
+							if !event.default_prevented() {
+								let __defaults = __radio_form.__initial_values.borrow().clone();
+								#pages_crate::reactive::batch(|| {
+									#(__radio_form.#names.set(__defaults.#names.clone());)*
+									__radio_form.__native_reset_epoch.update(|epoch| *epoch = epoch.wrapping_add(1));
+								});
 							}
-						}
+						});
 					});
-				});
-			},
-		)
-	};
+				},
+			)
+		};
 
 	quote! {
 		pub fn into_page(self) -> #pages_crate::component::Page {
@@ -6716,6 +6723,7 @@ fn generate_collection_field_view(
 					.attr("id", __field_id.clone())
 					#value_attr
 					.attr("class", #input_class)
+					#autocomplete_attr
 					.bool_attr("required", #required)
 					.bool_attr("disabled", #disabled)
 					#checked_attr
@@ -7222,7 +7230,6 @@ fn generate_field_view(
 	let label_text = field.display.label.as_deref().unwrap_or(&field_name_str);
 	let placeholder = field.display.placeholder.as_deref().unwrap_or("");
 	let required = field.validation.required;
-
 	let autocomplete_attr = field.display.autocomplete.as_deref().map(|val| {
 		quote! { .attr("autocomplete", #val) }
 	});
@@ -7290,6 +7297,7 @@ fn generate_field_view(
 					.attr("id", #field_name_str)
 					.attr("value", #value)
 					.attr("class", #input_class)
+					#autocomplete_attr
 					.bool_attr("required", #required)
 					.bool_attr("disabled", #disabled)
 					.bool_attr("checked", __radio_checked)

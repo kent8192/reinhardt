@@ -807,8 +807,11 @@ WASM, selecting it updates the field; an unchecked change event leaves the
 value unchanged. Programmatic signal updates and runtime `reset()` synchronize
 the checked state, with reset restoring the current defaults. Clicking a
 selected radio does not clear it. Scalar fields also follow native form resets,
-restoring the values captured when the page was created. For scalar fields,
-`bind: false` renders the current value without installing two-way binding.
+restoring the latest initial values, including defaults loaded after mounting.
+Native resets clear runtime touched state and errors without emitting change or
+validation events. `autocomplete` is preserved on scalar and collection radios,
+and reactive replacements retain focus within their own subtree. For scalar
+fields, `bind: false` renders the current value without installing two-way binding.
 
 Typed native attributes are accepted for the controls that support them:
 

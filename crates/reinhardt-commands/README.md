@@ -1141,6 +1141,19 @@ reinhardt-admin startproject myproject
 
 **Precedence:** `--template` > `--template-dir` CLI flag > `REINHARDT_TEMPLATE_DIR` env > embedded defaults.
 
+## Testing
+
+Run the admin script regression suites with the default parallel test runner:
+
+```bash
+cargo test -p reinhardt-commands --test admin_scripts_tests --test admin_scripts_additional_tests
+```
+
+Tests that change the process working directory share the `current_dir` serial
+group. Their fixture restores the original directory before removing temporary
+files, including during unwinding. Environment-variable tests share the
+`reinhardt_settings` group and restore the previous values on scope exit.
+
 ## License
 
 Licensed under the BSD 3-Clause License.

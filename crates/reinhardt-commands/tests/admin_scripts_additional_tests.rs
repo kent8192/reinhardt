@@ -3,9 +3,14 @@
 //! Continuation of comprehensive test suite for reinhardt-admin
 //! This file contains the remaining test cases from Django's admin_scripts tests
 
+#[path = "support/environment.rs"]
+mod environment;
+
+use environment::EnvVarGuard;
 use reinhardt_commands::{
 	BaseCommand, CommandContext, CommandError, CommandResult, StartProjectCommand,
 };
+use serial_test::serial;
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -46,7 +51,6 @@ impl TestEnvironment {
 #[tokio::test]
 async fn test_manage_multiple_builtin_command() {
 	let env = TestEnvironment::new();
-	std::env::set_current_dir(env.path()).expect("Failed to change directory");
 
 	env.create_file("settings1.rs", "pub const DEBUG: bool = true;\n");
 	env.create_file("settings2.rs", "pub const DEBUG: bool = false;\n");
@@ -58,7 +62,6 @@ async fn test_manage_multiple_builtin_command() {
 #[tokio::test]
 async fn test_manage_multiple_builtin_with_settings() {
 	let env = TestEnvironment::new();
-	std::env::set_current_dir(env.path()).expect("Failed to change directory");
 
 	env.create_file("settings1.rs", "// Settings 1\n");
 	env.create_file("settings2.rs", "// Settings 2\n");
@@ -68,21 +71,37 @@ async fn test_manage_multiple_builtin_with_settings() {
 }
 
 #[tokio::test]
+#[serial(reinhardt_settings)]
 async fn test_manage_multiple_builtin_with_environment() {
-	unsafe {
-		std::env::set_var("REINHARDT_SETTINGS_MODULE", "settings1");
+	// Arrange
+	let original = std::env::var_os("REINHARDT_SETTINGS_MODULE");
+	{
+		let mut env_guard = EnvVarGuard::new();
+		env_guard.set("REINHARDT_SETTINGS_MODULE", "settings1");
+
+		// Act
+		let result = std::panic::catch_unwind(|| {
+			let mut nested_guard = EnvVarGuard::new();
+			nested_guard.set("REINHARDT_SETTINGS_MODULE", "settings2");
+			nested_guard.set("REINHARDT_SETTINGS_MODULE", "settings3");
+			panic!("exercise environment restoration during unwinding");
+		});
+
+		// Assert
+		assert!(result.is_err());
+		assert_eq!(
+			std::env::var("REINHARDT_SETTINGS_MODULE").unwrap(),
+			"settings1"
+		);
 	}
-	assert_eq!(
-		std::env::var("REINHARDT_SETTINGS_MODULE").unwrap(),
-		"settings1"
-	);
+	assert_eq!(std::env::var_os("REINHARDT_SETTINGS_MODULE"), original);
 }
 
 #[tokio::test]
+#[serial(reinhardt_settings)]
 async fn test_manage_multiple_builtin_with_bad_settings() {
-	unsafe {
-		std::env::set_var("REINHARDT_SETTINGS_MODULE", "bad_settings");
-	}
+	let mut env_guard = EnvVarGuard::new();
+	env_guard.set("REINHARDT_SETTINGS_MODULE", "bad_settings");
 	assert_eq!(
 		std::env::var("REINHARDT_SETTINGS_MODULE").unwrap(),
 		"bad_settings"
@@ -90,32 +109,30 @@ async fn test_manage_multiple_builtin_with_bad_settings() {
 }
 
 #[tokio::test]
+#[serial(reinhardt_settings)]
 async fn test_manage_multiple_builtin_with_bad_environment() {
-	unsafe {
-		std::env::set_var("REINHARDT_SETTINGS_MODULE", "");
-	}
+	let mut env_guard = EnvVarGuard::new();
+	env_guard.set("REINHARDT_SETTINGS_MODULE", "");
 	assert_eq!(std::env::var("REINHARDT_SETTINGS_MODULE").unwrap(), "");
 }
 
 #[tokio::test]
 async fn test_manage_multiple_custom_command() {
 	let env = TestEnvironment::new();
-	std::env::set_current_dir(env.path()).expect("Failed to change directory");
 	assert!(env.path().exists());
 }
 
 #[tokio::test]
+#[serial(reinhardt_settings)]
 async fn test_manage_multiple_custom_command_with_settings() {
 	let env = TestEnvironment::new();
-	std::env::set_current_dir(env.path()).expect("Failed to change directory");
 
 	env.create_file("settings1.rs", "pub const DB: &str = \"db1\";\n");
 	env.create_file("settings2.rs", "pub const DB: &str = \"db2\";\n");
 
 	// Test with explicit settings parameter
-	unsafe {
-		std::env::set_var("REINHARDT_SETTINGS_MODULE", "settings1");
-	}
+	let mut env_guard = EnvVarGuard::new();
+	env_guard.set("REINHARDT_SETTINGS_MODULE", "settings1");
 
 	assert!(env.file_exists("settings1.rs"));
 	assert!(env.file_exists("settings2.rs"));
@@ -126,11 +143,11 @@ async fn test_manage_multiple_custom_command_with_settings() {
 }
 
 #[tokio::test]
+#[serial(reinhardt_settings)]
 async fn test_manage_multiple_custom_command_with_environment() {
-	unsafe {
-		std::env::set_var("REINHARDT_SETTINGS_MODULE", "custom.settings");
-		std::env::set_var("CUSTOM_ENV_VAR", "test_value");
-	}
+	let mut env_guard = EnvVarGuard::new();
+	env_guard.set("REINHARDT_SETTINGS_MODULE", "custom.settings");
+	env_guard.set("CUSTOM_ENV_VAR", "test_value");
 
 	// Test that environment variables are respected
 	assert_eq!(
@@ -147,7 +164,6 @@ async fn test_manage_multiple_custom_command_with_environment() {
 #[tokio::test]
 async fn test_manage_check_broken_app() {
 	let env = TestEnvironment::new();
-	std::env::set_current_dir(env.path()).expect("Failed to change directory");
 
 	// Create broken app structure
 	env.create_file("apps/broken/mod.rs", "// Broken syntax");
@@ -157,7 +173,6 @@ async fn test_manage_check_broken_app() {
 #[tokio::test]
 async fn test_manage_check_complex_app() {
 	let env = TestEnvironment::new();
-	std::env::set_current_dir(env.path()).expect("Failed to change directory");
 
 	env.create_file(
 		"Cargo.toml",
@@ -177,7 +192,6 @@ async fn test_manage_check_complex_app() {
 #[tokio::test]
 async fn test_manage_check_app_with_import() {
 	let env = TestEnvironment::new();
-	std::env::set_current_dir(env.path()).expect("Failed to change directory");
 
 	env.create_file(
 		"Cargo.toml",
@@ -194,7 +208,6 @@ async fn test_manage_check_app_with_import() {
 #[tokio::test]
 async fn test_manage_check_warning_does_not_halt() {
 	let env = TestEnvironment::new();
-	std::env::set_current_dir(env.path()).expect("Failed to change directory");
 
 	env.create_file(
 		"Cargo.toml",
@@ -229,7 +242,6 @@ async fn test_manage_runserver_zero_ip_addr() {
 #[tokio::test]
 async fn test_manage_runserver_on_bind() {
 	let env = TestEnvironment::new();
-	std::env::set_current_dir(env.path()).expect("Failed to change directory");
 
 	env.create_file(
 		"Cargo.toml",
@@ -294,7 +306,6 @@ async fn test_manage_runserver_runner_ambiguous() {
 #[tokio::test]
 async fn test_manage_runserver_no_database() {
 	let env = TestEnvironment::new();
-	std::env::set_current_dir(env.path()).expect("Failed to change directory");
 
 	env.create_file(
 		"Cargo.toml",
@@ -308,7 +319,6 @@ async fn test_manage_runserver_no_database() {
 #[tokio::test]
 async fn test_manage_runserver_readonly_database() {
 	let env = TestEnvironment::new();
-	std::env::set_current_dir(env.path()).expect("Failed to change directory");
 
 	env.create_file(
 		"Cargo.toml",
@@ -340,7 +350,6 @@ async fn test_manage_runserver_custom_system_checks() {
 #[tokio::test]
 async fn test_manage_runserver_migration_warning_one_app() {
 	let env = TestEnvironment::new();
-	std::env::set_current_dir(env.path()).expect("Failed to change directory");
 
 	env.create_file(
 		"Cargo.toml",
@@ -355,7 +364,6 @@ async fn test_manage_runserver_migration_warning_one_app() {
 #[tokio::test]
 async fn test_manage_runserver_migration_warning_multiple_apps() {
 	let env = TestEnvironment::new();
-	std::env::set_current_dir(env.path()).expect("Failed to change directory");
 
 	env.create_file(
 		"Cargo.toml",
@@ -370,10 +378,10 @@ async fn test_manage_runserver_migration_warning_multiple_apps() {
 }
 
 #[tokio::test]
+#[serial(reinhardt_settings)]
 async fn test_manage_runserver_empty_allowed_hosts_error() {
-	unsafe {
-		std::env::set_var("ALLOWED_HOSTS", "");
-	}
+	let mut env_guard = EnvVarGuard::new();
+	env_guard.set("ALLOWED_HOSTS", "");
 
 	// Empty ALLOWED_HOSTS in production should error
 	assert_eq!(std::env::var("ALLOWED_HOSTS").unwrap(), "");
@@ -604,7 +612,6 @@ async fn test_commandtypes_base_command_no_label() {
 #[tokio::test]
 async fn test_commandtypes_app_command() {
 	let env = TestEnvironment::new();
-	std::env::set_current_dir(env.path()).expect("Failed to change directory");
 
 	// Create app structure
 	env.create_file("apps/testapp/mod.rs", "// Test app\n");
@@ -614,7 +621,6 @@ async fn test_commandtypes_app_command() {
 #[tokio::test]
 async fn test_commandtypes_app_command_no_apps() {
 	let env = TestEnvironment::new();
-	std::env::set_current_dir(env.path()).expect("Failed to change directory");
 
 	// Test app command with no apps
 	assert!(env.path().exists());
@@ -623,7 +629,6 @@ async fn test_commandtypes_app_command_no_apps() {
 #[tokio::test]
 async fn test_commandtypes_app_command_multiple_apps() {
 	let env = TestEnvironment::new();
-	std::env::set_current_dir(env.path()).expect("Failed to change directory");
 
 	env.create_file("apps/app1/mod.rs", "// App 1\n");
 	env.create_file("apps/app2/mod.rs", "// App 2\n");
@@ -639,7 +644,6 @@ async fn test_commandtypes_app_command_multiple_apps() {
 #[tokio::test]
 async fn test_discovery_precedence() {
 	let env = TestEnvironment::new();
-	std::env::set_current_dir(env.path()).expect("Failed to change directory");
 
 	// Test command discovery precedence
 	env.create_file("commands/custom.rs", "// Custom command\n");
@@ -684,7 +688,6 @@ async fn test_argumentorder_setting_then_option() {
 #[tokio::test]
 async fn test_diffsettings_basic() {
 	let env = TestEnvironment::new();
-	std::env::set_current_dir(env.path()).expect("Failed to change directory");
 
 	env.create_file("settings.rs", "pub const DEBUG: bool = true;\n");
 	// Test basic diff settings
@@ -694,7 +697,6 @@ async fn test_diffsettings_basic() {
 #[tokio::test]
 async fn test_diffsettings_settings_configured() {
 	let env = TestEnvironment::new();
-	std::env::set_current_dir(env.path()).expect("Failed to change directory");
 
 	env.create_file(
 		"settings.rs",
@@ -711,7 +713,6 @@ async fn test_diffsettings_settings_configured() {
 #[tokio::test]
 async fn test_startproject_custom_project_template_non_python_files_not_formatted() {
 	let env = TestEnvironment::new();
-	std::env::set_current_dir(env.path()).expect("Failed to change directory");
 
 	// Test that non-Rust files are not template-formatted
 	assert!(env.path().exists());
@@ -720,9 +721,14 @@ async fn test_startproject_custom_project_template_non_python_files_not_formatte
 #[tokio::test]
 async fn test_startproject_template_dir_with_trailing_slash() {
 	let env = TestEnvironment::new();
-	std::env::set_current_dir(env.path()).expect("Failed to change directory");
 
-	let mut ctx = CommandContext::new(vec!["testproject".to_string()]);
+	let mut ctx = CommandContext::new(vec![
+		"testproject".to_owned(),
+		env.path()
+			.join("testproject")
+			.to_string_lossy()
+			.into_owned(),
+	]);
 	ctx.set_option("template".to_string(), "/path/to/template/".to_string());
 
 	let cmd = StartProjectCommand;
@@ -750,7 +756,6 @@ async fn test_startproject_template_dir_with_trailing_slash() {
 #[tokio::test]
 async fn test_startproject_custom_project_template_with_non_ascii_templates() {
 	let env = TestEnvironment::new();
-	std::env::set_current_dir(env.path()).expect("Failed to change directory");
 
 	// Test with non-ASCII template content
 	assert!(env.path().exists());
@@ -759,7 +764,6 @@ async fn test_startproject_custom_project_template_with_non_ascii_templates() {
 #[tokio::test]
 async fn test_startproject_custom_project_template_hidden_directory_default_excluded() {
 	let env = TestEnvironment::new();
-	std::env::set_current_dir(env.path()).expect("Failed to change directory");
 
 	// Test that hidden directories are excluded by default
 	assert!(env.path().exists());
@@ -768,7 +772,6 @@ async fn test_startproject_custom_project_template_hidden_directory_default_excl
 #[tokio::test]
 async fn test_startproject_custom_project_template_hidden_directory_included() {
 	let env = TestEnvironment::new();
-	std::env::set_current_dir(env.path()).expect("Failed to change directory");
 
 	// Test including hidden directories
 	assert!(env.path().exists());
@@ -777,7 +780,6 @@ async fn test_startproject_custom_project_template_hidden_directory_included() {
 #[tokio::test]
 async fn test_startproject_custom_project_template_exclude_directory() {
 	let env = TestEnvironment::new();
-	std::env::set_current_dir(env.path()).expect("Failed to change directory");
 
 	// Test excluding specific directories
 	assert!(env.path().exists());
@@ -786,7 +788,6 @@ async fn test_startproject_custom_project_template_exclude_directory() {
 #[tokio::test]
 async fn test_startproject_failure_to_format_code() {
 	let env = TestEnvironment::new();
-	std::env::set_current_dir(env.path()).expect("Failed to change directory");
 
 	// Test handling of code formatting failures
 	assert!(env.path().exists());

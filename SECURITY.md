@@ -105,7 +105,7 @@ separate dependency-advisory review; it is not a comprehensive product audit.
 Reinhardt follows the lifecycle in
 [`instructions/STABILITY_POLICY.md`](instructions/STABILITY_POLICY.md).
 <!-- reinhardt-version-sync -->
-Security fixes target the current supported release, `0.3.15`, and the current
+Security fixes target the current supported release, `0.3.16`, and the current
 development line as appropriate.
 
 ## Reporting a Vulnerability

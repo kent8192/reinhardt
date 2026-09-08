@@ -912,7 +912,6 @@ where
 			let native_reset =
 				observed_native_reset_epoch.replace(native_reset_epoch) != native_reset_epoch;
 			let previous = observed_values.borrow().clone();
-			let custom_widget_errors = collect_custom_widget_errors(&form);
 			let changed_fields: Vec<Form::Field> = form
 				.runtime_fields()
 				.iter()
@@ -957,9 +956,13 @@ where
 					&collection_errors,
 					&path_errors,
 				);
+				// Subscribe after clearing to avoid re-entering this layout effect
+				// through a custom widget's error setter while it is still running.
+				let _ = collect_custom_widget_errors(&form);
 				return;
 			}
 
+			let custom_widget_errors = collect_custom_widget_errors(&form);
 			if !signal_sync_suppressed.get() {
 				let previous_errors = custom_widget_error_fields.borrow();
 				for (field, error) in &custom_widget_errors {

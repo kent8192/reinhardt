@@ -4514,10 +4514,18 @@ pub(super) fn generate(
 	let form_runtime_contract = generate_form_runtime_contract(macro_ast, pages_crate);
 	let runtime_contract_supported = supports_form_runtime_contract(&macro_ast.fields);
 	let values_ident = format_ident!("{}Values", macro_ast.name);
+	let collections = collect_collections(&macro_ast.fields);
+	let collection_key_fields = collections.iter().map(|collection| {
+		let keys = format_ident!("__{}_initial_keys", collection.name);
+		quote! {
+			#keys: ::std::rc::Rc<::std::cell::RefCell<::std::vec::Vec<#pages_crate::CollectionItemKey>>>,
+		}
+	});
 	let runtime_initial_values_field_decl = if runtime_contract_supported {
 		quote! {
 			__initial_values: ::std::rc::Rc<::std::cell::RefCell<#values_ident>>,
 			__native_reset_epoch: #pages_crate::reactive::Signal<u64>,
+			#(#collection_key_fields)*
 		}
 	} else {
 		quote! {}
@@ -4538,8 +4546,13 @@ pub(super) fn generate(
 					quote! { #name: ::std::vec::Vec::new(), }
 				},
 			));
+			let collection_keys = collections.iter().map(|collection| {
+				let keys = format_ident!("__{}_initial_keys", collection.name);
+				quote! { #keys: ::core::default::Default::default(), }
+			});
 			quote! {
 				__native_reset_epoch: #pages_crate::reactive::Signal::new(0),
+				#(#collection_keys)*
 				__initial_values: ::std::rc::Rc::new(
 					::std::cell::RefCell::new(#values_ident {
 						#(#initial_fields)*
@@ -4550,9 +4563,18 @@ pub(super) fn generate(
 			quote! {}
 		};
 	let runtime_initial_values_outer_refresh = if runtime_contract_supported {
+		let collection_keys = collections.iter().map(|collection| {
+			let name = &collection.name;
+			let keys = format_ident!("__{}_initial_keys", name);
+			quote! {
+				*__reinhardt_form.#keys.borrow_mut() = __reinhardt_form.#name.get_untracked()
+					.iter().map(#pages_crate::CollectionItem::key).collect();
+			}
+		});
 		quote! {
 			*__reinhardt_form.__initial_values.borrow_mut() =
 				#pages_crate::FormRuntimeSource::runtime_current_values(&__reinhardt_form);
+			#(#collection_keys)*
 		}
 	} else {
 		quote! {}
@@ -5833,34 +5855,129 @@ fn generate_into_page(macro_ast: &TypedFormMacro, pages_crate: &TokenStream) -> 
 		.iter()
 		.filter(|field| field.bind && matches!(field.widget, TypedWidget::RadioInput))
 		.collect();
-	let (radio_reset_setup, radio_reset_listener) =
-		if radio_fields.is_empty() || !supports_form_runtime_contract(&macro_ast.fields) {
-			(TokenStream::new(), TokenStream::new())
-		} else {
-			let names: Vec<_> = radio_fields.iter().map(|field| &field.name).collect();
-			(
-				quote! {
-					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-					let __radio_form = self.clone();
-				},
-				quote! {
-					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-					let form_element = form_element.listener("reset", move |event| {
-						let __radio_form = __radio_form.clone();
-						// Run after the native reset and honor cancellation by other listeners.
-						#pages_crate::platform::spawn_task(async move {
-							if !event.default_prevented() {
-								let __defaults = __radio_form.__initial_values.borrow().clone();
-								#pages_crate::reactive::batch(|| {
-									#(__radio_form.#names.set(__defaults.#names.clone());)*
-									__radio_form.__native_reset_epoch.update(|epoch| *epoch = epoch.wrapping_add(1));
-								});
-							}
-						});
+	let (radio_reset_setup, radio_reset_listener) = if radio_fields.is_empty()
+		|| !supports_form_runtime_contract(&macro_ast.fields)
+	{
+		(TokenStream::new(), TokenStream::new())
+	} else {
+		let bound_fields: Vec<_> = all_fields.iter().filter(|field| field.bind).collect();
+		let scalar_resets = bound_fields.iter().map(|field| {
+			let name = &field.name;
+			let value = native_reset_value(field, quote! { __defaults.#name.clone() });
+			let touched_reset = custom_widget_touched_ident(field).map(|touched| {
+				quote! { __radio_form.#touched.set(false); }
+			});
+			quote! {
+				__radio_form.#name.set(#value);
+				#touched_reset
+			}
+		});
+		let scalar_dom_resets = bound_fields.iter().map(|field| {
+			let name = field.name.to_string();
+			generate_native_reset_dom_sync(field, quote! { #name })
+		});
+		let collections = collect_collections(&macro_ast.fields);
+		let collection_snapshots = collections.iter().map(|collection| {
+			let name = &collection.name;
+			let snapshot = format_ident!("__{}_native_defaults", name);
+			quote! {
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+				let #snapshot = self.#name.get_untracked();
+			}
+		});
+		let collection_snapshot_clones: Vec<_> = collections
+			.iter()
+			.map(|collection| {
+				let snapshot = format_ident!("__{}_native_defaults", collection.name);
+				quote! { let #snapshot = #snapshot.clone(); }
+			})
+			.collect();
+		let collection_resets = collections.iter().map(|collection| {
+			let name = &collection.name;
+			let snapshot = format_ident!("__{}_native_defaults", name);
+			let keys = format_ident!("__{}_initial_keys", name);
+			let fields = collect_scalar_fields(&collection.fields);
+			let resets = fields.iter().filter(|field| field.bind).map(|field| {
+				let name = &field.name;
+				let value = native_reset_value(field, quote! { __item_defaults.#name.clone() });
+				quote! { __item_value.#name = #value; }
+			});
+			quote! {
+				__radio_form.#name.update(|items| {
+					for item in items.iter_mut() {
+						let __item_defaults = __radio_form.#keys.borrow().iter()
+							.position(|key| *key == item.key())
+							.and_then(|index| __defaults.#name.get(index).cloned())
+							.or_else(|| #snapshot.iter().find(|initial| initial.key() == item.key())
+								.map(|initial| initial.value().clone()))
+							.unwrap_or_default();
+						let mut __item_value = item.value().clone();
+						#(#resets)*
+						*item = #pages_crate::CollectionItem::new(item.key(), item.index(), __item_value);
+					}
+				});
+			}
+		});
+		let collection_dom_resets = collections.iter().map(|collection| {
+			let name = &collection.name;
+			let collection_name = name.to_string();
+			let fields = collect_scalar_fields(&collection.fields);
+			let resets = fields.iter().filter(|field| field.bind).map(|field| {
+				let field_name = field.name.to_string();
+				generate_native_reset_dom_sync(
+					field,
+					quote! {
+						::std::format!("{}[{}][{}]", #collection_name, item.index(), #field_name)
+					},
+				)
+			});
+			quote! {
+				for item in __radio_form.#name.get_untracked() {
+					let item_value = item.value();
+					#(#resets)*
+				}
+			}
+		});
+		(
+			quote! {
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+				let __radio_form = self.clone();
+				#(#collection_snapshots)*
+			},
+			quote! {
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+				let form_element = form_element.listener("reset", move |event| {
+					let __radio_form = __radio_form.clone();
+					#(#collection_snapshot_clones)*
+					// Run after the native reset and honor cancellation by other listeners.
+					#pages_crate::platform::spawn_task(async move {
+						if !event.default_prevented() {
+							let __defaults = __radio_form.__initial_values.borrow().clone();
+							use ::wasm_bindgen::JsCast;
+							let __reset_form = event.target()
+								.and_then(|target| target.dyn_into::<::web_sys::HtmlFormElement>().ok());
+							let __sync_dom = || {
+								if let Some(__reset_form) = __reset_form.as_ref() {
+									let __reset_values = #pages_crate::FormRuntimeSource::runtime_current_values(&__radio_form);
+									let item_value = &__reset_values;
+									#(#scalar_dom_resets)*
+									#(#collection_dom_resets)*
+								}
+							};
+							#pages_crate::reactive::batch(|| {
+								#(#scalar_resets)*
+								#(#collection_resets)*
+								__sync_dom();
+								__radio_form.__native_reset_epoch.update(|epoch| *epoch = epoch.wrapping_add(1));
+							});
+							// Collection effects may have replaced controls while flushing the batch.
+							__sync_dom();
+						}
 					});
-				},
-			)
-		};
+				});
+			},
+		)
+	};
 
 	quote! {
 		pub fn into_page(self) -> #pages_crate::component::Page {
@@ -5873,6 +5990,76 @@ fn generate_into_page(macro_ast: &TypedFormMacro, pages_crate: &TokenStream) -> 
 			#radio_reset_listener
 
 			form_element.into_page()
+		}
+	}
+}
+
+/// File controls always clear during native reset, regardless of stored defaults.
+fn native_reset_value(field: &TypedFormFieldDef, default: TokenStream) -> TokenStream {
+	if matches!(
+		field.field_type,
+		TypedFieldType::FileField | TypedFieldType::ImageField
+	) {
+		quote! { ::core::option::Option::None }
+	} else {
+		default
+	}
+}
+
+/// Applies reset values to controls after reactive collection replacements finish.
+fn generate_native_reset_dom_sync(field: &TypedFormFieldDef, name: TokenStream) -> TokenStream {
+	if matches!(field.widget, TypedWidget::CustomExperimental(_)) {
+		return TokenStream::new();
+	}
+	let field_name = &field.name;
+	let value = collection_field_value_expr(field);
+	let apply = match &field.widget {
+		TypedWidget::CheckboxInput => {
+			let checked = collection_field_checked_expr(field);
+			quote! {
+				if let Some(input) = control.dyn_ref::<::web_sys::HtmlInputElement>() {
+					input.set_checked(#checked);
+				}
+			}
+		}
+		TypedWidget::RadioInput | TypedWidget::RadioSelect => quote! {
+			if let Some(input) = control.dyn_ref::<::web_sys::HtmlInputElement>() {
+				let value = #value;
+				input.set_checked(input.value() == value);
+			}
+		},
+		TypedWidget::SelectMultiple => quote! {
+			let values: ::std::vec::Vec<_> = item_value.#field_name.iter()
+				.map(::std::string::ToString::to_string).collect();
+			if let Ok(options) = control.query_selector_all("option") {
+				for index in 0..options.length() {
+					if let Some(option) = options.item(index)
+						.and_then(|node| node.dyn_into::<::web_sys::HtmlOptionElement>().ok())
+					{
+						option.set_selected(values.contains(&option.value()));
+					}
+				}
+			}
+		},
+		_ => quote! {
+			if let Some(input) = control.dyn_ref::<::web_sys::HtmlInputElement>() {
+				input.set_value(&#value);
+			} else if let Some(textarea) = control.dyn_ref::<::web_sys::HtmlTextAreaElement>() {
+				textarea.set_value(&#value);
+			} else if let Some(select) = control.dyn_ref::<::web_sys::HtmlSelectElement>() {
+				select.set_value(&#value);
+			}
+		},
+	};
+	quote! {
+		if let Ok(controls) = __reset_form.query_selector_all(&::std::format!("[name=\"{}\"]", #name)) {
+			for index in 0..controls.length() {
+				if let Some(control) = controls.item(index)
+					.and_then(|node| node.dyn_into::<::web_sys::Element>().ok())
+				{
+					#apply
+				}
+			}
 		}
 	}
 }
@@ -8807,9 +8994,21 @@ fn generate_load_initial_values(
 		})
 		.collect();
 	let runtime_initial_values_refresh = if runtime_contract_supported {
+		let collection_keys =
+			collect_collections(&macro_ast.fields)
+				.into_iter()
+				.map(|collection| {
+					let name = &collection.name;
+					let keys = format_ident!("__{}_initial_keys", name);
+					quote! {
+						*self.#keys.borrow_mut() = self.#name.get_untracked()
+							.iter().map(#pages_crate::CollectionItem::key).collect();
+					}
+				});
 		quote! {
 			*self.__initial_values.borrow_mut() =
 				#pages_crate::FormRuntimeSource::runtime_current_values(self);
+			#(#collection_keys)*
 		}
 	} else {
 		quote! {}

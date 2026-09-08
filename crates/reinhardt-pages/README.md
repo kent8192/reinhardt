@@ -806,10 +806,15 @@ The single radio is checked when the field value equals the option value. On
 WASM, selecting it updates the field; an unchecked change event leaves the
 value unchanged. Programmatic signal updates and runtime `reset()` synchronize
 the checked state, with reset restoring the current defaults. Clicking a
-selected radio does not clear it. Scalar fields also follow native form resets,
-restoring the latest initial values, including defaults loaded after mounting.
-Native resets clear runtime touched state and errors without emitting change or
-validation events. `autocomplete` is preserved on scalar and collection radios,
+selected radio does not clear it. Forms with a bound scalar radio also restore
+their bound scalar and collection fields on native reset, including defaults
+loaded after mounting. Collection defaults follow item keys across reordering;
+without persisted loader defaults, existing rows use their values at page
+construction and new rows use field defaults. Native resets preserve collection
+keys, row order, and unbound values, and clear file inputs. The restored DOM and
+signals agree before runtime touched state and errors are cleared, without
+emitting change or validation events. Custom widget errors remain reactive after
+reset. `autocomplete` is preserved on scalar and collection radios,
 and reactive replacements retain focus within their own subtree. For scalar
 fields, `bind: false` renders the current value without installing two-way binding.
 

@@ -853,9 +853,14 @@
 //!
 //! The radio is checked when its field value equals its option value. Selecting
 //! it updates the field, and programmatic values and runtime resets update the
-//! checked state. Scalar native resets restore the latest initial values,
-//! including defaults loaded after mounting, and clear runtime touched state and
-//! errors without emitting change or validation events. Scalar and collection
+//! checked state. Forms with a bound scalar radio restore all bound scalar and
+//! collection fields on native reset, including defaults loaded after mounting.
+//! Collection defaults follow item keys; rows without persisted loader defaults
+//! use their values at page construction, or field defaults for new rows. Reset
+//! preserves collection keys, order, and unbound values, and clears file inputs.
+//! DOM and signal values are restored before runtime touched state and errors are
+//! cleared without change or validation events. Custom widget errors remain
+//! reactive after reset. Scalar and collection
 //! radios preserve `autocomplete` and retain focus within their reactive subtree.
 //! For scalar fields, `bind: false` snapshots the current value without binding.
 //!

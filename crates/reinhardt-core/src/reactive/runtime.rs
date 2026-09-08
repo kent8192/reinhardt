@@ -450,7 +450,8 @@ where
 /// Execute multiple reactive writes as a single update cycle.
 ///
 /// Updates scheduled while the batch is active are queued, then flushed once
-/// the outermost batch exits. Nested batches share the same queue.
+/// the outermost batch exits. Layout effects run before passive effects, with
+/// write order preserved within each timing. Nested batches share the same queue.
 pub fn batch<R>(f: impl FnOnce() -> R) -> R {
 	struct BatchGuard;
 
@@ -855,6 +856,62 @@ mod tests {
 		super::subscribe_node_to_observer(node, observer);
 		let subs2 = super::with_runtime(|rt| rt.debug_subscribers(node));
 		assert_eq!(subs2.len(), 1, "subscribe must be idempotent");
+	}
+
+	#[test]
+	#[serial(reactive_batch)]
+	fn batches_flush_layout_effects_before_passive_effects_in_write_order() {
+		use crate::reactive::{Effect, Signal};
+		use std::{cell::Cell, rc::Rc};
+
+		// Arrange: a passive consumer observes the completed layout work.
+		let passive = Signal::new(0);
+		let first_layout = Signal::new(0);
+		let second_layout = Signal::new(0);
+		let layout_total = Rc::new(Cell::new(0));
+		let observed = Rc::new(RefCell::new(Vec::new()));
+		let passive_signal = passive.clone();
+		let passive_total = Rc::clone(&layout_total);
+		let passive_observed = Rc::clone(&observed);
+		let _passive_effect = Effect::new(move || {
+			let _ = passive_signal.get();
+			passive_observed
+				.borrow_mut()
+				.push(("passive", passive_total.get()));
+		});
+		let _layout_effects: Vec<_> = [
+			("first", first_layout.clone()),
+			("second", second_layout.clone()),
+		]
+		.into_iter()
+		.map(|(name, signal)| {
+			let total = Rc::clone(&layout_total);
+			let observed = Rc::clone(&observed);
+			Effect::new_with_timing(
+				move || {
+					let value = signal.get();
+					total.set(total.get() + value);
+					observed.borrow_mut().push((name, value));
+				},
+				EffectTiming::Layout,
+			)
+		})
+		.collect();
+		observed.borrow_mut().clear();
+
+		// Act: passive work is queued first, and layout writes reverse creation order.
+		batch(|| {
+			passive.set(1);
+			second_layout.set(2);
+			first_layout.set(1);
+			assert_eq!(observed.borrow().len(), 0);
+		});
+
+		// Assert: layout work keeps its write order and completes before passive work.
+		assert_eq!(
+			*observed.borrow(),
+			[("second", 2), ("first", 1), ("passive", 3)]
+		);
 	}
 
 	#[test]

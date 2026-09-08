@@ -448,12 +448,16 @@ impl super::runtime::Runtime {
 	/// Flush all pending updates
 	///
 	/// This executes all Effects that have been scheduled for update.
+	/// Layout effects run before passive effects, preserving queue order within each timing.
 	/// Skips effects that were disposed between scheduling and execution.
 	pub fn flush_updates(&self) {
 		*self.update_scheduled.borrow_mut() = false;
 
 		// Take all pending updates
-		let pending = core::mem::take(&mut *self.pending_updates.borrow_mut());
+		let mut pending = core::mem::take(&mut *self.pending_updates.borrow_mut());
+		// A batch may write a passive-only signal before a layout-only signal.
+		// Keep layout work ahead of passive consumers regardless of that write order.
+		pending.sort_by_key(|&node_id| get_effect_timing(node_id) != Some(EffectTiming::Layout));
 
 		// Execute each pending effect (skip disposed ones)
 		for node_id in pending {

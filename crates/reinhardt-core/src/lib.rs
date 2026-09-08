@@ -47,8 +47,9 @@
 //! - `negotiation`: HTTP content negotiation utilities
 //!
 //! With the `reactive` feature, explicit `batch()` calls defer layout and passive
-//! effects until the outermost batch exits. Layout effects remain synchronous
-//! outside batches, allowing form resets to publish one complete value snapshot.
+//! effects until the outermost batch exits, then flush layout work before passive
+//! consumers while preserving write order within each timing. Layout effects remain
+//! synchronous outside batches, allowing form resets to publish one complete value snapshot.
 //!
 //! ## Feature Flags
 //!

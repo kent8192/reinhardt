@@ -346,9 +346,10 @@ Run the database audit regression tests with a parallel test runner:
 cargo test -p reinhardt-conf --all-features --lib settings::audit::backends::database -- --test-threads=8
 ```
 
-Each audit backend fixture uses a unique named in-memory SQLite database.
-Connections within its pool share that database, while concurrently active
-fixtures keep their audit records separate.
+Audit tests receive asynchronous `rstest` backend fixtures whose in-memory SQLite
+database names use `reinhardt-test`'s `random_test_key` helper. Connections within
+each pool share that database, while independently injected backend fixtures keep
+their audit records separate.
 
 ## License
 

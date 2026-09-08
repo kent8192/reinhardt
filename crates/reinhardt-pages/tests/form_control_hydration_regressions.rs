@@ -4,6 +4,9 @@
 
 #![cfg(target_arch = "wasm32")]
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use reinhardt_pages::component::{
 	ControlBinding, ControlKind, ControlValue, IntoPage, PageElement, PageExt,
 	cleanup_reactive_nodes,
@@ -14,7 +17,7 @@ use reinhardt_pages::hydration::{
 	reconcile_with_options,
 };
 use reinhardt_pages::reactive::{Signal, with_runtime};
-use reinhardt_pages::{Page, form, use_form};
+use reinhardt_pages::{FieldState, FormEvent, Page, RevalidateOn, form, use_form};
 use serial_test::serial;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_test::*;
@@ -111,6 +114,106 @@ async fn textarea_leading_newlines_survive_parsing_hydration_and_reset() {
 			.unchecked_into::<web_sys::HtmlTextAreaElement>();
 		assert_eq!(textarea.value(), value);
 		assert_eq!(textarea.default_value().unwrap(), value);
+	}
+}
+
+#[rstest::rstest]
+#[test_attr(wasm_bindgen_test)]
+#[serial(form_control_hydration_dom)]
+fn textarea_browser_normalization_preserves_pristine_sources_and_adopts_edits() {
+	for (source, parsed) in [
+		("first\r\nsecond", "first\nsecond"),
+		("first\rsecond", "first\nsecond"),
+		("\r\nnotes", "\nnotes"),
+		("\rnotes", "\nnotes"),
+		("\r", "\n"),
+		("\r\n", "\n"),
+		("\r\nfirst\rsecond\r\n", "\nfirst\nsecond\n"),
+	] {
+		for edited in [false, true] {
+			// Arrange: source defaults retain their original line endings.
+			let form = form! {
+				name: TextareaNormalizedDefaults,
+				action: "/notes",
+				fields: {
+					notes: TextField { initial: source }
+				}
+			};
+			let runtime = use_form(&form).revalidate_on(RevalidateOn::Change).build();
+			flush();
+			let events = Rc::new(RefCell::new(Vec::new()));
+			let _subscription = runtime.subscribe({
+				let events = events.clone();
+				move |event| {
+					events.borrow_mut().push(match event {
+						FormEvent::Validated => "validated",
+						FormEvent::ValueChanged { .. } => "value",
+						_ => "other",
+					});
+				}
+			});
+			let page = form.clone().into_page();
+			let mounted = MountedPage::new();
+			mounted.0.set_inner_html(&page.render_to_string());
+			let textarea = mounted
+				.0
+				.query_selector("textarea")
+				.unwrap()
+				.unwrap()
+				.unchecked_into::<web_sys::HtmlTextAreaElement>();
+			assert_eq!(textarea.value(), parsed);
+			assert_eq!(textarea.default_value().unwrap(), parsed);
+			assert_eq!(form.notes().get(), source);
+			assert_eq!(
+				runtime.get_field_state(form.notes_field()),
+				FieldState {
+					is_dirty: false,
+					is_touched: false,
+					error: None,
+				}
+			);
+			assert!(!runtime.form_state().is_dirty.get());
+			assert!(!runtime.form_state().is_touched.get());
+			let edit = "Browser edit\nretained";
+			if edited {
+				// No listener is attached yet, so hydration must discover this edit.
+				textarea.set_value(edit);
+			}
+
+			// Act: hydrate the parsed DOM with the original source values.
+			assert_eq!(reconcile(&mounted.root(), &page), Ok(()));
+			attach_events_to_mounted_view(&mounted.root(), &page).unwrap();
+			flush();
+
+			// Assert: normalization is silent; an actual edit still updates metadata.
+			let expected_source = if edited { edit } else { source };
+			assert_eq!(form.notes().get(), expected_source);
+			assert_eq!(runtime.watch().get().notes, expected_source);
+			assert_eq!(runtime.default_values().notes, source);
+			assert_eq!(textarea.value(), if edited { edit } else { parsed });
+			assert_eq!(textarea.default_value().unwrap(), parsed);
+			assert_eq!(
+				runtime.get_field_state(form.notes_field()),
+				FieldState {
+					is_dirty: edited,
+					is_touched: edited,
+					error: None,
+				}
+			);
+			assert_eq!(runtime.form_state().is_dirty.get(), edited);
+			assert_eq!(runtime.form_state().is_touched.get(), edited);
+			let expected_events: &[&str] = if edited { &["validated", "value"] } else { &[] };
+			assert_eq!(events.borrow().as_slice(), expected_events);
+			assert_eq!(
+				mounted
+					.0
+					.query_selector("textarea")
+					.unwrap()
+					.unwrap()
+					.unchecked_into::<web_sys::HtmlTextAreaElement>(),
+				textarea
+			);
+		}
 	}
 }
 

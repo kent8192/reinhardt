@@ -81,6 +81,7 @@ impl ControlBindingController {
 }
 
 /// Snapshots all controls before adopting any signal, preserving radio/group ordering.
+/// Textarea line-ending normalization alone does not replace the source or notify subscribers.
 pub(crate) fn hydrate_controls(
 	controls: Vec<(Element, ControlBinding)>,
 ) -> Vec<ControlBindingController> {
@@ -93,10 +94,19 @@ pub(crate) fn hydrate_controls(
 		})
 		.collect::<Vec<_>>();
 	batch(|| {
-		for ((_, binding), (snapshot, prefer_source)) in controls.iter().zip(&snapshots) {
+		for ((element, binding), (snapshot, prefer_source)) in controls.iter().zip(&snapshots) {
 			if !prefer_source && let Some(snapshot) = snapshot {
 				let source = binding.read_untracked();
 				let matches_source = match (snapshot, &source) {
+					(ControlValue::Text(browser), ControlValue::Text(source))
+						if source.contains('\r')
+							&& element
+								.as_web_sys()
+								.is_instance_of::<web_sys::HtmlTextAreaElement>() =>
+					{
+						// HTML parsing and textarea values normalize both CRLF and bare CR.
+						*browser == source.replace("\r\n", "\n").replace('\r', "\n")
+					}
 					(
 						ControlValue::SelectedValues(browser),
 						ControlValue::SelectedValues(source),

@@ -403,7 +403,11 @@ impl Runtime {
 			let layout_effects =
 				core::mem::take(&mut *self.notification_layout_effects.borrow_mut());
 			for effect_id in layout_effects {
-				super::effect::Effect::execute_effect(effect_id);
+				if *self.batch_depth.borrow() > 0 {
+					self.schedule_update(effect_id);
+				} else {
+					super::effect::Effect::execute_effect(effect_id);
+				}
 			}
 			let passive = core::mem::take(&mut *self.notification_passive.borrow_mut());
 			for node_id in passive {
@@ -627,8 +631,9 @@ where
 
 /// Execute multiple reactive writes as a single update cycle.
 ///
-/// Updates scheduled while the batch is active are queued, then flushed once
-/// the outermost batch exits. Nested batches share the same queue.
+/// Layout and passive effects are queued, then flushed once the outermost batch
+/// exits. Nested batches share the same queue. Memos are invalidated immediately
+/// so reads inside the batch observe the current signal values.
 pub fn batch<R>(f: impl FnOnce() -> R) -> R {
 	struct BatchGuard;
 
@@ -1075,6 +1080,80 @@ mod tests {
 		super::subscribe_node_to_observer(node, observer);
 		let subs2 = super::with_runtime(|rt| rt.debug_subscribers(node));
 		assert_eq!(subs2.len(), 1, "subscribe must be idempotent");
+	}
+
+	#[rstest::rstest]
+	#[case::layout(EffectTiming::Layout)]
+	#[case::passive(EffectTiming::Passive)]
+	#[serial(reactive_runtime)]
+	fn nested_batch_defers_effects_but_keeps_memo_reads_current(#[case] timing: EffectTiming) {
+		ReactiveScope::run(|| {
+			// Arrange
+			let source = Signal::new(0);
+			let derived = Memo::new(move || source.get() * 2);
+			let observed = Rc::new(RefCell::new(Vec::new()));
+			let effect_observed = Rc::clone(&observed);
+			let _effect = Effect::new_with_timing(
+				move || effect_observed.borrow_mut().push(derived.get()),
+				timing,
+			);
+
+			// Act
+			batch(|| {
+				source.set(1);
+				assert_eq!(derived.get(), 2);
+				batch(|| source.set(2));
+				assert_eq!(derived.get(), 4);
+				assert_eq!(*observed.borrow(), vec![0]);
+			});
+
+			// Assert
+			assert_eq!(*observed.borrow(), vec![0, 4]);
+			source.set(3);
+			with_runtime(|runtime| runtime.flush_updates());
+			assert_eq!(*observed.borrow(), vec![0, 4, 6]);
+		});
+	}
+
+	#[rstest::rstest]
+	#[case::layout(EffectTiming::Layout)]
+	#[case::passive(EffectTiming::Passive)]
+	#[serial(reactive_runtime)]
+	fn batch_releases_effects_after_error_and_unwind(#[case] timing: EffectTiming) {
+		use std::panic::{AssertUnwindSafe, catch_unwind};
+
+		ReactiveScope::run(|| {
+			// Arrange
+			let source = Signal::new(0);
+			let observed = Rc::new(RefCell::new(Vec::new()));
+			let effect_observed = Rc::clone(&observed);
+			let _effect = Effect::new_with_timing(
+				move || effect_observed.borrow_mut().push(source.get()),
+				timing,
+			);
+
+			// Act
+			let result: Result<(), &str> = batch(|| {
+				source.set(1);
+				assert_eq!(*observed.borrow(), vec![0]);
+				Err("rejected")
+			});
+			assert_eq!(result, Err("rejected"));
+			assert_eq!(*observed.borrow(), vec![0, 1]);
+			let panic = catch_unwind(AssertUnwindSafe(|| {
+				batch(|| {
+					source.set(2);
+					panic!("batch interrupted");
+				});
+			}));
+
+			// Assert
+			assert!(panic.is_err());
+			assert_eq!(*observed.borrow(), vec![0, 1, 2]);
+			source.set(3);
+			with_runtime(|runtime| runtime.flush_updates());
+			assert_eq!(*observed.borrow(), vec![0, 1, 2, 3]);
+		});
 	}
 
 	#[rstest::rstest]

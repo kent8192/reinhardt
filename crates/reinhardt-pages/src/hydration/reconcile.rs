@@ -480,9 +480,36 @@ fn reconcile_children_at_path(
 	path: ReconcilePath,
 	controlled_select: bool,
 ) -> Result<(), ReconcileError> {
-	let actual_nodes = relevant_child_nodes(element);
 	let mut expected_children = Vec::new();
 	collect_expected_children(child_views, &path, &mut expected_children);
+	if element.tag_name().eq_ignore_ascii_case("textarea")
+		&& expected_children
+			.iter()
+			.all(|(_, view)| matches!(view, Page::Text(_)))
+	{
+		// Textarea snapshots retain whitespace, including an absent empty text node.
+		let expected: String = expected_children
+			.iter()
+			.filter_map(|(_, view)| {
+				if let Page::Text(text) = view {
+					Some(text.as_ref())
+				} else {
+					None
+				}
+			})
+			.collect();
+		let actual = element.text_content().unwrap_or_default();
+		let parsed = expected.replace("\r\n", "\n").replace('\r', "\n");
+		if actual != expected && actual != parsed {
+			return Err(ReconcileError::TextMismatch {
+				path,
+				expected,
+				actual,
+			});
+		}
+		return Ok(());
+	}
+	let actual_nodes = relevant_child_nodes(element);
 
 	for (index, (child_path, child_view)) in expected_children.iter().enumerate() {
 		let Some(actual_node) = actual_nodes.get(index) else {
@@ -720,6 +747,10 @@ fn reconcile_options_children_at_path(
 	let keyed_child_views;
 	let child_views: &[Page] = match view {
 		Page::Element(el_view) => {
+			// Textarea children are raw text, so they cannot contain nested islands.
+			if el_view.tag_name().eq_ignore_ascii_case("textarea") {
+				return Ok(());
+			}
 			controlled_select |= is_controlled_select(el_view);
 			el_view.child_views()
 		}

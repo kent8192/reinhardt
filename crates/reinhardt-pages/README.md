@@ -185,6 +185,8 @@ HTML parsing, and selective hydration preserves controlled select defaults acros
 option groups and island boundaries.
 Textarea newline normalization by the HTML parser alone does not count as a
 browser edit or mark the form dirty during hydration.
+Unbound textarea snapshots also reconcile empty and whitespace-only content,
+normalize parsed line endings, and reject other changes to their default text.
 Reconciled pristine defaults retain preference for their updated fields and collection paths
 during hydration, while unrelated dirty controls remain eligible for browser edits.
 A native form reset adopts the browser's defaults after the reset event, including

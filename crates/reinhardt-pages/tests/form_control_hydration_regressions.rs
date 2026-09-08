@@ -220,6 +220,85 @@ fn textarea_browser_normalization_preserves_pristine_sources_and_adopts_edits() 
 #[rstest::rstest]
 #[test_attr(wasm_bindgen_test)]
 #[serial(form_control_hydration_dom)]
+fn unbound_textarea_snapshots_reconcile_parser_normalized_newlines() {
+	for (source, parsed) in [
+		("", ""),
+		("first\r\nsecond", "first\nsecond"),
+		("first\rsecond", "first\nsecond"),
+		("\r\nnotes", "\nnotes"),
+		("\rnotes", "\nnotes"),
+		("\r", "\n"),
+		("\r\n", "\n"),
+		(" \r\n\t ", " \n\t "),
+	] {
+		// Arrange: an unbound control keeps its original rendered snapshot.
+		let form = form! {
+			name: UnboundTextareaDefaults,
+			fields: {
+				notes: TextField {
+					initial: source,
+					bind: false
+				}
+			}
+		};
+		let page = form.clone().into_page();
+		let mounted = MountedPage::new();
+		mounted.0.set_inner_html(&page.render_to_string());
+		let textarea = mounted
+			.0
+			.query_selector("textarea")
+			.unwrap()
+			.unwrap()
+			.unchecked_into::<web_sys::HtmlTextAreaElement>();
+		assert_eq!(textarea.value(), parsed);
+		assert_eq!(textarea.default_value().unwrap(), parsed);
+
+		// Act: validate both normal and strict options-aware hydration paths.
+		assert_eq!(
+			reconcile(&mounted.root(), &page),
+			Ok(()),
+			"source: {source:?}"
+		);
+		assert_eq!(
+			reconcile_with_options(
+				&mounted.root(),
+				&page,
+				&ReconcileOptions::full_reconciliation().warn_on_mismatch(false)
+			),
+			Ok(())
+		);
+		attach_events_to_mounted_view(&mounted.root(), &page).unwrap();
+		flush();
+
+		// Assert: parsing and later source writes leave the snapshot unchanged.
+		assert_eq!(form.notes().get(), source);
+		form.notes().set(String::from("later source"));
+		flush();
+		assert_eq!(textarea.value(), parsed);
+		assert_eq!(textarea.default_value().unwrap(), parsed);
+		assert_eq!(
+			mounted.0.query_selector("textarea").unwrap().unwrap(),
+			textarea.clone().unchecked_into::<web_sys::Element>()
+		);
+
+		// A changed snapshot still fails, including whitespace-only differences.
+		let changed = format!("{parsed} ");
+		textarea.set_text_content(Some(&changed));
+		let error = reconcile(&mounted.root(), &page).unwrap_err();
+		let ReconcileError::TextMismatch {
+			expected, actual, ..
+		} = error
+		else {
+			panic!("expected textarea text mismatch, got {error:?}");
+		};
+		assert_eq!(expected, source);
+		assert_eq!(actual, changed);
+	}
+}
+
+#[rstest::rstest]
+#[test_attr(wasm_bindgen_test)]
+#[serial(form_control_hydration_dom)]
 fn selective_reconciliation_preserves_reset_select_defaults() {
 	// Arrange: both select kinds have SSR defaults superseded by a client reset.
 	let form = form! {

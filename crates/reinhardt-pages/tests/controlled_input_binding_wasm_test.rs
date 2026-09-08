@@ -545,6 +545,7 @@ fn reactive_multiple_reconciles_email_value_sanitization(#[case] nested_in_react
 
 		// Act
 		multiple.set(true);
+		with_runtime(|runtime| runtime.flush_updates());
 
 		// Assert
 		assert_eq!(value.get(), "a@example.test,b@example.test");
@@ -3657,8 +3658,7 @@ fn hydrated_reactive_if_adopts_before_subscribing_and_transfers_guards() {
 		)
 		.expect("hydrate");
 		assert_eq!(value.get(), "restored");
-		assert!(raw_input.is_same_node(root.as_web_sys().first_element_child().as_deref(),));
-		with_runtime(|runtime| runtime.flush_updates());
+		// Adoption changes the condition, so hydration converges before returning.
 		let converged: web_sys::HtmlInputElement = root
 			.as_web_sys()
 			.first_element_child()

@@ -123,6 +123,13 @@
 //! `FieldGroup` renders as semantic `<fieldset>` output. When `label` is
 //! present, the label is rendered as a `<legend>` inside the fieldset.
 //!
+//! Dynamic `RadioSelect` fields also use `<fieldset>` / `<legend>` to name the
+//! radio group. Each option keeps its own label and indexed input ID. Field,
+//! label, and input CSS classes are preserved. Custom wrappers keep their tag and
+//! attributes, with `aria-labelledby` naming the group from a caption `<span>`
+//! instead of a legend. The default role is `group`; an explicit wrapper role is
+//! preserved.
+//!
 //! `CustomWidget` is experimental and must opt in explicitly:
 //!
 //! ```rust,ignore

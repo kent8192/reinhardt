@@ -101,6 +101,8 @@
 //! |---|---|---|
 //! | `MonthInput` | `<input type="month">` | string field |
 //! | `WeekInput` | `<input type="week">` | string field |
+//! | `RadioInput` | one `<input type="radio">` | `ChoiceField<String>` |
+//! | `RadioSelect` | a group of `<input type="radio">` controls | choice field |
 //! | `ResetButton` | `<button type="reset">` | none |
 //! | `Button` | `<button type="button">` | none |
 //! | `ImageInput` | `<input type="image">` | none |
@@ -109,6 +111,21 @@
 //! | `Output` | `<output>` | none |
 //! | `Meter` | `<meter>` | none |
 //! | `Progress` | `<progress>` | none |
+//!
+//! `RadioInput` renders one string-valued choice, with the field's name and ID.
+//! Its fixed option value defaults to `"on"`; exactly one static option such as
+//! `choices: [("yes", "Yes")]` supplies another value and an optional label.
+//! An explicit field label takes precedence, and an option marked `disabled`
+//! disables the input. Multiple, empty, grouped, or dynamic options are rejected;
+//! use `RadioSelect` with `choices_from` for a group and `CheckboxInput` for booleans.
+//!
+//! The radio is checked when its field value equals its option value. Selecting
+//! it updates the field, and programmatic values and runtime resets update the
+//! checked state. Scalar native resets restore the latest initial values,
+//! including defaults loaded after mounting, and clear runtime touched state and
+//! errors without emitting change or validation events. Scalar and collection
+//! radios preserve `autocomplete` and retain focus within their reactive subtree.
+//! For scalar fields, `bind: false` snapshots the current value without binding.
 //!
 //! Typed native attributes are accepted for the controls that support them:
 //!

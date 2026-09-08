@@ -293,17 +293,31 @@ impl ReactiveNode {
 					// Mount new nodes before the marker
 					let new_nodes = mount_before_marker(&marker_clone, view);
 					let focus_target = focused_radio.and_then(|previous| {
-						document
-							.get_element_by_id(&previous.id())
-							.and_then(|element| {
-								element.dyn_into::<web_sys::HtmlInputElement>().ok()
+						let matches_previous = |input: &web_sys::HtmlInputElement| {
+							input.type_() == "radio"
+								&& input.id() == previous.id()
+								&& input.name() == previous.name()
+								&& input.value() == previous.value()
+						};
+						new_nodes.iter().find_map(|node| {
+							if let Some(input) = node
+								.dyn_ref::<web_sys::HtmlInputElement>()
+								.filter(|input| matches_previous(input))
+							{
+								return Some(input.clone());
+							}
+							let descendants = node
+								.dyn_ref::<web_sys::Element>()?
+								.query_selector_all("input[type=radio]")
+								.ok()?;
+							(0..descendants.length()).find_map(|index| {
+								descendants
+									.item(index)?
+									.dyn_into::<web_sys::HtmlInputElement>()
+									.ok()
+									.filter(&matches_previous)
 							})
-							.filter(|input| {
-								input.type_() == "radio"
-									&& input.name() == previous.name()
-									&& input.value() == previous.value()
-									&& new_nodes.iter().any(|node| node.contains(Some(input)))
-							})
+						})
 					});
 					*current_nodes_clone.borrow_mut() = new_nodes;
 					if let Some(input) = focus_target {

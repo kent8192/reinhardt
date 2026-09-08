@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.3.15...reinhardt-core@v0.3.16) - 2026-09-08
+
+### Fixed
+
+- *(pages)* retain form control bindings through mount and hydration
+- *(core)* defer layout effects within explicit batches
+- *(pages)* preserve textarea and select state during hydration
+- *(pages)* preserve form ownership across hydration and reset
+- *(core)* flush batched layout work before passive effects
+- *(core)* deduplicate layout callbacks while flushing batches
+- *(pages)* preserve pristine textarea state through newline normalization
+
 ## [0.3.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.3.14...reinhardt-core@v0.3.15) - 2026-09-01
 
 ### Fixed

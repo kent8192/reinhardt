@@ -30,6 +30,9 @@ pub enum ControlValue {
 	Checked(bool),
 	/// Values selected by a multiple select.
 	SelectedValues(Vec<String>),
+	/// The actual browser-owned file selected before hydration or after reset.
+	#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+	File(Option<web_sys::File>),
 }
 
 /// Type-erased state access for generated form controls.
@@ -40,6 +43,7 @@ pub struct ControlBinding {
 	read: Arc<dyn Fn() -> ControlValue>,
 	write: Arc<dyn Fn(ControlValue)>,
 	prefer_source: Arc<dyn Fn() -> bool>,
+	native_reset: Option<Arc<dyn Fn()>>,
 }
 
 impl std::fmt::Debug for ControlBinding {
@@ -62,6 +66,7 @@ impl ControlBinding {
 			read: Arc::new(read),
 			write: Arc::new(write),
 			prefer_source: Arc::new(|| false),
+			native_reset: None,
 		}
 	}
 
@@ -69,6 +74,19 @@ impl ControlBinding {
 	pub fn prefer_source_on_hydration(mut self, prefer: impl Fn() -> bool + 'static) -> Self {
 		self.prefer_source = Arc::new(prefer);
 		self
+	}
+
+	/// Registers runtime bookkeeping after all browser reset values are adopted.
+	pub fn on_native_reset(mut self, callback: impl Fn() + 'static) -> Self {
+		self.native_reset = Some(Arc::new(callback));
+		self
+	}
+
+	/// Notifies the runtime within the same batch as the browser reset writes.
+	pub fn notify_native_reset(&self) {
+		if let Some(callback) = &self.native_reset {
+			callback();
+		}
 	}
 
 	/// Returns the browser control kind.

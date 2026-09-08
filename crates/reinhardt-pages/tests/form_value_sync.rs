@@ -982,6 +982,245 @@ mod browser {
 		);
 	}
 
+	#[rstest::rstest]
+	#[test_attr(wasm_bindgen_test)]
+	#[serial(form_value_sync_dom)]
+	fn pre_hydration_field_reset_preserves_other_browser_edits() {
+		// Arrange.
+		let form = value_sync_form!();
+		let runtime = use_form(&form).build();
+		let page = form.clone().into_page();
+		let mounted = MountedForm::empty();
+		mounted.0.set_inner_html(&page.render_to_string());
+		let nodes = remember_nodes(&mounted);
+		edit_control(&mounted, "name", "text", "Browser name");
+		edit_control(&mounted, "bio", "textarea", "Browser biography");
+
+		// Act: only the reset field takes precedence over its browser snapshot.
+		runtime.reset_field(form.name_field());
+		let root = reinhardt_pages::dom::Element::new(mounted.0.first_element_child().unwrap());
+		reinhardt_pages::hydration::attach_events_to_mounted_view(&root, &page).unwrap();
+		flush();
+
+		// Assert.
+		assert_eq!(form.name().get(), "Ada");
+		assert_eq!(form.bio().get(), "Browser biography");
+		assert_eq!(dom_value(&mounted, "name", "text"), "Ada");
+		assert_eq!(dom_value(&mounted, "bio", "textarea"), "Browser biography");
+		assert_same_nodes(&mounted, &nodes);
+	}
+
+	#[rstest::rstest]
+	#[test_attr(wasm_bindgen_test)]
+	#[serial(form_value_sync_dom)]
+	fn pre_hydration_scalar_setter_preserves_explicit_value_and_other_browser_edits() {
+		// Arrange.
+		let form = value_sync_form!();
+		let runtime = use_form(&form).build();
+		let page = form.clone().into_page();
+		let mounted = MountedForm::empty();
+		mounted.0.set_inner_html(&page.render_to_string());
+		let nodes = remember_nodes(&mounted);
+		edit_control(&mounted, "name", "text", "Browser name");
+		edit_control(&mounted, "bio", "textarea", "Browser biography");
+
+		// Act: the explicit setter wins even when the Page was constructed earlier.
+		runtime.set_value(form.name_field(), String::from("Explicit name"));
+		let root = reinhardt_pages::dom::Element::new(mounted.0.first_element_child().unwrap());
+		reinhardt_pages::hydration::attach_events_to_mounted_view(&root, &page).unwrap();
+		flush();
+
+		// Assert.
+		assert_eq!(form.name().get(), "Explicit name");
+		assert_eq!(form.bio().get(), "Browser biography");
+		assert_eq!(dom_value(&mounted, "name", "text"), "Explicit name");
+		assert_same_nodes(&mounted, &nodes);
+	}
+
+	#[rstest::rstest]
+	#[test_attr(wasm_bindgen_test)]
+	#[serial(form_value_sync_dom)]
+	fn pre_hydration_path_setter_preserves_only_the_selected_path() {
+		// Arrange.
+		let form = collection_form!();
+		let runtime = use_form(&form).build();
+		let key = seed_collection!(form, runtime);
+		let page = form.clone().into_page();
+		let mounted = MountedForm::empty();
+		mounted.0.set_inner_html(&page.render_to_string());
+		let nodes = remember_nodes(&mounted);
+		edit_control(&mounted, "rows_0_title", "text", "Browser title");
+		edit_control(&mounted, "rows_0_body", "textarea", "Browser body");
+
+		// Act.
+		runtime.set_path_value(form.rows_title_path(key), String::from("Explicit title"));
+		let root = reinhardt_pages::dom::Element::new(mounted.0.first_element_child().unwrap());
+		reinhardt_pages::hydration::attach_events_to_mounted_view(&root, &page).unwrap();
+		flush();
+
+		// Assert.
+		assert_eq!(runtime.get_values().rows[0].title, "Explicit title");
+		assert_eq!(runtime.get_values().rows[0].body, "Browser body");
+		assert_eq!(
+			dom_value(&mounted, "rows_0_title", "text"),
+			"Explicit title"
+		);
+		assert_eq!(form.rows().get()[0].key(), key);
+		assert_same_nodes(&mounted, &nodes);
+	}
+
+	#[rstest::rstest]
+	#[test_attr(wasm_bindgen_test)]
+	#[serial(form_value_sync_dom)]
+	fn hydration_preserves_source_order_for_an_unchanged_multiple_selection() {
+		// Arrange: source order deliberately differs from option order.
+		let form = value_sync_form!();
+		form.tags()
+			.set(vec![String::from("wasm"), String::from("rust")]);
+		let runtime = use_form(&form).build();
+		runtime.reset_default_values();
+		let page = form.clone().into_page();
+		let mounted = MountedForm::empty();
+		mounted.0.set_inner_html(&page.render_to_string());
+		let nodes = remember_nodes(&mounted);
+		assert_eq!(dom_value(&mounted, "tags", "select-multiple"), "rust,wasm");
+
+		// Act.
+		let root = reinhardt_pages::dom::Element::new(mounted.0.first_element_child().unwrap());
+		reinhardt_pages::hydration::attach_events_to_mounted_view(&root, &page).unwrap();
+		flush();
+
+		// Assert.
+		assert_eq!(
+			form.tags().get(),
+			[String::from("wasm"), String::from("rust")]
+		);
+		assert!(!runtime.form_state().is_dirty.get());
+		assert!(!runtime.form_state().is_touched.get());
+		assert_same_nodes(&mounted, &nodes);
+	}
+
+	#[rstest::rstest]
+	#[test_attr(wasm_bindgen_test)]
+	#[serial(form_value_sync_dom)]
+	fn hydration_adopts_browser_owned_files_without_replacing_inputs() {
+		// Arrange: selections occur before any event listeners have been attached.
+		let form = value_sync_form!();
+		let page = form.clone().into_page();
+		let mounted = MountedForm::empty();
+		mounted.0.set_inner_html(&page.render_to_string());
+		let nodes = remember_nodes(&mounted);
+		let parts = js_sys::Array::of1(&JsValue::from_str("pre-hydration contents"));
+		let file = web_sys::File::new_with_str_sequence(&parts, "selected.txt").unwrap();
+		for id in ["attachment", "image"] {
+			select_file(&mounted.control(id).unchecked_into(), &file);
+		}
+		assert!(form.attachment().get().is_none());
+		assert!(form.image().get().is_none());
+
+		// Act.
+		let root = reinhardt_pages::dom::Element::new(mounted.0.first_element_child().unwrap());
+		reinhardt_pages::hydration::attach_events_to_mounted_view(&root, &page).unwrap();
+		flush();
+
+		// Assert: the exact File objects remain available to submission code.
+		assert_eq!(form.attachment().get(), Some(file.clone()));
+		assert_eq!(form.image().get(), Some(file.clone()));
+		for id in ["attachment", "image"] {
+			let input = mounted
+				.control(id)
+				.unchecked_into::<web_sys::HtmlInputElement>();
+			assert_eq!(input.files().unwrap().get(0), Some(file.clone()));
+		}
+		assert_same_nodes(&mounted, &nodes);
+	}
+
+	#[rstest::rstest]
+	#[test_attr(wasm_bindgen_test)]
+	#[serial(form_value_sync_dom)]
+	async fn native_reset_clears_runtime_metadata_even_when_values_are_already_default() {
+		use reinhardt_pages::{FieldError, RevalidateOn};
+
+		// Arrange: setting the same value still marks the field touched.
+		let form = value_sync_form!();
+		let runtime = use_form(&form).revalidate_on(RevalidateOn::Change).build();
+		let mounted = MountedForm::new(form.clone().into_page());
+		let events = std::rc::Rc::new(std::cell::Cell::new(0));
+		let _subscription = runtime.subscribe({
+			let events = events.clone();
+			move |_| events.set(events.get() + 1)
+		});
+		for value in ["Grace", "Ada"] {
+			runtime.set_value(form.name_field(), String::from(value));
+			runtime.set_error(form.name_field(), FieldError::new("stale field error"));
+			assert!(runtime.get_field_state(form.name_field()).is_touched);
+			events.set(0);
+
+			// Act.
+			mounted
+				.0
+				.first_element_child()
+				.unwrap()
+				.unchecked_into::<web_sys::HtmlFormElement>()
+				.reset();
+			gloo_timers::future::TimeoutFuture::new(0).await;
+			flush();
+
+			// Assert: reset emits neither validation nor value-change notifications.
+			assert_eq!(form.name().get(), "Ada");
+			assert!(!runtime.get_field_state(form.name_field()).is_touched);
+			assert_eq!(runtime.get_field_state(form.name_field()).error, None);
+			assert!(!runtime.form_state().is_touched.get());
+			assert!(!runtime.form_state().is_dirty.get());
+			assert_eq!(events.get(), 0);
+		}
+	}
+
+	#[rstest::rstest]
+	#[test_attr(wasm_bindgen_test)]
+	#[serial(form_value_sync_dom)]
+	async fn native_reset_clears_collection_and_path_metadata() {
+		use reinhardt_pages::FieldError;
+
+		// Arrange.
+		let form = collection_form!();
+		let runtime = use_form(&form).build();
+		let key = seed_collection!(form, runtime);
+		let mounted = MountedForm::new(form.clone().into_page());
+		let path = form.rows_title_path(key);
+		let watched = runtime.watch_path::<String>(path.clone());
+		runtime.set_path_value(path.clone(), String::from("Edited title"));
+		runtime.set_path_error(path.clone(), FieldError::new("stale path error"));
+		assert!(runtime.get_path_state(path.clone()).is_touched);
+		assert!(
+			runtime
+				.get_collection_state(form.rows_collection())
+				.is_touched
+		);
+
+		// Act.
+		mounted
+			.0
+			.first_element_child()
+			.unwrap()
+			.unchecked_into::<web_sys::HtmlFormElement>()
+			.reset();
+		gloo_timers::future::TimeoutFuture::new(0).await;
+		flush();
+
+		// Assert.
+		assert_eq!(watched.get(), "Ada");
+		assert!(!runtime.get_path_state(path.clone()).is_touched);
+		assert_eq!(runtime.get_path_state(path).error, None);
+		assert!(
+			!runtime
+				.get_collection_state(form.rows_collection())
+				.is_touched
+		);
+		assert!(!runtime.form_state().is_touched.get());
+		assert!(!runtime.form_state().is_dirty.get());
+	}
+
 	fn select_file(input: &web_sys::HtmlInputElement, file: &web_sys::File) {
 		let window = web_sys::window().unwrap();
 		let constructor = js_sys::Reflect::get(&window, &JsValue::from_str("DataTransfer"))

@@ -94,11 +94,21 @@ pub(crate) fn hydrate_controls(
 		.collect::<Vec<_>>();
 	batch(|| {
 		for ((_, binding), (snapshot, prefer_source)) in controls.iter().zip(&snapshots) {
-			if !prefer_source
-				&& let Some(snapshot) = snapshot
-				&& *snapshot != binding.read_untracked()
-			{
-				binding.write(snapshot.clone());
+			if !prefer_source && let Some(snapshot) = snapshot {
+				let source = binding.read_untracked();
+				let matches_source = match (snapshot, &source) {
+					(
+						ControlValue::SelectedValues(browser),
+						ControlValue::SelectedValues(source),
+					) => {
+						browser.iter().all(|value| source.contains(value))
+							&& source.iter().all(|value| browser.contains(value))
+					}
+					_ => *snapshot == source,
+				};
+				if !matches_source {
+					binding.write(snapshot.clone());
+				}
 			}
 		}
 	});
@@ -130,7 +140,7 @@ fn select_contains_source(element: &Element, value: &ControlValue) -> bool {
 		ControlValue::SelectedValues(selected) => {
 			selected.iter().all(|value| values.contains(value))
 		}
-		ControlValue::Checked(_) => true,
+		ControlValue::Checked(_) | ControlValue::File(_) => true,
 	}
 }
 
@@ -195,10 +205,16 @@ impl FormResetListener {
 								.collect::<Vec<_>>()
 						});
 						batch(|| {
-							for (control, value) in snapshots {
-								if control.active.get() && value != control.binding.read_untracked()
+							for (control, value) in &snapshots {
+								if control.active.get()
+									&& *value != control.binding.read_untracked()
 								{
-									control.binding.write(value);
+									control.binding.write(value.clone());
+								}
+							}
+							for (control, _) in &snapshots {
+								if control.active.get() {
+									control.binding.notify_native_reset();
 								}
 							}
 						});
@@ -289,9 +305,9 @@ fn read_control(element: &Element, kind: ControlKind) -> Option<ControlValue> {
 		ControlKind::Checkbox | ControlKind::Radio => element
 			.dyn_ref::<web_sys::HtmlInputElement>()
 			.map(|input| ControlValue::Checked(input.checked())),
-		ControlKind::File => element.dyn_ref::<web_sys::HtmlInputElement>().map(|input| {
-			ControlValue::Checked(input.files().is_some_and(|files| files.length() > 0))
-		}),
+		ControlKind::File => element
+			.dyn_ref::<web_sys::HtmlInputElement>()
+			.map(|input| ControlValue::File(input.files().and_then(|files| files.get(0)))),
 		ControlKind::SelectOne => element
 			.dyn_ref::<web_sys::HtmlSelectElement>()
 			.map(|select| ControlValue::Text(select.value())),

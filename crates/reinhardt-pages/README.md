@@ -175,10 +175,15 @@ Bound controls update their existing DOM properties when a signal changes or
 options. `bind: false` renders a value snapshot and installs neither an input
 listener nor ongoing synchronization. Ordinary and grouped fields take that
 snapshot in `into_page()`; collection fields take it when their row renders.
-Hydration adopts existing
-browser edits, unless the runtime explicitly applied values before hydration.
+Hydration adopts existing browser edits and selected files. Explicit runtime setters
+and field resets take precedence only for the affected field or collection path;
+a whole-form reset takes precedence for all fields. Unchanged multiple selections
+retain the source vector order. SSR preserves leading textarea line feeds through
+HTML parsing, and selective hydration preserves controlled select defaults across
+option groups and island boundaries.
 A native form reset adopts the browser's defaults after the reset event, including
-its cancellation rules; runtime reset uses the runtime's current defaults.
+its cancellation rules, and clears touched state and errors without emitting edit
+or validation events. Runtime reset uses the runtime's current defaults.
 
 | Field/control category | Rendered value |
 |---|---|

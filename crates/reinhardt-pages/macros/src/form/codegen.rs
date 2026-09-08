@@ -546,6 +546,7 @@ fn generate_form_runtime_contract(
 						::std::boxed::Box::new(value);
 					match boxed.downcast::<#ty>() {
 						Ok(value) => {
+							self.__source_preferred_fields.borrow_mut().insert(::std::string::String::from(stringify!(#name)));
 							self.#name.set(*value);
 							#custom_widget_touched_set
 						}
@@ -570,6 +571,7 @@ fn generate_form_runtime_contract(
 				});
 			quote! {
 				#field_ident::#variant => {
+					self.__source_preferred_fields.borrow_mut().insert(::std::string::String::from(stringify!(#name)));
 					self.#name.set(values.#name.clone());
 					#custom_widget_touched_reset
 				}
@@ -1200,6 +1202,7 @@ fn generate_form_runtime_contract(
 												item_index,
 												item_value,
 											);
+											self.__source_preferred_fields.borrow_mut().insert(path_key.clone());
 											self.#collection_name.set(items);
 											let signal = self
 												.__path_signals
@@ -1548,6 +1551,10 @@ fn generate_form_runtime_contract(
 			type Values = #values_ident;
 			type Field = #field_ident;
 
+			fn runtime_native_reset_epoch(&self) -> u64 {
+				self.__native_reset_epoch.get()
+			}
+
 			fn runtime_initial_values(&self) -> Self::Values {
 				self.__initial_values.borrow().clone()
 			}
@@ -1574,7 +1581,6 @@ fn generate_form_runtime_contract(
 			}
 
 			fn runtime_apply_field_value(&self, field: Self::Field, values: &Self::Values) {
-				self.__explicitly_reset.set(true);
 				match field {
 					#(#apply_field_values)*
 				}
@@ -2088,6 +2094,8 @@ pub(super) fn generate(
 				{
 					#field_decls
 					__explicitly_reset: ::std::rc::Rc<::std::cell::Cell<bool>>,
+					__source_preferred_fields: ::std::rc::Rc<::std::cell::RefCell<::std::collections::HashSet<::std::string::String>>>,
+					__native_reset_epoch: #pages_crate::reactive::Signal<u64>,
 					#runtime_initial_values_field_decl
 					#state_decls
 					#watch_field_decls
@@ -2103,6 +2111,8 @@ pub(super) fn generate(
 						Self {
 							#field_inits
 							__explicitly_reset: ::std::rc::Rc::new(::std::cell::Cell::new(false)),
+							__source_preferred_fields: ::std::rc::Rc::new(::std::cell::RefCell::new(::std::collections::HashSet::new())),
+							__native_reset_epoch: #pages_crate::reactive::Signal::new(0),
 							#runtime_initial_values_field_default_init
 							#state_inits
 						#watch_field_default_inits
@@ -3151,6 +3161,8 @@ fn generate_into_page(macro_ast: &TypedFormMacro, pages_crate: &TokenStream) -> 
 			use #pages_crate::component::{PageElement, IntoPage};
 
 			let __explicitly_reset = self.__explicitly_reset.clone();
+			let __source_preferred_fields = self.__source_preferred_fields.clone();
+			let __native_reset_epoch = self.__native_reset_epoch.clone();
 			#(#signal_bindings)*
 
 			#onsubmit_handler
@@ -3925,6 +3937,8 @@ fn generate_collection_view(
 			let __collection_signal = self.#collection_name.clone();
 			let __path_signals = self.__path_signals.clone();
 			let __explicitly_reset = __explicitly_reset.clone();
+			let __source_preferred_fields = __source_preferred_fields.clone();
+			let __native_reset_epoch = __native_reset_epoch.clone();
 			let __shape = #pages_crate::reactive::Signal::new(::std::vec::Vec::new());
 			let __shape_effect = ::std::rc::Rc::new(#pages_crate::reactive::Effect::new_with_timing({
 				let collection = __collection_signal.clone();
@@ -4150,11 +4164,13 @@ fn generate_collection_control_binding(
 	let field_name = &field.name;
 	let field_type = field_type_to_value_type(&field.field_type);
 	let assignment = collection_field_assignment(field, pages_crate, collection_name);
+	let field_name_str = field.name.to_string();
 	let setup = quote! {
+		let __source_preference_key = ::std::format!("{}:{:?}:{}", #collection_name, item.key(), #field_name_str);
 		let __read_value = {
 			let collection = __collection_signal.clone();
 			let key = item.key();
-			// ponytail: linear lookup per field; index keys if large arrays become common.
+			// ponytail: O(rows) per bound field update; indexed row storage scales to large forms.
 			move || collection.get().iter().find(|item| item.key() == key)
 				.map(|item| item.value().#field_name.clone()).unwrap_or_default()
 		};
@@ -4210,6 +4226,9 @@ fn field_value_expr(field: &TypedFormFieldDef, value: TokenStream) -> TokenStrea
 		TypedFieldType::FileField | TypedFieldType::ImageField => {
 			quote! { ::std::string::String::new() }
 		}
+		TypedFieldType::ChoiceField { inner } if type_is_string(inner) => {
+			quote! { (#value).clone() }
+		}
 		TypedFieldType::IntegerField
 		| TypedFieldType::FloatField
 		| TypedFieldType::DecimalField
@@ -4252,7 +4271,9 @@ fn generate_generated_control_binding(
 	let Some(signal_ident) = signal_ident else {
 		return TokenStream::new();
 	};
+	let field_name = field.name.to_string();
 	let setup = quote! {
+		let __source_preference_key = ::std::string::String::from(#field_name);
 		let __read_value = { let signal = #signal_ident.clone(); move || signal.get() };
 		let __write_value = { let signal = #signal_ident.clone(); move |value| signal.set(value) };
 	};
@@ -4276,8 +4297,11 @@ fn generate_control_binding_operations(
 			quote! { File },
 			quote! { ControlValue::Checked(__read_value().is_some()) },
 			quote! {
-				if let ControlValue::Checked(false) = __value {
-					__write_value(::core::option::Option::None);
+				match __value {
+					#[cfg(target_arch = "wasm32")]
+					ControlValue::File(file) => __write_value(file),
+					ControlValue::Checked(false) => __write_value(::core::option::Option::None),
+					_ => {}
 				}
 			},
 		)
@@ -4299,7 +4323,11 @@ fn generate_control_binding_operations(
 					},
 				).prefer_source_on_hydration({
 					let __explicitly_reset = __explicitly_reset.clone();
-					move || __explicitly_reset.get()
+					let __source_preferred_fields = __source_preferred_fields.clone();
+					move || __explicitly_reset.get() || __source_preferred_fields.borrow().contains(&__source_preference_key)
+				}).on_native_reset({
+					let epoch = __native_reset_epoch.clone();
+					move || epoch.update(|version| *version = version.wrapping_add(1))
 				})
 			})
 		};
@@ -4347,7 +4375,11 @@ fn generate_control_binding_operations(
 				#write
 			}).prefer_source_on_hydration({
 				let __explicitly_reset = __explicitly_reset.clone();
-				move || __explicitly_reset.get()
+				let __source_preferred_fields = __source_preferred_fields.clone();
+				move || __explicitly_reset.get() || __source_preferred_fields.borrow().contains(&__source_preference_key)
+			}).on_native_reset({
+				let epoch = __native_reset_epoch.clone();
+				move || epoch.update(|version| *version = version.wrapping_add(1))
 			})
 		})
 	}
@@ -4567,6 +4599,11 @@ fn generate_field_view(
 	pages_crate: &TokenStream,
 	signal_ident: Option<&syn::Ident>,
 ) -> TokenStream {
+	let choice_values_equal = if choice_inner_type_is_string(&field.field_type) {
+		quote! { __metadata.value == value }
+	} else {
+		quote! { __metadata.value.to_string() == value.to_string() }
+	};
 	let field_name = &field.name;
 	let field_name_str = field_name.to_string();
 	let input_type = widget_to_input_type(&field.widget);
@@ -4706,7 +4743,7 @@ fn generate_field_view(
 									.map(|(i, (value, label))| {
 										match __choice_items.get(i) {
 											::core::option::Option::Some(__metadata)
-												if __metadata.value.to_string() == value.to_string()
+												if #choice_values_equal
 													&& __metadata.label.as_str() == label.as_str() =>
 											{
 												__ReinhardtChoiceItem {
@@ -4864,12 +4901,14 @@ fn generate_field_view(
 				Some(quote! { choice_value }),
 			);
 			let checked_attr = quote! {
-				.bool_attr("checked", __initial_radio_value == choice_value.to_string())
+				.bool_attr("checked", __initial_radio_value == choice_value)
 			};
 			quote! {
 					{
 						let __initial_radio_value = #initial_value;
 						let __explicitly_reset = __explicitly_reset.clone();
+						let __source_preferred_fields = __source_preferred_fields.clone();
+						let __native_reset_epoch = __native_reset_epoch.clone();
 						let __choices_signal = self.#choices_name.clone();
 						let __choice_items_signal = self.#choice_items_name.clone();
 						#pages_crate::component::Page::reactive(move || {
@@ -4881,7 +4920,7 @@ fn generate_field_view(
 								.map(|(i, (value, label))| {
 									match __choice_items.get(i) {
 										::core::option::Option::Some(__metadata)
-											if __metadata.value.to_string() == value.to_string()
+											if #choice_values_equal
 												&& __metadata.label.as_str() == label.as_str() =>
 										{
 											__ReinhardtChoiceItem {
@@ -4905,7 +4944,7 @@ fn generate_field_view(
 							let mut __children = ::std::vec::Vec::new();
 							for (i, choice) in __choices.into_iter().enumerate() {
 							let _ = (&choice.group, choice.group_disabled);
-							let choice_value = choice.value;
+							let choice_value = choice.value.to_string();
 							let __choice_id =
 								::std::format!("{}_{}", #field_name_str, i);
 							__children.push(
@@ -4916,7 +4955,7 @@ fn generate_field_view(
 											.attr("type", "radio")
 											.attr("name", #field_name_str)
 											.attr("id", __choice_id)
-											.attr("value", choice_value.to_string())
+											.attr("value", choice_value.clone())
 											.attr("class", #input_class)
 											#checked_attr
 											#field_attrs
@@ -7827,7 +7866,7 @@ mod tests {
 		assert!(output_str.contains("for (i , choice) in __choices . into_iter () . enumerate ()"));
 		assert!(output_str.contains("let choice_value = choice . value"));
 		assert!(output_str.contains(". attr (\"type\" , \"radio\")"));
-		assert!(output_str.contains(". attr (\"value\" , choice_value . to_string ())"));
+		assert!(output_str.contains(". attr (\"value\" , choice_value . clone ())"));
 		assert!(output_str.contains(". bool_attr (\"disabled\" , false || choice . disabled)"));
 		assert!(output_str.contains(". child (choice . label)"));
 		assert!(output_str.contains(". listener (\"change\""));

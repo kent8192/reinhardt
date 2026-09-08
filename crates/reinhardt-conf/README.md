@@ -338,6 +338,19 @@ These fields exist for Django settings compatibility but are **not yet consumed*
 use reinhardt::conf::settings::{SettingsBuilder, SettingsConfig};
 ```
 
+## Testing
+
+Run the database audit regression tests with a parallel test runner:
+
+```bash
+cargo test -p reinhardt-conf --all-features --lib settings::audit::backends::database -- --test-threads=8
+```
+
+Audit tests receive asynchronous `rstest` backend fixtures whose in-memory SQLite
+database names use `reinhardt-test`'s `random_test_key` helper. Connections within
+each pool share that database, while independently injected backend fixtures keep
+their audit records separate.
+
 ## License
 
 Licensed under the BSD 3-Clause License.

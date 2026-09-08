@@ -314,6 +314,12 @@ edits made before hydration. The adopted value also becomes the browser reset
 default, so a later form reset preserves the pre-hydration control state. Later
 signal changes update the control. Password bindings set only the live value
 property and never expose the secret through an SSR or DOM `value` attribute.
+If adopting a control changes a reactive branch condition, hydration reconciles
+that branch before returning and releases the replaced controls' listeners.
+Reevaluating an unchanged condition retains the mounted branch's reactive scope,
+so its callbacks and controlled values remain active until the branch is replaced.
+Hydration failures preserve their specific error variant, including control
+attachment errors.
 Resetting a connected password form clears its bound signal in a deferred
 task, after the browser reset completes. Cancelled resets preserve the
 value, and unmounting a control cancels its queued reset reconciliation.
@@ -342,7 +348,8 @@ default handling; a prevented reset preserves the selection. SSR emits neither
 file metadata nor a file value.
 For `input[type=number]`, the binding combines `beforeinput` metadata with the
 browser value so parse errors retain incomplete editor states when their edit
-position is known. Only unmodified Arrow/Home/End keyboard moves are predicted;
+position is known, including validation-driven reactive remounts. Only unmodified
+Arrow/Home/End keyboard moves are predicted;
 modifier-key commands and already-canceled key events are treated as unknown. Browsers
 do not expose number-input selection ranges; after
 a pointer move followed immediately by sanitization, the error safely reports
@@ -1608,6 +1615,12 @@ fn counter() -> View {
 | `chrono` | Compatibility marker; Chrono types are always available for named model-form contracts |
 | `ast` | AST processing support |
 | `web-sys-full` | All required web-sys features for WASM applications |
+
+## Testing
+
+Controlled-input browser regressions inject `rstest` fixtures for reactive scopes,
+DOM roots, and SSR state. Queries use `reinhardt-test` screens scoped to each root;
+fixture teardown releases mounted owners before disposing their reactive scope.
 
 ## License
 

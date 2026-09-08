@@ -76,6 +76,8 @@ hot-reload = ["notify", "tokio", "async"]
 caching = ["moka", "async"]
 
 [dev-dependencies]
+# Path-only test dependencies avoid cyclic publish ordering through the fixture facade.
+reinhardt-test = { path = "../reinhardt-test", default-features = false }
 insta = { workspace = true }
 futures = { workspace = true }
 tempfile = "3.8"

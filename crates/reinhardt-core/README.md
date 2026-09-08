@@ -124,8 +124,11 @@ Available features:
 - `reactive`: Reactive types
 
 With `reactive`, explicit `batch()` calls defer both layout and passive effects
-until the outermost batch exits. Layout effects remain synchronous outside a
-batch, so observers see complete form reset snapshots without intermediate edits.
+until the outermost batch exits, then flush layout work before passive consumers
+while preserving write order within each timing. Layout effects remain synchronous
+outside a batch. Callback writes remain batched through the complete flush and
+deduplicate against callbacks still pending, so observers see complete form reset
+snapshots without intermediate edits or duplicate notifications.
 
 ## Usage
 

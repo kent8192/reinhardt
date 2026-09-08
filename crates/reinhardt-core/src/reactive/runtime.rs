@@ -166,7 +166,7 @@ pub struct Runtime {
 	pub(crate) pending_updates: RefCell<Vec<NodeId>>,
 	/// Whether an update is currently scheduled
 	pub(crate) update_scheduled: RefCell<bool>,
-	/// Active explicit batch nesting depth.
+	/// Active explicit batch and callback-flush nesting depth.
 	pub(crate) batch_depth: RefCell<usize>,
 }
 
@@ -450,7 +450,9 @@ where
 /// Execute multiple reactive writes as a single update cycle.
 ///
 /// Updates scheduled while the batch is active are queued, then flushed once
-/// the outermost batch exits. Nested batches share the same queue.
+/// the outermost batch exits. Layout effects run before passive effects, with
+/// write order preserved within each timing. Nested batches and writes raised by
+/// callbacks share the pending queue until the flush finishes.
 pub fn batch<R>(f: impl FnOnce() -> R) -> R {
 	struct BatchGuard;
 
@@ -859,6 +861,148 @@ mod tests {
 
 	#[test]
 	#[serial(reactive_batch)]
+	fn batch_flush_deduplicates_layout_notifications_until_callbacks_finish() {
+		use crate::reactive::{Effect, Signal};
+		use std::{cell::Cell, rc::Rc};
+
+		// Arrange: the first queued layout callback also changes the second's input.
+		let source = Signal::new(0);
+		let trigger = Signal::new(0);
+		let forwarded = Signal::new(0);
+		let producer_finished = Rc::new(Cell::new(false));
+		let observations = Rc::new(RefCell::new(Vec::new()));
+		let producer_source = source.clone();
+		let producer_forwarded = forwarded.clone();
+		let producer_state = Rc::clone(&producer_finished);
+		let _producer = Effect::new_with_timing(
+			move || {
+				producer_forwarded.set(producer_source.get() * 10);
+				producer_state.set(true);
+			},
+			EffectTiming::Layout,
+		);
+		let consumer_trigger = trigger.clone();
+		let consumer_state = Rc::clone(&producer_finished);
+		let consumer_observations = Rc::clone(&observations);
+		let _consumer = Effect::new_with_timing(
+			move || {
+				consumer_observations.borrow_mut().push((
+					consumer_trigger.get(),
+					forwarded.get(),
+					consumer_state.get(),
+				));
+			},
+			EffectTiming::Layout,
+		);
+		observations.borrow_mut().clear();
+		producer_finished.set(false);
+
+		// Act: the consumer is already pending when the producer changes its input.
+		batch(|| {
+			source.set(2);
+			trigger.set(3);
+		});
+
+		// Assert: it observes the completed producer once, without synchronous reentry.
+		assert_eq!(*observations.borrow(), [(3, 20, true)]);
+	}
+
+	#[test]
+	#[serial(reactive_batch)]
+	fn batch_flush_drains_new_layout_work_before_pending_passive_consumers() {
+		use crate::reactive::{Effect, Signal};
+		use std::{cell::Cell, rc::Rc};
+
+		// Arrange: a layout callback creates more work while passive work is pending.
+		let source = Signal::new(0);
+		let forwarded = Signal::new(0);
+		let completed_value = Rc::new(Cell::new(0));
+		let observed = Rc::new(RefCell::new(Vec::new()));
+		let effect_source = source.clone();
+		let effect_forwarded = forwarded.clone();
+		let _producer = Effect::new_with_timing(
+			move || effect_forwarded.set(effect_source.get() * 10),
+			EffectTiming::Layout,
+		);
+		let layout_value = Rc::clone(&completed_value);
+		let _layout_consumer = Effect::new_with_timing(
+			move || layout_value.set(forwarded.get()),
+			EffectTiming::Layout,
+		);
+		let passive_source = source.clone();
+		let passive_observed = Rc::clone(&observed);
+		let _passive_consumer = Effect::new(move || {
+			let _ = passive_source.get();
+			passive_observed.borrow_mut().push(completed_value.get());
+		});
+		observed.borrow_mut().clear();
+
+		// Act.
+		batch(|| source.set(4));
+
+		// Assert: newly queued layout work is drained before the passive snapshot.
+		assert_eq!(*observed.borrow(), [40]);
+		assert_eq!(with_runtime(Runtime::debug_pending_updates), Vec::new());
+	}
+
+	#[test]
+	#[serial(reactive_batch)]
+	fn batches_flush_layout_effects_before_passive_effects_in_write_order() {
+		use crate::reactive::{Effect, Signal};
+		use std::{cell::Cell, rc::Rc};
+
+		// Arrange: a passive consumer observes the completed layout work.
+		let passive = Signal::new(0);
+		let first_layout = Signal::new(0);
+		let second_layout = Signal::new(0);
+		let layout_total = Rc::new(Cell::new(0));
+		let observed = Rc::new(RefCell::new(Vec::new()));
+		let passive_signal = passive.clone();
+		let passive_total = Rc::clone(&layout_total);
+		let passive_observed = Rc::clone(&observed);
+		let _passive_effect = Effect::new(move || {
+			let _ = passive_signal.get();
+			passive_observed
+				.borrow_mut()
+				.push(("passive", passive_total.get()));
+		});
+		let _layout_effects: Vec<_> = [
+			("first", first_layout.clone()),
+			("second", second_layout.clone()),
+		]
+		.into_iter()
+		.map(|(name, signal)| {
+			let total = Rc::clone(&layout_total);
+			let observed = Rc::clone(&observed);
+			Effect::new_with_timing(
+				move || {
+					let value = signal.get();
+					total.set(total.get() + value);
+					observed.borrow_mut().push((name, value));
+				},
+				EffectTiming::Layout,
+			)
+		})
+		.collect();
+		observed.borrow_mut().clear();
+
+		// Act: passive work is queued first, and layout writes reverse creation order.
+		batch(|| {
+			passive.set(1);
+			second_layout.set(2);
+			first_layout.set(1);
+			assert_eq!(observed.borrow().len(), 0);
+		});
+
+		// Assert: layout work keeps its write order and completes before passive work.
+		assert_eq!(
+			*observed.borrow(),
+			[("second", 2), ("first", 1), ("passive", 3)]
+		);
+	}
+
+	#[test]
+	#[serial(reactive_batch)]
 	fn nested_batches_defer_layout_effects_until_all_values_are_ready() {
 		use crate::reactive::{Effect, Signal};
 		use std::{cell::RefCell, rc::Rc};
@@ -882,6 +1026,7 @@ mod tests {
 		// Act and assert: nested batches expose only the final snapshot at outer exit.
 		batch(|| {
 			first.set(1);
+			with_runtime(Runtime::flush_updates);
 			batch(|| {
 				second.set(2);
 				first.set(3);

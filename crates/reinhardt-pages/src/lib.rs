@@ -105,7 +105,8 @@
 //! setters and field resets take precedence for their own field or collection path.
 //! Unchanged multiple selections retain source order. Leading textarea line feeds
 //! survive HTML parsing, including selective hydration. Native reset clears touched
-//! state and errors without emitting edit or validation events.
+//! state and errors without emitting edit or validation events, and preserves
+//! subscriptions to later custom widget errors and field edits.
 //!
 //! Stable native widget coverage includes the following `form!` DSL items:
 //!

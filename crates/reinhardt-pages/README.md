@@ -183,7 +183,8 @@ HTML parsing, and selective hydration preserves controlled select defaults acros
 option groups and island boundaries.
 A native form reset adopts the browser's defaults after the reset event, including
 its cancellation rules, and clears touched state and errors without emitting edit
-or validation events. Runtime reset uses the runtime's current defaults.
+or validation events. Custom widget errors and subsequent value edits remain observed
+after reset. Runtime reset uses the runtime's current defaults.
 
 | Field/control category | Rendered value |
 |---|---|

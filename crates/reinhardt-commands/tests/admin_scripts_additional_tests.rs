@@ -6,10 +6,13 @@
 #[path = "support/environment.rs"]
 mod environment;
 
-use environment::EnvVarGuard;
+use environment::{EnvVars, env_vars};
 use reinhardt_commands::{
 	BaseCommand, CommandContext, CommandError, CommandResult, StartProjectCommand,
 };
+use reinhardt_test::TeardownGuard;
+use reinhardt_test::fixtures::temp_dir;
+use rstest::{fixture, rstest};
 use serial_test::serial;
 use std::fs;
 use std::path::PathBuf;
@@ -20,13 +23,12 @@ struct TestEnvironment {
 	temp_dir: TempDir,
 }
 
-impl TestEnvironment {
-	fn new() -> Self {
-		Self {
-			temp_dir: TempDir::new().expect("Failed to create temp directory"),
-		}
-	}
+#[fixture]
+fn test_env(temp_dir: TempDir) -> TestEnvironment {
+	TestEnvironment { temp_dir }
+}
 
+impl TestEnvironment {
 	fn path(&self) -> PathBuf {
 		self.temp_dir.path().to_path_buf()
 	}
@@ -48,10 +50,9 @@ impl TestEnvironment {
 // ManageMultipleSettings Tests
 // ============================================================================
 
+#[rstest]
 #[tokio::test]
-async fn test_manage_multiple_builtin_command() {
-	let env = TestEnvironment::new();
-
+async fn test_manage_multiple_builtin_command(#[from(test_env)] env: TestEnvironment) {
 	env.create_file("settings1.rs", "pub const DEBUG: bool = true;\n");
 	env.create_file("settings2.rs", "pub const DEBUG: bool = false;\n");
 
@@ -59,10 +60,9 @@ async fn test_manage_multiple_builtin_command() {
 	assert!(env.file_exists("settings2.rs"));
 }
 
+#[rstest]
 #[tokio::test]
-async fn test_manage_multiple_builtin_with_settings() {
-	let env = TestEnvironment::new();
-
+async fn test_manage_multiple_builtin_with_settings(#[from(test_env)] env: TestEnvironment) {
 	env.create_file("settings1.rs", "// Settings 1\n");
 	env.create_file("settings2.rs", "// Settings 2\n");
 
@@ -70,37 +70,51 @@ async fn test_manage_multiple_builtin_with_settings() {
 	assert!(env.file_exists("settings2.rs"));
 }
 
+#[rstest]
 #[tokio::test]
 #[serial(reinhardt_settings)]
-async fn test_manage_multiple_builtin_with_environment() {
+async fn test_manage_multiple_builtin_with_environment(
+	#[from(env_vars)] mut env_guard: TeardownGuard<EnvVars>,
+	#[from(env_vars)] mut nested_guard: TeardownGuard<EnvVars>,
+) {
 	// Arrange
 	let original = std::env::var_os("REINHARDT_SETTINGS_MODULE");
+	env_guard.set("REINHARDT_SETTINGS_MODULE", "settings1");
+	assert_eq!(
+		std::env::var("REINHARDT_SETTINGS_MODULE").unwrap(),
+		"settings1"
+	);
+
+	#[cfg(unix)]
 	{
-		let mut env_guard = EnvVarGuard::new();
-		env_guard.set("REINHARDT_SETTINGS_MODULE", "settings1");
-
-		// Act
-		let result = std::panic::catch_unwind(|| {
-			let mut nested_guard = EnvVarGuard::new();
-			nested_guard.set("REINHARDT_SETTINGS_MODULE", "settings2");
-			nested_guard.set("REINHARDT_SETTINGS_MODULE", "settings3");
-			panic!("exercise environment restoration during unwinding");
-		});
-
-		// Assert
-		assert!(result.is_err());
-		assert_eq!(
-			std::env::var("REINHARDT_SETTINGS_MODULE").unwrap(),
-			"settings1"
+		use std::os::unix::ffi::OsStringExt;
+		env_guard.set(
+			"REINHARDT_SETTINGS_MODULE",
+			std::ffi::OsString::from_vec(vec![b's', 0xff]),
 		);
 	}
+	let before_unwind = std::env::var_os("REINHARDT_SETTINGS_MODULE");
+
+	// Act
+	let result = std::panic::catch_unwind(move || {
+		nested_guard.set("REINHARDT_SETTINGS_MODULE", "settings2");
+		nested_guard.set("REINHARDT_SETTINGS_MODULE", "settings3");
+		panic!("exercise environment restoration during unwinding");
+	});
+
+	// Assert
+	assert!(result.is_err());
+	assert_eq!(std::env::var_os("REINHARDT_SETTINGS_MODULE"), before_unwind);
+	drop(env_guard);
 	assert_eq!(std::env::var_os("REINHARDT_SETTINGS_MODULE"), original);
 }
 
+#[rstest]
 #[tokio::test]
 #[serial(reinhardt_settings)]
-async fn test_manage_multiple_builtin_with_bad_settings() {
-	let mut env_guard = EnvVarGuard::new();
+async fn test_manage_multiple_builtin_with_bad_settings(
+	#[from(env_vars)] mut env_guard: TeardownGuard<EnvVars>,
+) {
 	env_guard.set("REINHARDT_SETTINGS_MODULE", "bad_settings");
 	assert_eq!(
 		std::env::var("REINHARDT_SETTINGS_MODULE").unwrap(),
@@ -108,30 +122,33 @@ async fn test_manage_multiple_builtin_with_bad_settings() {
 	);
 }
 
+#[rstest]
 #[tokio::test]
 #[serial(reinhardt_settings)]
-async fn test_manage_multiple_builtin_with_bad_environment() {
-	let mut env_guard = EnvVarGuard::new();
+async fn test_manage_multiple_builtin_with_bad_environment(
+	#[from(env_vars)] mut env_guard: TeardownGuard<EnvVars>,
+) {
 	env_guard.set("REINHARDT_SETTINGS_MODULE", "");
 	assert_eq!(std::env::var("REINHARDT_SETTINGS_MODULE").unwrap(), "");
 }
 
+#[rstest]
 #[tokio::test]
-async fn test_manage_multiple_custom_command() {
-	let env = TestEnvironment::new();
+async fn test_manage_multiple_custom_command(#[from(test_env)] env: TestEnvironment) {
 	assert!(env.path().exists());
 }
 
+#[rstest]
 #[tokio::test]
 #[serial(reinhardt_settings)]
-async fn test_manage_multiple_custom_command_with_settings() {
-	let env = TestEnvironment::new();
-
+async fn test_manage_multiple_custom_command_with_settings(
+	#[from(test_env)] env: TestEnvironment,
+	#[from(env_vars)] mut env_guard: TeardownGuard<EnvVars>,
+) {
 	env.create_file("settings1.rs", "pub const DB: &str = \"db1\";\n");
 	env.create_file("settings2.rs", "pub const DB: &str = \"db2\";\n");
 
 	// Test with explicit settings parameter
-	let mut env_guard = EnvVarGuard::new();
 	env_guard.set("REINHARDT_SETTINGS_MODULE", "settings1");
 
 	assert!(env.file_exists("settings1.rs"));
@@ -142,10 +159,12 @@ async fn test_manage_multiple_custom_command_with_settings() {
 	);
 }
 
+#[rstest]
 #[tokio::test]
 #[serial(reinhardt_settings)]
-async fn test_manage_multiple_custom_command_with_environment() {
-	let mut env_guard = EnvVarGuard::new();
+async fn test_manage_multiple_custom_command_with_environment(
+	#[from(env_vars)] mut env_guard: TeardownGuard<EnvVars>,
+) {
 	env_guard.set("REINHARDT_SETTINGS_MODULE", "custom.settings");
 	env_guard.set("CUSTOM_ENV_VAR", "test_value");
 
@@ -161,19 +180,17 @@ async fn test_manage_multiple_custom_command_with_environment() {
 // ManageCheck Tests
 // ============================================================================
 
+#[rstest]
 #[tokio::test]
-async fn test_manage_check_broken_app() {
-	let env = TestEnvironment::new();
-
+async fn test_manage_check_broken_app(#[from(test_env)] env: TestEnvironment) {
 	// Create broken app structure
 	env.create_file("apps/broken/mod.rs", "// Broken syntax");
 	assert!(env.file_exists("apps/broken/mod.rs"));
 }
 
+#[rstest]
 #[tokio::test]
-async fn test_manage_check_complex_app() {
-	let env = TestEnvironment::new();
-
+async fn test_manage_check_complex_app(#[from(test_env)] env: TestEnvironment) {
 	env.create_file(
 		"Cargo.toml",
 		"[package]\nname = \"test\"\nversion = \"0.1.0\"",
@@ -189,10 +206,9 @@ async fn test_manage_check_complex_app() {
 	// Complex app structure for testing check command
 }
 
+#[rstest]
 #[tokio::test]
-async fn test_manage_check_app_with_import() {
-	let env = TestEnvironment::new();
-
+async fn test_manage_check_app_with_import(#[from(test_env)] env: TestEnvironment) {
 	env.create_file(
 		"Cargo.toml",
 		"[package]\nname = \"test\"\nversion = \"0.1.0\"",
@@ -205,10 +221,9 @@ async fn test_manage_check_app_with_import() {
 	// App with import issues for testing check command
 }
 
+#[rstest]
 #[tokio::test]
-async fn test_manage_check_warning_does_not_halt() {
-	let env = TestEnvironment::new();
-
+async fn test_manage_check_warning_does_not_halt(#[from(test_env)] env: TestEnvironment) {
 	env.create_file(
 		"Cargo.toml",
 		"[package]\nname = \"test\"\nversion = \"0.1.0\"",
@@ -239,10 +254,9 @@ async fn test_manage_runserver_zero_ip_addr() {
 	assert_eq!(ctx.arg(0), Some(&"0.0.0.0:8000".to_string()));
 }
 
+#[rstest]
 #[tokio::test]
-async fn test_manage_runserver_on_bind() {
-	let env = TestEnvironment::new();
-
+async fn test_manage_runserver_on_bind(#[from(test_env)] env: TestEnvironment) {
 	env.create_file(
 		"Cargo.toml",
 		"[package]\nname = \"test\"\nversion = \"0.1.0\"",
@@ -303,10 +317,9 @@ async fn test_manage_runserver_runner_ambiguous() {
 	assert_eq!(ctx.arg(0), Some(&"8000".to_string()));
 }
 
+#[rstest]
 #[tokio::test]
-async fn test_manage_runserver_no_database() {
-	let env = TestEnvironment::new();
-
+async fn test_manage_runserver_no_database(#[from(test_env)] env: TestEnvironment) {
 	env.create_file(
 		"Cargo.toml",
 		"[package]\nname = \"test\"\nversion = \"0.1.0\"",
@@ -316,10 +329,9 @@ async fn test_manage_runserver_no_database() {
 	assert!(env.file_exists("Cargo.toml"));
 }
 
+#[rstest]
 #[tokio::test]
-async fn test_manage_runserver_readonly_database() {
-	let env = TestEnvironment::new();
-
+async fn test_manage_runserver_readonly_database(#[from(test_env)] env: TestEnvironment) {
 	env.create_file(
 		"Cargo.toml",
 		"[package]\nname = \"test\"\nversion = \"0.1.0\"",
@@ -347,10 +359,9 @@ async fn test_manage_runserver_custom_system_checks() {
 	assert_eq!(ctx.option("check"), Some(&"custom.checks".to_string()));
 }
 
+#[rstest]
 #[tokio::test]
-async fn test_manage_runserver_migration_warning_one_app() {
-	let env = TestEnvironment::new();
-
+async fn test_manage_runserver_migration_warning_one_app(#[from(test_env)] env: TestEnvironment) {
 	env.create_file(
 		"Cargo.toml",
 		"[package]\nname = \"test\"\nversion = \"0.1.0\"",
@@ -361,10 +372,11 @@ async fn test_manage_runserver_migration_warning_one_app() {
 	assert!(env.file_exists("apps/myapp/migrations/001_initial.sql"));
 }
 
+#[rstest]
 #[tokio::test]
-async fn test_manage_runserver_migration_warning_multiple_apps() {
-	let env = TestEnvironment::new();
-
+async fn test_manage_runserver_migration_warning_multiple_apps(
+	#[from(test_env)] env: TestEnvironment,
+) {
 	env.create_file(
 		"Cargo.toml",
 		"[package]\nname = \"test\"\nversion = \"0.1.0\"",
@@ -377,10 +389,12 @@ async fn test_manage_runserver_migration_warning_multiple_apps() {
 	assert!(env.file_exists("apps/app2/migrations/001.sql"));
 }
 
+#[rstest]
 #[tokio::test]
 #[serial(reinhardt_settings)]
-async fn test_manage_runserver_empty_allowed_hosts_error() {
-	let mut env_guard = EnvVarGuard::new();
+async fn test_manage_runserver_empty_allowed_hosts_error(
+	#[from(env_vars)] mut env_guard: TeardownGuard<EnvVars>,
+) {
 	env_guard.set("ALLOWED_HOSTS", "");
 
 	// Empty ALLOWED_HOSTS in production should error
@@ -609,27 +623,24 @@ async fn test_commandtypes_base_command_no_label() {
 // CommandTypes Tests - App Commands
 // ============================================================================
 
+#[rstest]
 #[tokio::test]
-async fn test_commandtypes_app_command() {
-	let env = TestEnvironment::new();
-
+async fn test_commandtypes_app_command(#[from(test_env)] env: TestEnvironment) {
 	// Create app structure
 	env.create_file("apps/testapp/mod.rs", "// Test app\n");
 	assert!(env.file_exists("apps/testapp/mod.rs"));
 }
 
+#[rstest]
 #[tokio::test]
-async fn test_commandtypes_app_command_no_apps() {
-	let env = TestEnvironment::new();
-
+async fn test_commandtypes_app_command_no_apps(#[from(test_env)] env: TestEnvironment) {
 	// Test app command with no apps
 	assert!(env.path().exists());
 }
 
+#[rstest]
 #[tokio::test]
-async fn test_commandtypes_app_command_multiple_apps() {
-	let env = TestEnvironment::new();
-
+async fn test_commandtypes_app_command_multiple_apps(#[from(test_env)] env: TestEnvironment) {
 	env.create_file("apps/app1/mod.rs", "// App 1\n");
 	env.create_file("apps/app2/mod.rs", "// App 2\n");
 
@@ -641,10 +652,9 @@ async fn test_commandtypes_app_command_multiple_apps() {
 // Discovery Tests
 // ============================================================================
 
+#[rstest]
 #[tokio::test]
-async fn test_discovery_precedence() {
-	let env = TestEnvironment::new();
-
+async fn test_discovery_precedence(#[from(test_env)] env: TestEnvironment) {
 	// Test command discovery precedence
 	env.create_file("commands/custom.rs", "// Custom command\n");
 	assert!(env.file_exists("commands/custom.rs"));
@@ -685,19 +695,17 @@ async fn test_argumentorder_setting_then_option() {
 // DiffSettings Tests
 // ============================================================================
 
+#[rstest]
 #[tokio::test]
-async fn test_diffsettings_basic() {
-	let env = TestEnvironment::new();
-
+async fn test_diffsettings_basic(#[from(test_env)] env: TestEnvironment) {
 	env.create_file("settings.rs", "pub const DEBUG: bool = true;\n");
 	// Test basic diff settings
 	assert!(env.file_exists("settings.rs"));
 }
 
+#[rstest]
 #[tokio::test]
-async fn test_diffsettings_settings_configured() {
-	let env = TestEnvironment::new();
-
+async fn test_diffsettings_settings_configured(#[from(test_env)] env: TestEnvironment) {
 	env.create_file(
 		"settings.rs",
 		"pub const DEBUG: bool = true;\npub const SECRET_KEY: &str = \"test\";\n",
@@ -710,18 +718,20 @@ async fn test_diffsettings_settings_configured() {
 // Additional StartProject Tests
 // ============================================================================
 
+#[rstest]
 #[tokio::test]
-async fn test_startproject_custom_project_template_non_python_files_not_formatted() {
-	let env = TestEnvironment::new();
-
+async fn test_startproject_custom_project_template_non_python_files_not_formatted(
+	#[from(test_env)] env: TestEnvironment,
+) {
 	// Test that non-Rust files are not template-formatted
 	assert!(env.path().exists());
 }
 
+#[rstest]
 #[tokio::test]
-async fn test_startproject_template_dir_with_trailing_slash() {
-	let env = TestEnvironment::new();
-
+async fn test_startproject_template_dir_with_trailing_slash(
+	#[from(test_env)] env: TestEnvironment,
+) {
 	let mut ctx = CommandContext::new(vec![
 		"testproject".to_owned(),
 		env.path()
@@ -753,42 +763,45 @@ async fn test_startproject_template_dir_with_trailing_slash() {
 // Removed empty test: test_startproject_project_template_tarball_url
 // This test was empty and will be implemented when needed
 
+#[rstest]
 #[tokio::test]
-async fn test_startproject_custom_project_template_with_non_ascii_templates() {
-	let env = TestEnvironment::new();
-
+async fn test_startproject_custom_project_template_with_non_ascii_templates(
+	#[from(test_env)] env: TestEnvironment,
+) {
 	// Test with non-ASCII template content
 	assert!(env.path().exists());
 }
 
+#[rstest]
 #[tokio::test]
-async fn test_startproject_custom_project_template_hidden_directory_default_excluded() {
-	let env = TestEnvironment::new();
-
+async fn test_startproject_custom_project_template_hidden_directory_default_excluded(
+	#[from(test_env)] env: TestEnvironment,
+) {
 	// Test that hidden directories are excluded by default
 	assert!(env.path().exists());
 }
 
+#[rstest]
 #[tokio::test]
-async fn test_startproject_custom_project_template_hidden_directory_included() {
-	let env = TestEnvironment::new();
-
+async fn test_startproject_custom_project_template_hidden_directory_included(
+	#[from(test_env)] env: TestEnvironment,
+) {
 	// Test including hidden directories
 	assert!(env.path().exists());
 }
 
+#[rstest]
 #[tokio::test]
-async fn test_startproject_custom_project_template_exclude_directory() {
-	let env = TestEnvironment::new();
-
+async fn test_startproject_custom_project_template_exclude_directory(
+	#[from(test_env)] env: TestEnvironment,
+) {
 	// Test excluding specific directories
 	assert!(env.path().exists());
 }
 
+#[rstest]
 #[tokio::test]
-async fn test_startproject_failure_to_format_code() {
-	let env = TestEnvironment::new();
-
+async fn test_startproject_failure_to_format_code(#[from(test_env)] env: TestEnvironment) {
 	// Test handling of code formatting failures
 	assert!(env.path().exists());
 }

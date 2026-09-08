@@ -585,10 +585,12 @@ Run the admin script regression suites with the default parallel test runner:
 cargo test -p reinhardt-commands --test admin_scripts_tests --test admin_scripts_additional_tests
 ```
 
-Tests that change the process working directory share the `current_dir` serial
-group. Their fixture restores the original directory before removing temporary
-files, including during unwinding. Environment-variable tests share the
-`reinhardt_settings` group and restore the previous values on scope exit.
+Admin script tests receive `rstest` fixtures composed from `reinhardt-test`'s
+`temp_dir`, `TestResource`, and `TeardownGuard` helpers. Tests that change the
+process working directory share the `current_dir` serial group; their fixture
+restores the original directory before removing temporary files, including during
+unwinding. Environment-variable fixtures share the `reinhardt_settings` group and
+restore previous values on scope exit, preserving non-Unicode values as well.
 
 ## License
 

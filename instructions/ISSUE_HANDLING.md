@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This file defines strategic principles for handling multiple issues efficiently. While instructions/ISSUE_GUIDELINES.md covers individual issue creation and management, this document provides workflow-level guidance for planning, batching, and parallelizing issue resolution across the Reinhardt project's multi-crate workspace.
+This file defines strategic principles for handling multiple issues efficiently. While instructions/ISSUE_GUIDELINES.md covers individual issue creation and management, this document provides workflow-level guidance for planning, batching, and sequencing issue resolution across the Reinhardt project's multi-crate workspace.
 
 ---
 
@@ -166,7 +166,7 @@ When batch fixes require shared utilities or cross-crate changes, these MUST be 
 Step 1: PR "feat(core): add shared input sanitization utilities"
   → Merged first
 
-Step 2 (parallel, after Step 1 merge):
+Step 2 (sequential by default, after Step 1 merge; see HA-3):
   PR "fix(orm): apply input sanitization to query builder"
   PR "fix(http): apply input sanitization to request handlers"
   PR "fix(api): apply input sanitization to API endpoints"
@@ -178,15 +178,13 @@ Step 2 (parallel, after Step 1 merge):
 - Per-crate PRs MUST reference the preceding PR in their description
 - Never duplicate shared logic across crate-specific PRs
 
-The following diagram illustrates the WU-3 dependency structure between preceding and per-crate PRs:
+The following diagram illustrates the WU-3 dependency structure between preceding and per-crate PRs. Edges show merge prerequisites; execute per-crate work in the current agent unless the user explicitly requests delegation (HA-3).
 
 ```mermaid
 flowchart TD
     P["Preceding PR:<br/>shared utilities / cross-crate changes"] --> |merge first| A["PR: crate-A fix"]
     P --> |merge first| B["PR: crate-B fix"]
     P --> |merge first| C["PR: crate-C fix"]
-    A -.-> |parallel| B
-    B -.-> |parallel| C
 ```
 
 ---

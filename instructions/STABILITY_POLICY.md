@@ -624,6 +624,7 @@ Bugs detected by LLM agents follow a **two-step verification process** before af
 
 **Step 2: Independent Verification**
 - An independent agent (with separate context) OR a human reviewer verifies the issue
+- Delegate verification only on an explicit user request for the current task; otherwise, keep `agent-suspect` until independent verification is available
 - Verification must be performed by an entity that did NOT participate in the initial detection
 - If confirmed as a real bug:
   - Remove the `agent-suspect` label

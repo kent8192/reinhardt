@@ -448,15 +448,40 @@ impl super::runtime::Runtime {
 	/// Flush all pending updates
 	///
 	/// This executes all Effects that have been scheduled for update.
+	/// Layout effects run before passive effects, preserving queue order within each timing.
+	/// Writes raised by callbacks remain batched and share the pending queue until it is empty.
 	/// Skips effects that were disposed between scheduling and execution.
 	pub fn flush_updates(&self) {
-		*self.update_scheduled.borrow_mut() = false;
+		if *self.batch_depth.borrow() > 0 {
+			return;
+		}
 
-		// Take all pending updates
-		let pending = core::mem::take(&mut *self.pending_updates.borrow_mut());
+		struct FlushGuard<'a>(&'a super::runtime::Runtime);
 
-		// Execute each pending effect (skip disposed ones)
-		for node_id in pending {
+		impl Drop for FlushGuard<'_> {
+			fn drop(&mut self) {
+				*self.0.batch_depth.borrow_mut() -= 1;
+				*self.0.update_scheduled.borrow_mut() = false;
+			}
+		}
+
+		*self.batch_depth.borrow_mut() += 1;
+		let _guard = FlushGuard(self);
+
+		loop {
+			let node_id = {
+				let mut pending = self.pending_updates.borrow_mut();
+				if pending.is_empty() {
+					break;
+				}
+				// Keep not-yet-run IDs queued so callback writes deduplicate against them.
+				// New layout work also takes priority over remaining passive consumers.
+				let index = pending
+					.iter()
+					.position(|&id| get_effect_timing(id) == Some(EffectTiming::Layout))
+					.unwrap_or(0);
+				pending.remove(index)
+			};
 			let still_registered =
 				EFFECT_TIMING.with(|storage| storage.borrow().contains_key(&node_id));
 			if still_registered {

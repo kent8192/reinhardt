@@ -177,6 +177,7 @@ pub fn hydrate<C: Component>(component: &C, root: &Element) -> Result<(), Hydrat
 	// 4. Attach event handlers
 	let mut registry = EventRegistry::new();
 	attach_events_recursive(root, &view, &mut registry)?;
+	crate::component::reactive_if::store_reactive_node(registry);
 	web_sys::console::log_1(&"[Hydration] Events attached".into());
 
 	// 5. Mark hydration complete
@@ -242,97 +243,141 @@ pub fn attach_events_to_mounted_view(
 
 	let mut registry = EventRegistry::new();
 	attach_events_recursive(element, view, &mut registry)?;
+	crate::component::reactive_if::store_reactive_node(registry);
 
 	web_sys::console::log_1(&"[CSR] Events attached successfully!".into());
 
 	Ok(())
 }
 
-/// Recursively attaches event handlers to DOM elements.
-///
-/// This function can be used for both SSR+Hydration and CSR (client-side rendering only) scenarios.
-/// For CSR, call this after mounting a view to attach event handlers.
+/// Attaches events and retained bindings to the existing DOM without replacing controls.
 #[cfg(wasm)]
 pub(crate) fn attach_events_recursive(
 	element: &Element,
 	view: &crate::component::Page,
 	registry: &mut super::events::EventRegistry,
 ) -> Result<(), HydrationError> {
-	use super::events::attach_event;
+	let mut controls = Vec::new();
+	collect_events_recursive(element, view, registry, &mut controls)?;
+	let controllers = crate::dom::control_binding::hydrate_controls(controls);
+	crate::component::reactive_if::store_reactive_node(controllers);
+	Ok(())
+}
+
+#[cfg(wasm)]
+fn collect_events_recursive(
+	element: &Element,
+	view: &crate::component::Page,
+	registry: &mut super::events::EventRegistry,
+	controls: &mut Vec<(Element, crate::component::ControlBinding)>,
+) -> Result<(), HydrationError> {
 	use crate::component::Page;
 
 	match view {
 		Page::Element(el_view) => {
-			let tag = el_view.tag_name();
-			let event_count = el_view.event_handlers().len();
-
-			if event_count > 0 {
-				web_sys::console::log_1(
-					&format!("[attach_events] {} has {} event handlers", tag, event_count).into(),
-				);
-			}
-
-			// Attach events from the view's event handlers
 			for (event_type, handler) in el_view.event_handlers() {
-				web_sys::console::log_1(
-					&format!("[attach_events] Attaching {:?} to {}", event_type, tag).into(),
-				);
-
-				attach_event(element, event_type, handler.clone(), registry)
-					.map_err(|e| HydrationError::EventAttachmentFailed(e.to_string()))?;
+				super::events::attach_event(element, event_type, handler.clone(), registry)
+					.map_err(|error| HydrationError::EventAttachmentFailed(error.to_string()))?;
 			}
-
-			// Recursively process children
-			let children = element.children();
-			let view_children = el_view.child_views();
-
-			for (i, child_view) in view_children.iter().enumerate() {
-				if i < children.len() {
-					attach_events_recursive(&children[i], child_view, registry)?;
-				}
+			if let Some(binding) = el_view.bound_control() {
+				controls.push((element.clone(), binding.clone()));
 			}
+			collect_child_events(element, el_view.child_views(), registry, controls)?;
 		}
-		Page::Fragment(views) => {
-			let children = element.children();
-			for (i, child_view) in views.iter().enumerate() {
-				if i < children.len() {
-					attach_events_recursive(&children[i], child_view, registry)?;
-				}
-			}
+		Page::Fragment(children) => {
+			collect_child_events(element, children, registry, controls)?;
 		}
-		Page::KeyedFragment(views) => {
-			let children = element.children();
-			for (i, (_, child_view)) in views.iter().enumerate() {
-				if i < children.len() {
-					attach_events_recursive(&children[i], child_view, registry)?;
-				}
-			}
-		}
-		Page::Text(_) | Page::Empty => {
-			// No events to attach
+		Page::KeyedFragment(children) => {
+			let children = children
+				.iter()
+				.map(|(_, child)| child.clone())
+				.collect::<Vec<_>>();
+			collect_child_events(element, &children, registry, controls)?;
 		}
 		Page::WithHead { view, .. } => {
-			// Head section doesn't have event handlers
-			// Attach events to the inner view
-			attach_events_recursive(element, view, registry)?;
+			collect_events_recursive(element, view, registry, controls)?;
 		}
-		Page::ReactiveIf(reactive_if) => {
-			// For hydration, evaluate the condition and attach events to the rendered branch
-			let branch_view = if reactive_if.condition() {
-				reactive_if.then_view()
+		Page::ReactiveIf(reactive) => {
+			let branch = if reactive.condition() {
+				reactive.then_view()
 			} else {
-				reactive_if.else_view()
+				reactive.else_view()
 			};
-			attach_events_recursive(element, &branch_view, registry)?;
+			collect_events_recursive(element, &branch, registry, controls)?;
 		}
 		Page::Reactive(reactive) => {
-			// For hydration, evaluate the render closure and attach events to the resulting view
-			let rendered_view = reactive.render();
-			attach_events_recursive(element, &rendered_view, registry)?;
+			let view = reactive.render();
+			collect_events_recursive(element, &view, registry, controls)?;
 		}
+		Page::Text(_) | Page::Empty => {}
 	}
-
 	Ok(())
+}
+
+#[cfg(wasm)]
+fn collect_child_events(
+	element: &Element,
+	children: &[crate::component::Page],
+	registry: &mut super::events::EventRegistry,
+	controls: &mut Vec<(Element, crate::component::ControlBinding)>,
+) -> Result<(), HydrationError> {
+	let mut views = Vec::new();
+	for child in children {
+		collect_element_views(child, &mut views);
+	}
+	let elements = element.children();
+	for (index, view) in views.into_iter().enumerate() {
+		let child = elements
+			.get(index)
+			.ok_or_else(|| HydrationError::StructureMismatch {
+				id: element.get_attribute(HYDRATION_ATTR_ID).unwrap_or_default(),
+				expected: view.tag_name().to_owned(),
+				actual: "missing child".to_owned(),
+			})?;
+		collect_events_recursive(
+			child,
+			&crate::component::Page::Element(view),
+			registry,
+			controls,
+		)?;
+	}
+	Ok(())
+}
+
+#[cfg(wasm)]
+fn collect_element_views(
+	view: &crate::component::Page,
+	elements: &mut Vec<crate::component::PageElement>,
+) {
+	use crate::component::Page;
+
+	match view {
+		Page::Element(element) => elements.push(element.clone()),
+		Page::Fragment(children) => {
+			for child in children {
+				collect_element_views(child, elements);
+			}
+		}
+		Page::KeyedFragment(children) => {
+			for (_, child) in children {
+				collect_element_views(child, elements);
+			}
+		}
+		Page::WithHead { view, .. } => collect_element_views(view, elements),
+		Page::ReactiveIf(reactive) => {
+			let branch = if reactive.condition() {
+				reactive.then_view()
+			} else {
+				reactive.else_view()
+			};
+			collect_element_views(&branch, elements);
+		}
+		Page::Reactive(reactive) => {
+			let view = reactive.render();
+			collect_element_views(&view, elements);
+		}
+		Page::Text(_) | Page::Empty => {}
+	}
 }
 
 /// Finds all elements with hydration markers in the given root.

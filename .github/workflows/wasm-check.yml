@@ -247,10 +247,11 @@ jobs:
           CHROMEDRIVER="$(which chromedriver)" \
           WASM_BINDGEN_TEST_ONLY_WEB=1 \
             cargo test --target wasm32-unknown-unknown \
-              --features testing \
+              --features testing,chrono,uuid \
               --test csrf_wasm_test --test server_fn_wasm_test \
               --test client_launcher_navigation_test \
-              --test form_field_attributes
+              --test form_field_attributes --test form_radio_group \
+              --test form_value_sync --test form_control_hydration_regressions
 
       - name: Run WASM observer-system tests (reinhardt-urls)
         working-directory: crates/reinhardt-urls

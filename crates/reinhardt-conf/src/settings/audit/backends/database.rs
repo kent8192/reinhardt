@@ -335,23 +335,25 @@ mod tests {
 
 	async fn create_test_backend() -> DatabaseAuditBackend {
 		init_drivers();
-		// Use named in-memory SQLite database with shared cache
-		// The "file:" prefix with "mode=memory" and "cache=shared" ensures
-		// all connections in the pool share the same in-memory database
-		let db_url = "sqlite:file:memdb1?mode=memory&cache=shared";
+		// Share one in-memory database within the pool, while isolating each
+		// backend's audit records from concurrently active test backends.
+		let db_url = format!(
+			"sqlite:file:audit-{}?mode=memory&cache=shared",
+			uuid::Uuid::new_v4()
+		);
 
 		// Create backend with AnyPool
 		use sqlx::any::AnyPoolOptions;
 
 		let pool = AnyPoolOptions::new()
 			.max_connections(5)
-			.connect(db_url)
+			.connect(&db_url)
 			.await
 			.expect("Failed to connect to test database");
 
 		let backend = DatabaseAuditBackend {
 			pool: std::sync::Arc::new(pool),
-			database_url: db_url.to_string(),
+			database_url: db_url,
 		};
 		backend
 			.init_tables()
@@ -385,7 +387,9 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_database_backend_log_event() {
+		// Arrange
 		let backend = create_test_backend().await;
+		let independent_backend = create_test_backend().await;
 
 		let mut changes = HashMap::new();
 		changes.insert(
@@ -402,11 +406,14 @@ mod tests {
 			changes,
 		);
 
+		// Act
 		backend.log_event(event).await.unwrap();
 
+		// Assert
 		let events = backend.get_events(None).await.unwrap();
 		assert_eq!(events.len(), 1);
 		assert_eq!(events[0].event_type, EventType::ConfigUpdate);
+		assert_eq!(independent_backend.get_events(None).await.unwrap().len(), 0);
 	}
 
 	#[tokio::test]

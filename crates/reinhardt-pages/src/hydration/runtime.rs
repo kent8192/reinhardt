@@ -311,9 +311,7 @@ pub fn hydrate<C: Component>(component: &C, root: &Element) -> Result<(), Hydrat
 			})
 		});
 		let batch_result = document_head_manager.end_batch(false);
-		installation_result.map_err(|error| {
-			HydrationError::StateParseError(format!("Document-head installation failed: {error}"))
-		})?;
+		installation_result?;
 		batch_result.map_err(|error| {
 			HydrationError::StateParseError(format!("Document-head reconciliation failed: {error}"))
 		})?;

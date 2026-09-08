@@ -3034,8 +3034,10 @@ fn failed_root_hydration_rolls_back_earlier_reactive_siblings() {
 			.count();
 
 		assert_eq!(
-			error.to_string(),
-			"Event attachment failed: checkbox control does not support a <select> element"
+			error,
+			reinhardt_pages::hydration::HydrationError::EventAttachmentFailed(
+				"checkbox control does not support a <select> element".to_owned()
+			)
 		);
 		assert_eq!(
 			(render_count.get(), listener_count.get(), marker_count),

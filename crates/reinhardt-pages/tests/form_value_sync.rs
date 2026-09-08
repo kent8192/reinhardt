@@ -1091,6 +1091,86 @@ mod browser {
 	#[rstest::rstest]
 	#[test_attr(wasm_bindgen_test)]
 	#[serial(form_value_sync_dom)]
+	fn pre_hydration_reconciled_collection_defaults_preserve_other_dirty_controls() {
+		use reinhardt_pages::RevalidateOn;
+		use std::{cell::Cell, rc::Rc};
+
+		for dirty_note in [false, true] {
+			// Arrange: old SSR values remain in the browser when defaults refresh.
+			let form = form! {
+				name: ReconciledCollectionHydration,
+				fields: {
+					note: CharField {
+						initial: "SSR note"
+					}
+					rows: FieldArray {
+						fields: {
+							title: CharField {}
+							active: BooleanField {}
+						}
+					}
+				}
+			};
+			let runtime = use_form(&form)
+				.deps(0_u8)
+				.revalidate_on(RevalidateOn::Change)
+				.build();
+			let mut row = form.new_rows_item();
+			row.title = String::from("SSR row");
+			let key = runtime.push_item(form.rows_collection(), row);
+			runtime.reset_default_values();
+			let watched = runtime.watch_path::<String>(form.rows_title_path(key));
+			let page = form.clone().into_page();
+			let mounted = MountedForm::empty();
+			mounted.0.set_inner_html(&page.render_to_string());
+			let nodes = remember_nodes(&mounted);
+			if dirty_note {
+				form.note().set(String::from("Known edit"));
+				edit_control(&mounted, "note", "text", "Latest browser edit");
+			}
+			let mut defaults = runtime.default_values();
+			defaults.note = String::from("Refreshed note");
+			defaults.rows[0].title = String::from("Refreshed row");
+			defaults.rows[0].active = true;
+
+			// Act: KeepDirtyValues updates only pristine sources before attachment.
+			runtime.reconcile_defaults(defaults, 1_u8);
+			assert_eq!(watched.get(), "Refreshed row");
+			let events = Rc::new(Cell::new(0));
+			let observed_events = Rc::clone(&events);
+			let _subscription =
+				runtime.subscribe(move |_| observed_events.set(observed_events.get() + 1));
+			let root = reinhardt_pages::dom::Element::new(mounted.0.first_element_child().unwrap());
+			reinhardt_pages::hydration::attach_events_to_mounted_view(&root, &page).unwrap();
+			flush();
+
+			// Assert: refreshed paths win, and unrelated browser edits stay adoptable.
+			assert_eq!(runtime.get_values().rows[0].title, "Refreshed row");
+			assert_eq!(watched.get(), "Refreshed row");
+			assert_eq!(dom_value(&mounted, "rows_0_title", "text"), "Refreshed row");
+			assert_eq!(dom_value(&mounted, "rows_0_active", "checkbox"), "true");
+			assert_eq!(form.rows().get()[0].key(), key);
+			assert!(
+				!runtime
+					.get_collection_state(form.rows_collection())
+					.is_dirty
+			);
+			let expected_note = if dirty_note {
+				"Latest browser edit"
+			} else {
+				"Refreshed note"
+			};
+			assert_eq!(form.note().get(), expected_note);
+			assert_eq!(dom_value(&mounted, "note", "text"), expected_note);
+			assert_eq!(runtime.form_state().is_dirty.get(), dirty_note);
+			assert_eq!(events.get(), if dirty_note { 2 } else { 0 });
+			assert_same_nodes(&mounted, &nodes);
+		}
+	}
+
+	#[rstest::rstest]
+	#[test_attr(wasm_bindgen_test)]
+	#[serial(form_value_sync_dom)]
 	fn pre_hydration_field_reset_preserves_other_browser_edits() {
 		// Arrange.
 		let form = value_sync_form!();

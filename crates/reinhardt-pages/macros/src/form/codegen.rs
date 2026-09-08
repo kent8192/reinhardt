@@ -703,7 +703,8 @@ fn generate_form_runtime_contract(
 			.map(|field| {
 				let name = &field.name;
 				quote! {
-					if current.#name == old_defaults.#name {
+					if current.#name == old_defaults.#name && current.#name != new_defaults.#name {
+						self.__source_preferred_fields.borrow_mut().insert(::std::string::String::from(stringify!(#name)));
 						self.#name.set(new_defaults.#name.clone());
 					}
 				}
@@ -719,7 +720,7 @@ fn generate_form_runtime_contract(
 					pages_crate,
 				);
 				quote! {
-						if current.#name == old_defaults.#name {
+						if current.#name == old_defaults.#name && current.#name != new_defaults.#name {
 							#replacement
 						}
 				}
@@ -1722,13 +1723,18 @@ fn generate_form_runtime_contract(
 	}
 }
 
-/// Retains row identity for value-only resets and replacements.
+/// Retains row identity and hydration preference for explicit value replacements.
 fn generate_collection_value_replacement(
 	collection: &TypedFormFieldCollection,
 	values: TokenStream,
 	pages_crate: &TokenStream,
 ) -> TokenStream {
 	let name = &collection.name;
+	let collection_name = name.to_string();
+	let field_names: Vec<_> = collect_scalar_fields(&collection.fields)
+		.iter()
+		.map(|field| field.name.to_string())
+		.collect();
 	let path_prefix = format!("{name}:");
 	quote! {
 		{
@@ -1745,6 +1751,12 @@ fn generate_collection_value_replacement(
 				} else {
 					#pages_crate::CollectionItemKey::from_runtime_index(index as u64)
 				};
+				{
+					let mut preferred = self.__source_preferred_fields.borrow_mut();
+					#(
+						preferred.insert(::std::format!("{}:{:?}:{}", #collection_name, key, #field_names));
+					)*
+				}
 				#pages_crate::CollectionItem::new(key, index, value)
 			}).collect());
 		}

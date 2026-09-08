@@ -185,6 +185,8 @@ HTML parsing, and selective hydration preserves controlled select defaults acros
 option groups and island boundaries.
 Textarea newline normalization by the HTML parser alone does not count as a
 browser edit or mark the form dirty during hydration.
+Reconciled pristine defaults retain preference for their updated fields and collection paths
+during hydration, while unrelated dirty controls remain eligible for browser edits.
 A native form reset adopts the browser's defaults after the reset event, including
 its cancellation rules, and clears touched state and errors without emitting edit
 or validation events. Custom widget errors and subsequent value edits remain observed

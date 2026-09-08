@@ -237,7 +237,7 @@ impl ReconcileOptions {
 /// so callers can decide whether to fail or warn.
 #[cfg(wasm)]
 pub fn reconcile(element: &Element, view: &Page) -> Result<(), ReconcileError> {
-	reconcile_at_path(element, view, ReconcilePath::root())
+	reconcile_at_path(element, view, ReconcilePath::root(), false)
 }
 
 #[cfg(wasm)]
@@ -245,24 +245,29 @@ fn reconcile_at_path(
 	element: &Element,
 	view: &Page,
 	path: ReconcilePath,
+	controlled_select: bool,
 ) -> Result<(), ReconcileError> {
 	match view {
-		Page::Element(el_view) => reconcile_element_at_path(element, el_view, path, false),
+		Page::Element(el_view) => {
+			reconcile_element_at_path(element, el_view, path, controlled_select)
+		}
 		Page::Text(expected_text) => reconcile_text_at_path(
 			element.text_content().unwrap_or_default(),
 			expected_text,
 			path,
 		),
-		Page::Fragment(views) => reconcile_children_at_path(element, views, path, false),
+		Page::Fragment(views) => {
+			reconcile_children_at_path(element, views, path, controlled_select)
+		}
 		Page::KeyedFragment(views) => {
 			let child_views: Vec<Page> = views.iter().map(|(_, view)| view.clone()).collect();
-			reconcile_children_at_path(element, &child_views, path, false)
+			reconcile_children_at_path(element, &child_views, path, controlled_select)
 		}
 		Page::Empty => Ok(()),
 		Page::WithHead { view, .. } => {
 			// Head section is handled separately during SSR
 			// For hydration, just reconcile the inner view
-			reconcile_at_path(element, view, path)
+			reconcile_at_path(element, view, path, controlled_select)
 		}
 		Page::ReactiveIf(reactive_if) => {
 			// For hydration, evaluate the condition and reconcile the rendered branch.
@@ -272,13 +277,13 @@ fn reconcile_at_path(
 			} else {
 				reactive_if.else_view()
 			};
-			reconcile_at_path(element, &branch_view, path)
+			reconcile_at_path(element, &branch_view, path, controlled_select)
 		}
 		Page::Reactive(reactive) => {
 			// For hydration, evaluate the render closure and reconcile the resulting view.
 			// SSR rendered the initial view from the closure.
 			let rendered_view = reactive.render();
-			reconcile_at_path(element, &rendered_view, path)
+			reconcile_at_path(element, &rendered_view, path, controlled_select)
 		}
 	}
 }
@@ -307,20 +312,23 @@ fn reconcile_element_at_path(
 		// Textarea contents are the browser's reset value, not its live state.
 		return Ok(());
 	}
-	let controlled_select = controlled_select
-		|| el_view.bound_control().is_some_and(|binding| {
-			matches!(
-				binding.kind(),
-				crate::component::ControlKind::SelectOne
-					| crate::component::ControlKind::SelectMany
-			)
-		});
+	let controlled_select = controlled_select || is_controlled_select(el_view);
 	reconcile_children_at_path(
 		element,
 		el_view.child_views(),
 		element_path,
 		controlled_select,
 	)
+}
+
+#[cfg(wasm)]
+fn is_controlled_select(el_view: &PageElement) -> bool {
+	el_view.bound_control().is_some_and(|binding| {
+		matches!(
+			binding.kind(),
+			crate::component::ControlKind::SelectOne | crate::component::ControlKind::SelectMany
+		)
+	})
 }
 
 #[cfg(wasm)]
@@ -636,13 +644,14 @@ fn expected_dom_attr_value(name: &str, value: &str) -> Option<String> {
 /// - If `options.island_only` is true, only elements with `data-rh-island="true"` are reconciled
 /// - If `options.skip_static` is true, elements with `data-rh-static="true"` are skipped
 /// - If `options.warn_on_mismatch` is true, mismatches are logged as warnings instead of errors
+/// - Controlled select defaults remain deferred to binding hydration across island boundaries
 #[cfg(wasm)]
 pub fn reconcile_with_options(
 	element: &Element,
 	view: &Page,
 	options: &ReconcileOptions,
 ) -> Result<(), ReconcileError> {
-	reconcile_with_options_at_path(element, view, options, ReconcilePath::root())
+	reconcile_with_options_at_path(element, view, options, ReconcilePath::root(), false)
 }
 
 #[cfg(wasm)]
@@ -651,6 +660,7 @@ fn reconcile_with_options_at_path(
 	view: &Page,
 	options: &ReconcileOptions,
 	path: ReconcilePath,
+	controlled_select: bool,
 ) -> Result<(), ReconcileError> {
 	// Check if this element should be skipped
 	let should_skip = if options.skip_static {
@@ -676,7 +686,9 @@ fn reconcile_with_options_at_path(
 	};
 
 	// Perform reconciliation if applicable
-	if should_reconcile && let Err(err) = reconcile_at_path(element, view, path.clone()) {
+	if should_reconcile
+		&& let Err(err) = reconcile_at_path(element, view, path.clone(), controlled_select)
+	{
 		handle_reconcile_error(err, options)?;
 	}
 
@@ -691,7 +703,7 @@ fn reconcile_with_options_at_path(
 	};
 
 	if should_recurse {
-		reconcile_options_children_at_path(element, view, options, path)?;
+		reconcile_options_children_at_path(element, view, options, path, controlled_select)?;
 	}
 
 	Ok(())
@@ -703,10 +715,14 @@ fn reconcile_options_children_at_path(
 	view: &Page,
 	options: &ReconcileOptions,
 	path: ReconcilePath,
+	mut controlled_select: bool,
 ) -> Result<(), ReconcileError> {
 	let keyed_child_views;
 	let child_views: &[Page] = match view {
-		Page::Element(el_view) => el_view.child_views(),
+		Page::Element(el_view) => {
+			controlled_select |= is_controlled_select(el_view);
+			el_view.child_views()
+		}
 		Page::Fragment(views) => views,
 		Page::KeyedFragment(views) => {
 			keyed_child_views = views
@@ -716,7 +732,13 @@ fn reconcile_options_children_at_path(
 			&keyed_child_views
 		}
 		Page::WithHead { view, .. } => {
-			return reconcile_options_children_at_path(element, view, options, path);
+			return reconcile_options_children_at_path(
+				element,
+				view,
+				options,
+				path,
+				controlled_select,
+			);
 		}
 		Page::ReactiveIf(reactive_if) => {
 			let branch_view = if reactive_if.condition() {
@@ -724,11 +746,23 @@ fn reconcile_options_children_at_path(
 			} else {
 				reactive_if.else_view()
 			};
-			return reconcile_options_children_at_path(element, &branch_view, options, path);
+			return reconcile_options_children_at_path(
+				element,
+				&branch_view,
+				options,
+				path,
+				controlled_select,
+			);
 		}
 		Page::Reactive(reactive) => {
 			let rendered_view = reactive.render();
-			return reconcile_options_children_at_path(element, &rendered_view, options, path);
+			return reconcile_options_children_at_path(
+				element,
+				&rendered_view,
+				options,
+				path,
+				controlled_select,
+			);
 		}
 		Page::Text(_) | Page::Empty => return Ok(()),
 	};
@@ -759,11 +793,15 @@ fn reconcile_options_children_at_path(
 				child_view,
 				options,
 				child_path.clone(),
+				controlled_select,
 			)?;
 		} else if matches!(child_view, Page::Element(_))
-			&& let Err(err) =
-				reconcile_dom_node_at_path(actual_node, child_view, child_path.clone(), false)
-		{
+			&& let Err(err) = reconcile_dom_node_at_path(
+				actual_node,
+				child_view,
+				child_path.clone(),
+				controlled_select,
+			) {
 			handle_reconcile_error(err, options)?;
 		}
 	}

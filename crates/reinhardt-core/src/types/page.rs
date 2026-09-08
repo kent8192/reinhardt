@@ -716,6 +716,7 @@ impl Page {
 	/// Renders the view to an HTML string.
 	///
 	/// This is the core SSR method that converts the view tree to HTML.
+	/// Leading textarea line feeds are preserved through HTML parsing.
 	pub fn render_to_string(&self) -> String {
 		let mut output = String::new();
 		self.render_to_string_inner(&mut output);
@@ -755,8 +756,15 @@ impl Page {
 					output.push_str(" />");
 				} else {
 					output.push('>');
+					let content_start = output.len();
 					for child in el.child_views() {
 						child.render_to_string_inner(output);
+					}
+					if el.tag_name().eq_ignore_ascii_case("textarea")
+						&& output[content_start..].starts_with('\n')
+					{
+						// HTML parsing discards one line feed immediately after <textarea>.
+						output.insert(content_start, '\n');
 					}
 					output.push_str("</");
 					output.push_str(el.tag_name());
@@ -1103,6 +1111,26 @@ mod tests {
 			view.render_to_string(),
 			"<div>Hello, <strong>World</strong></div>"
 		);
+	}
+
+	#[rstest::rstest]
+	fn render_textarea_preserves_leading_line_feeds_through_html_parsing() {
+		for (value, expected) in [
+			("", "<textarea></textarea>"),
+			("notes", "<textarea>notes</textarea>"),
+			("\n", "<textarea>\n\n</textarea>"),
+			("\nnotes", "<textarea>\n\nnotes</textarea>"),
+			("\n\nnotes", "<textarea>\n\n\nnotes</textarea>"),
+			("\n<&", "<textarea>\n\n&lt;&amp;</textarea>"),
+		] {
+			// Arrange: fragment children may hide the first rendered text node.
+			let view = PageElement::new("textarea")
+				.child(Page::fragment([Page::Empty, Page::text(value)]))
+				.into_page();
+
+			// Act and assert.
+			assert_eq!(view.render_to_string(), expected);
+		}
 	}
 
 	#[test]

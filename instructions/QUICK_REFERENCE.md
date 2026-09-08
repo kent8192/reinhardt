@@ -39,7 +39,7 @@
 - Follow PR/Issue template structure when creating via `gh` CLI
 - Use 1 PR = 1 crate x 1 fix pattern as the basic work unit for batch issue handling
 - Create preceding PRs for cross-crate shared changes before per-crate fix PRs
-- Organize batch work into phases by severity and parallelize across independent crates
+- Organize batch work into phases by severity and execute independent crate work in the current agent; delegate only on explicit user request (HA-3)
 - Use `rstest` for ALL test cases (no plain `#[test]`)
 - Follow Arrange-Act-Assert (AAA) pattern with `// Arrange`, `// Act`, `// Assert` comments for test structure
 - Use `reinhardt-test` fixtures for test setup/teardown
@@ -94,7 +94,7 @@
 - Initialize a freshly-created develop branch with `scripts/init-develop-branch.sh m.n.l` so release-plz on `develop/**` produces alpha Release PRs (DBR-1)
 - Run `scripts/freeze-develop-to-rc.sh` at API freeze to transition the develop branch from `alpha.N` to `rc.1` (DBR-2)
 - Trigger `release-plz-promote.yml` (`gh workflow run release-plz-promote.yml -f develop_branch=develop/m.n.l`) after merging the develop branch into `main` to graduate the prerelease suffix to stable (DBR-3)
-- Use independent context (separate agent session) for agent re-evaluation of `agent-suspect` Issues
+- When the user explicitly requests delegated re-evaluation of `agent-suspect` Issues, use a separate agent session with independent context; retain the label until independent verification is complete (SC-2a)
 - Obtain SP-6 approval before adding non-breaking APIs during RC phase (`enhancement` + `rc-addition` labels + maintainer approval)
 - Use three-dot diff (`main...branch`) for PR diff verification to exclude merge history noise
 - Evaluate, respond to, and resolve Copilot review comments after PR creation (CR-1 ~ CR-4)

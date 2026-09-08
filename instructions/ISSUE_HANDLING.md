@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This file defines strategic principles for handling multiple issues efficiently. While instructions/ISSUE_GUIDELINES.md covers individual issue creation and management, this document provides workflow-level guidance for planning, batching, and parallelizing issue resolution across the Reinhardt project's multi-crate workspace.
+This file defines strategic principles for handling multiple issues efficiently. While instructions/ISSUE_GUIDELINES.md covers individual issue creation and management, this document provides workflow-level guidance for planning, batching, and sequencing issue resolution across the Reinhardt project's multi-crate workspace.
 
 ---
 
@@ -19,7 +19,7 @@ flowchart TD
     E -->|Yes| F["Create preceding PR for shared changes"]
     F --> G["Merge preceding PR first"]
     E -->|No| G
-    G --> H["HA-3: Parallelize independent crate work<br/>via Agent Teams"]
+    G --> H["HA-3: Work in the current agent<br/>Delegate only on explicit user request"]
     H --> I["WU-1: 1 PR = 1 crate x 1 fix pattern"]
 ```
 
@@ -62,29 +62,14 @@ Divide batch work into phases ordered by severity and exploitability, addressing
 3. Complete each phase before moving to the next
 4. Each phase produces one or more PRs
 
-### HA-3 (SHOULD): Agent Team Parallel Work
+### HA-3 (SHOULD): Single-Agent Execution
 
-Use Agent Teams to parallelize work across independent crates within the same phase.
+Work in the current agent by default. Use subagents only when the user explicitly requests delegation for the current task.
 
-**Rationale:** When fixes in different crates are independent (no shared code changes required), they can be implemented simultaneously by different agents, reducing total elapsed time.
-
-**Prerequisites for parallelization:**
-- Fixes are in separate crates with no shared dependencies being modified
-- No cross-crate utility or shared code changes are needed
-- Each agent can complete its work independently
-
-**Example:**
-```
-Phase 1 (parallel work):
-  Agent A → reinhardt-core (fix #101)
-  Agent B → reinhardt-orm (fix #103)
-  Agent C → reinhardt-http (fix #107)
-```
-
-**When NOT to parallelize:**
-- When fixes require changes to shared utilities first (see WU-3)
-- When one fix depends on another fix being completed
-- When fixes modify the same files or modules
+Keep dependent work and edits to shared files sequential. If delegation is
+requested, give each agent independent file ownership and integrate its result
+before final validation. Separate crates or applications alone do not establish
+independence when a shared dependency or utility must change first (see WU-3).
 
 ### HA-4 (MUST): Branch Organization
 
@@ -181,7 +166,7 @@ When batch fixes require shared utilities or cross-crate changes, these MUST be 
 Step 1: PR "feat(core): add shared input sanitization utilities"
   → Merged first
 
-Step 2 (parallel, after Step 1 merge):
+Step 2 (sequential by default, after Step 1 merge; see HA-3):
   PR "fix(orm): apply input sanitization to query builder"
   PR "fix(http): apply input sanitization to request handlers"
   PR "fix(api): apply input sanitization to API endpoints"
@@ -193,15 +178,13 @@ Step 2 (parallel, after Step 1 merge):
 - Per-crate PRs MUST reference the preceding PR in their description
 - Never duplicate shared logic across crate-specific PRs
 
-The following diagram illustrates the WU-3 dependency structure between preceding and per-crate PRs:
+The following diagram illustrates the WU-3 dependency structure between preceding and per-crate PRs. Edges show merge prerequisites; execute per-crate work in the current agent unless the user explicitly requests delegation (HA-3).
 
 ```mermaid
 flowchart TD
     P["Preceding PR:<br/>shared utilities / cross-crate changes"] --> |merge first| A["PR: crate-A fix"]
     P --> |merge first| B["PR: crate-B fix"]
     P --> |merge first| C["PR: crate-C fix"]
-    A -.-> |parallel| B
-    B -.-> |parallel| C
 ```
 
 ---
@@ -236,7 +219,7 @@ Phase 1 requires shared sanitization utilities → preceding PR needed.
 Commit 1 (preceding): "feat(core): add input sanitization module"
   → PR #A, merge first
 
-Commits 2-4 (parallel via Agent Team, HA-3):
+Commits 2-4 (sequential by default; delegation requires explicit user request, HA-3):
   "fix(core): apply input sanitization to query execution"  → PR #B
   "fix(orm): apply input sanitization to model fields"      → PR #C
   "fix(http): apply input sanitization to request parsing"   → PR #D

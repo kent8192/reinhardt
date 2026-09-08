@@ -228,6 +228,7 @@ Issues created by LLM agent bug discovery MUST include the `agent-suspect` label
 - `agent-suspect` issues are excluded from stability timer reset (SC-2a)
 - The label is removed ONLY after independent verification confirms the issue
 - Independent verification requires a separate agent (with independent context) or human review
+- Delegating verification requires an explicit user request for the current task; retain `agent-suspect` until independent verification is complete (SC-2a)
 - The verifying entity MUST NOT have participated in the initial detection
 
 ---

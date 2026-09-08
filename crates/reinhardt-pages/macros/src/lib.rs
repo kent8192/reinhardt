@@ -1082,6 +1082,24 @@ pub fn head(input: TokenStream) -> TokenStream {
 /// | `readonly` | flag/bool | `readonly` or `readonly: true` | Read-only input |
 /// | `autofocus` | flag/bool | `autofocus` or `autofocus: true` | Auto-focus on load |
 ///
+/// Built-in controls render these properties in both SSR and WASM, including
+/// fields inside groups and collections. False boolean flags are omitted.
+/// `min_length` and `max_length` become `minlength` and `maxlength` on text-like
+/// inputs and textareas; `pattern` applies only to text-like inputs. `readonly`
+/// applies to text-like, numeric, and temporal inputs and textareas, following
+/// native HTML semantics (not select, checkbox, radio, range, color, or file inputs).
+/// `min_value` and `max_value` become numeric input/range bounds. An explicit
+/// native `min` or `max` overrides the corresponding legacy bound independently.
+///
+/// `help_text` renders as escaped text in a `p.reinhardt-help` after the control,
+/// or a `span.reinhardt-help` inside a custom wrapper to preserve phrasing content.
+/// Its ID is the control ID followed by `--help`; `aria-describedby` combines this
+/// ID with any existing `attrs: { aria_describedby: "..." }` references. Hidden
+/// controls omit help text. Radio choices share a description ID based on the
+/// field name, respect both field-level and choice-level disabled flags, and apply
+/// autofocus only to the first choice. Custom widget adapters continue to own
+/// their rendered markup.
+///
 /// ### Data Properties
 ///
 /// | Property | Type | Syntax | Description |

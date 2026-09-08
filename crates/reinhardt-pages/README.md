@@ -194,6 +194,22 @@ Typed native attributes are accepted for the controls that support them:
 | `multiple` | file-like inputs and multi-select |
 | `list` | datalist-compatible text-like inputs |
 
+Built-in fields render validation and display properties identically in SSR and
+WASM, including fields in groups and collections. `min_length` / `max_length`
+produce `minlength` / `maxlength` on text-like inputs and textareas; `pattern`
+applies to text-like inputs. `min_value` / `max_value` supply number/range bounds;
+an explicit native `min` or `max` takes precedence for that bound independently.
+`readonly` is emitted only for editable text, number, temporal, and textarea
+controls. False boolean flags are omitted. Field-level `disabled` also disables
+all generated radio choices; radio autofocus is assigned only to the first choice.
+
+`help_text` becomes escaped text in a `p.reinhardt-help` below the control (a
+`span.reinhardt-help` inside custom wrappers), linked through `aria-describedby`
+to `<control-id>--help`. Existing description references in `attrs` are retained.
+Collection descriptions use each indexed control ID;
+radio choices share a description ID based on the field name. Hidden inputs omit
+help text. Experimental custom widgets own their markup.
+
 `FieldGroup` renders as semantic `<fieldset>` output. When `label` is
 present, the label is rendered as a `<legend>` inside the fieldset.
 

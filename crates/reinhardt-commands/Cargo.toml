@@ -82,6 +82,7 @@ url = { workspace = true }
 nix = { version = "0.29", features = ["signal"] }
 
 [dev-dependencies]
+reinhardt-test = { path = "../reinhardt-test" }
 insta = { workspace = true }
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 tempfile = "3.13"

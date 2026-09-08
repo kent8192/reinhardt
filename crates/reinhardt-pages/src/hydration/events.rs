@@ -194,10 +194,11 @@ pub fn attach_event(
 		handler(event);
 	});
 
-	// Get element ID for registry
-	if let Some(id) = element.get_attribute("data-rh-id") {
-		registry.register(id, handle);
-	}
+	// Unmarked generated controls still need to retain their event handles.
+	registry.register(
+		element.get_attribute("data-rh-id").unwrap_or_default(),
+		handle,
+	);
 
 	Ok(())
 }

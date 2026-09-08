@@ -878,7 +878,9 @@ mod browser {
 		);
 
 		// Act and assert: independent item names prevent browser radio grouping.
-		container.input("answers_0_answer").click();
+		let first_input = container.input("answers_0_answer");
+		let second_input = container.input("answers_1_answer");
+		first_input.click();
 		assert_eq!(runtime.get_values().answers[0].answer, "yes");
 		assert_eq!(runtime.get_values().answers[1].answer, "");
 		runtime.set_path_value(radio.answers_answer_path(second), String::from("yes"));
@@ -893,5 +895,7 @@ mod browser {
 		assert_eq!(runtime.get_values().answers[1].answer, "");
 		assert!(!container.input("answers_0_answer").checked());
 		assert!(!container.input("answers_1_answer").checked());
+		assert!(first_input.is_same_node(Some(&container.input("answers_0_answer"))));
+		assert!(second_input.is_same_node(Some(&container.input("answers_1_answer"))));
 	}
 }

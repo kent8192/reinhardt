@@ -24,9 +24,7 @@ use crate::component::reactive_if::{ReactiveIfNode, ReactiveNode, store_reactive
 #[cfg(wasm)]
 use crate::dom::Element;
 #[cfg(wasm)]
-use wasm_bindgen::JsCast;
-#[cfg(wasm)]
-use wasm_bindgen::closure::Closure;
+use crate::dom::control_binding::ControlBindingController;
 
 /// Extension trait for mounting Page to DOM (WASM only).
 ///
@@ -52,6 +50,7 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 	match page {
 		Page::Element(el) => {
 			let doc = document();
+			let control_binding = el.bound_control().cloned();
 			let (tag, attrs, children, _is_void, event_handlers) = el.into_parts();
 			if !is_safe_html_element_name(&tag) {
 				for child in children {
@@ -97,25 +96,11 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 
 			// Attach event handlers before mounting children
 			for (event_type, handler) in event_handlers {
-				let handler_clone = handler.clone();
-				let closure = Closure::wrap(Box::new(move |event: web_sys::Event| {
-					handler_clone(event);
-				}) as Box<dyn FnMut(web_sys::Event)>);
-
-				element
-					.inner()
-					.add_event_listener_with_callback(
-						event_type.as_str(),
-						closure.as_ref().unchecked_ref(),
-					)
-					.expect("Failed to add event listener");
-
-				// Intentional memory leak: the closure must outlive the element's DOM
-				// lifetime. Since mount_inner creates closures in a recursive loop
-				// with no parent struct to store them, forget() is the practical
-				// choice here. For components with frequent mount/unmount cycles,
-				// consider using a lifecycle-managed approach instead.
-				closure.forget();
+				store_reactive_node(
+					element.add_event_listener_with_event(event_type.as_str(), move |event| {
+						handler(event)
+					}),
+				);
 			}
 
 			for child in children {
@@ -123,8 +108,11 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 			}
 
 			parent
-				.append_child(element)
+				.append_child(element.clone())
 				.map_err(|_| MountError::AppendChildFailed)?;
+			if let Some(binding) = control_binding {
+				store_reactive_node(ControlBindingController::mount(element, binding));
+			}
 		}
 		Page::Text(text) => {
 			let window = web_sys::window().ok_or(MountError::NoWindow)?;

@@ -65,7 +65,9 @@ pub(crate) fn new_reactive_node_store() -> ReactiveNodeStore {
 
 #[cfg(wasm)]
 pub(crate) fn clear_reactive_node_store(store: &ReactiveNodeStore) {
-	store.borrow_mut().clear();
+	// Destructors may release nested subscriptions and access another store.
+	let nodes = std::mem::take(&mut *store.borrow_mut());
+	drop(nodes);
 }
 
 #[cfg(wasm)]
@@ -150,7 +152,7 @@ impl ReactiveIfNode {
 		let current_nodes_clone = current_nodes.clone();
 		let last_condition_clone = last_condition.clone();
 		let marker_clone = marker.clone();
-		let effect_reactive_node_store = current_reactive_node_store();
+		let effect_reactive_node_store = new_reactive_node_store();
 
 		// Create the Effect that will re-run when condition dependencies change
 		let effect = Effect::new_with_timing(
@@ -167,6 +169,7 @@ impl ReactiveIfNode {
 					}
 					*last = Some(new_condition);
 					drop(last);
+					clear_reactive_node_store(&effect_reactive_node_store);
 
 					// Refs #5100: remove old nodes before mounting the replacement view. The
 					// mount path may synchronously run layout effects, so do not
@@ -256,7 +259,7 @@ impl ReactiveNode {
 		// Clone references for the Effect closure
 		let current_nodes_clone = current_nodes.clone();
 		let marker_clone = marker.clone();
-		let effect_reactive_node_store = current_reactive_node_store();
+		let effect_reactive_node_store = new_reactive_node_store();
 
 		// Create the Effect that will re-run when dependencies change
 		let effect = Effect::new_with_timing(
@@ -268,6 +271,7 @@ impl ReactiveNode {
 					if update_activity_boundary_attrs(&current_nodes_clone, &view) {
 						return;
 					}
+					clear_reactive_node_store(&effect_reactive_node_store);
 
 					// Refs #5100: remove old nodes before mounting the replacement view. The
 					// mount path may synchronously run layout effects, so do not
@@ -432,6 +436,7 @@ fn mount_before_marker(marker: &web_sys::Comment, view: Page) -> Vec<web_sys::No
 	match view {
 		Page::Element(el) => {
 			// Decompose the element to avoid ownership issues
+			let control_binding = el.bound_control().cloned();
 			let (tag, attrs, children, _is_void, event_handlers) = el.into_parts();
 			if !is_safe_html_element_name(&tag) {
 				for child in children {
@@ -465,22 +470,24 @@ fn mount_before_marker(marker: &web_sys::Comment, view: Page) -> Vec<web_sys::No
 
 			// Attach event handlers
 			for (event_type, handler) in event_handlers {
-				use wasm_bindgen::closure::Closure;
-
-				let handler_clone = handler.clone();
-				let closure = Closure::wrap(Box::new(move |event: web_sys::Event| {
-					handler_clone(event);
-				}) as Box<dyn FnMut(web_sys::Event)>);
-
-				let _ = element.add_event_listener_with_callback(
-					event_type.as_str(),
-					closure.as_ref().unchecked_ref(),
+				store_reactive_node(
+					element_wrapper
+						.add_event_listener_with_event(event_type.as_str(), move |event| {
+							handler(event)
+						}),
 				);
-				closure.forget();
 			}
 
 			// Insert before marker
 			let _ = parent.insert_before(&element, Some(marker));
+			if let Some(binding) = control_binding {
+				store_reactive_node(
+					crate::dom::control_binding::ControlBindingController::mount(
+						element_wrapper,
+						binding,
+					),
+				);
+			}
 			nodes.push(element.unchecked_into());
 		}
 		Page::Text(text) => {

@@ -169,6 +169,61 @@ contract as `Option<web_sys::File>` values. File values are browser-owned and
 are tracked for dirty/touched state without treating the file payload as a
 serializable scalar.
 
+Generated controls render the current field values in native HTML and on mount.
+Bound controls update their existing DOM properties when a signal changes or
+`runtime.reset()` runs; editing a value does not replace the control or its
+options. `bind: false` renders a value snapshot and installs neither an input
+listener nor ongoing synchronization. Ordinary and grouped fields take that
+snapshot in `into_page()`; collection fields take it when their row renders.
+Static choice expressions are evaluated once per option and reused for the value
+and selected state.
+Hydration adopts existing browser edits and selected files. Explicit runtime setters
+and field resets take precedence only for the affected field or collection path;
+a whole-form reset takes precedence for all fields. Unchanged multiple selections
+retain the source vector order. SSR preserves leading textarea line feeds through
+HTML parsing, and selective hydration preserves controlled select defaults across
+option groups and island boundaries.
+Textarea newline normalization by the HTML parser alone does not count as a
+browser edit or mark the form dirty during hydration.
+Unbound textarea snapshots also reconcile empty and whitespace-only content,
+normalize parsed line endings, and reject other changes to their default text.
+Reconciled pristine defaults retain preference for their updated fields and collection paths
+during hydration, while unrelated dirty controls remain eligible for browser edits.
+A native form reset adopts the browser's defaults after the reset event, including
+its cancellation rules, and clears touched state and errors without emitting edit
+or validation events. Custom widget errors and subsequent value edits remain observed
+after reset. Runtime reset uses the runtime's current defaults.
+
+| Field/control category | Rendered value |
+|---|---|
+| String fields, hidden, color, telephone, month/week | String unchanged; month/week use string fields with native HTML syntax |
+| Integer, float, decimal | Rust display formatting; `DecimalField` retains its stable `f64` representation |
+| Date, time, datetime-local | Optional date/time text; datetime uses `T` and preserves fractional seconds; `None` is empty |
+| UUID / IP address | Optional canonical display text; `None` is empty |
+| JSON | Compact JSON serialization |
+| Checkbox | Boolean checked property |
+| Single/multiple select and radio choices | Choice display strings determine selected/checked state; edits use the existing `FromStr` conversion |
+| File / image | No HTML value or programmatic file selection; clearing the value clears the mounted file input |
+
+Textarea values are escaped child text; select state is emitted on the actual
+options, including option groups. Invalid typed input preserves the previous
+Rust value. Native browser constraints still apply to color, range, numeric,
+and temporal values; use values representable by the selected control. Typed
+date fields require their matching temporal widgets; month/week values are
+strings. Custom experimental widgets continue to own their adapter behavior.
+Checkbox bindings require `BooleanField`; multiple selections require
+`MultipleChoiceField` with `SelectMultiple`. Arbitrary field/widget combinations
+that cannot represent the field's formatted value are unsupported.
+Collections share the same formatting and preserve controls during value edits
+while item keys and indices stay unchanged. Bulk value replacement and reset
+preserve keys by position and refresh existing path subscriptions when the row
+count is unchanged. Structural collection changes retain the stable renderer's
+replacement behavior. This stable `form!` contract does
+not include the model-generated form API on the development branch.
+Stable radio groups use `choices_from`; static radio choices remain rejected by
+the parser. Collection items support static select choices, but reject dynamic
+choices, file/image fields, per-field `initial`, and nested groups.
+
 Stable native widget coverage includes the following `form!` DSL items:
 
 | DSL item | HTML output | Value state |
@@ -208,9 +263,10 @@ keys, row order, and unbound values, and clear file inputs. The restored DOM and
 signals agree before runtime touched state and errors are cleared, without
 emitting change or validation events. Source writes made by later reset listeners
 or synchronously after `reset()` supersede the pending reset, including equal-value
-writes. Custom widget errors remain reactive after reset. `autocomplete` is
-preserved on scalar and collection radios,
-and reactive replacements retain focus within their own subtree. For scalar
+writes. Custom widget errors remain reactive after reset. Collection radio
+bindings update existing controls while their row keys and indices stay unchanged.
+`autocomplete` is preserved on scalar and collection radios, and reactive
+replacements retain focus within their own subtree. For scalar
 fields, `bind: false` renders the current value without installing two-way binding.
 
 Typed native attributes are accepted for the controls that support them:

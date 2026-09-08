@@ -360,36 +360,6 @@ impl Effect {
 	}
 }
 
-// Update Runtime to support effect execution
-//
-// This extends the Runtime with the ability to execute effects when they're scheduled.
-impl super::runtime::Runtime {
-	/// Execute a scheduled effect
-	///
-	/// This is called internally when flushing pending updates.
-	fn execute_scheduled_effect(&self, effect_id: NodeId) {
-		Effect::execute_effect(effect_id);
-	}
-
-	/// Flush all pending updates
-	///
-	/// This executes all Effects that have been scheduled for update.
-	/// Skips effects that were disposed between scheduling and execution.
-	pub fn flush_updates(&self) {
-		*self.update_scheduled.borrow_mut() = false;
-
-		// Take all pending updates
-		let pending = core::mem::take(&mut *self.pending_updates.borrow_mut());
-
-		// Execute each pending effect (skip disposed ones)
-		for node_id in pending {
-			if get_effect_timing(node_id).is_some() {
-				self.execute_scheduled_effect(node_id);
-			}
-		}
-	}
-}
-
 #[cfg(test)]
 mod tests {
 	use super::*;

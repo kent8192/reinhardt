@@ -960,6 +960,25 @@ let validator = ConditionalValidator::unless(
 );
 ```
 
+## Reactive Batching
+
+`reactive::batch` defers effect callbacks triggered by reactive writes until the
+outermost batch returns, including when it returns an error. Layout effects settle
+their reactive writes before passive effects run. Automatic and explicit-dependency
+Memos invalidate immediately, so reads within nested batches observe current values.
+
+If a batch body panics, its queued callbacks wait until unwinding finishes. The
+next normal batch or explicit flush drains that work. A subsequent signal change
+runs retained Layout effects and schedules passive effects through the configured
+scheduler. If a callback itself panics, callbacks that have not run remain queued;
+the original panic is preserved and notification state is restored.
+
+## Testing
+
+Reactive batching regressions inject `rstest` scope fixtures. Native fixtures use
+`reinhardt-test` teardown guards around the local runtime's `ReactiveScope`; WASM
+fixtures retain the same scope type and its existing automatic cleanup.
+
 ## License
 
 Licensed under the BSD 3-Clause License.

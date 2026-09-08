@@ -107,6 +107,8 @@
 //! survive HTML parsing, including selective hydration. Native reset clears touched
 //! state and errors without emitting edit or validation events, and preserves
 //! subscriptions to later custom widget errors and field edits.
+//! Static choice values are evaluated once per option. Textarea hydration compares
+//! normalized HTML line endings so parsing alone does not create an edit.
 //!
 //! Stable native widget coverage includes the following `form!` DSL items:
 //!

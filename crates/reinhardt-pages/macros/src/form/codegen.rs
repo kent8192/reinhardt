@@ -3852,6 +3852,7 @@ fn generate_static_choice_item_view(
 	}
 }
 
+/// Serializes each option value once for its attribute and initial selection.
 fn generate_static_choice_option_view(
 	option: &TypedChoiceOption,
 	selected: Option<&TokenStream>,
@@ -3860,14 +3861,22 @@ fn generate_static_choice_option_view(
 	let label = &option.label;
 	let disabled = option.disabled;
 
-	let selected = selected.map(|values| quote! { .bool_attr("selected", (#values).iter().any(|selected| selected == &(#value).to_string())) });
+	let selected = selected
+		.map(|values| {
+			quote! { (#values).iter().any(|selected| selected == &__choice_value) }
+		})
+		.unwrap_or_else(|| quote! { false });
 
 	quote! {
-		PageElement::new("option")
-			.attr("value", (#value).to_string())
-			.bool_attr("disabled", #disabled)
-			#selected
-			.child((#label).to_string())
+		{
+			let __choice_value = (#value).to_string();
+			let __choice_selected = #selected;
+			PageElement::new("option")
+				.attr("value", __choice_value)
+				.bool_attr("disabled", #disabled)
+				.bool_attr("selected", __choice_selected)
+				.child((#label).to_string())
+		}
 	}
 }
 
@@ -7714,13 +7723,14 @@ mod tests {
 		assert!(output_str.contains("PageElement :: new (\"datalist\")"));
 		assert!(output_str.contains(". attr (\"id\" , \"suggestions\")"));
 		assert!(output_str.contains("PageElement :: new (\"option\")"));
-		assert!(output_str.contains(". attr (\"value\" , (\"a\") . to_string ())"));
-		assert!(output_str.contains(". attr (\"value\" , (\"b\") . to_string ())"));
+		assert!(output_str.contains("let __choice_value = (\"a\") . to_string () ;"));
+		assert!(output_str.contains("let __choice_value = (\"b\") . to_string () ;"));
+		assert!(output_str.contains(". attr (\"value\" , __choice_value)"));
 		assert!(output_str.contains(". bool_attr (\"disabled\" , true)"));
 		assert!(output_str.contains("PageElement :: new (\"select\")"));
 		assert!(output_str.contains("PageElement :: new (\"optgroup\")"));
 		assert!(output_str.contains(". attr (\"label\" , \"Active\")"));
-		assert!(output_str.contains(". attr (\"value\" , (\"open\") . to_string ())"));
+		assert!(output_str.contains("let __choice_value = (\"open\") . to_string () ;"));
 	}
 
 	// ========================================

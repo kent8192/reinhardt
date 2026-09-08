@@ -59,6 +59,64 @@ const COLLECTION_VALUES: &[(&str, &str, &str)] = &[
 	("rows_0_tags", "select-multiple", "rust,wasm"),
 ];
 
+static STATIC_CHOICE_EVALUATIONS: std::sync::atomic::AtomicUsize =
+	std::sync::atomic::AtomicUsize::new(0);
+
+fn next_static_choice_value() -> usize {
+	STATIC_CHOICE_EVALUATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
+}
+
+fn static_choice_expression_page() -> reinhardt_pages::Page {
+	STATIC_CHOICE_EVALUATIONS.store(0, std::sync::atomic::Ordering::Relaxed);
+	let form = form! {
+		name: StaticChoiceExpressions,
+		action: "/static-choice-expressions",
+		fields: {
+			plain: ChoiceField<usize> {
+				initial: 1usize,
+				choices: [(0, "Other"), (next_static_choice_value(), "Selected")],
+			}
+			group: FieldGroup {
+				fields: {
+					grouped: MultipleChoiceField<usize> {
+						initial: vec![2, 3],
+						choices: [OptGroup("Grouped") {
+							(next_static_choice_value(), "Second"),
+							(next_static_choice_value(), "Third"),
+						}],
+					}
+				}
+			}
+			rows: FieldArray {
+				fields: {
+					single: ChoiceField<usize> {
+						choices: [(0, "Other"), (next_static_choice_value(), "Fourth")],
+					}
+					multi: MultipleChoiceField<usize> {
+						choices: [OptGroup("Row choices") {
+							(next_static_choice_value(), "Fifth"),
+							(next_static_choice_value(), "Sixth"),
+						}],
+					}
+				}
+			}
+		}
+	};
+	let runtime = use_form(&form).build();
+	let mut row = form.new_rows_item();
+	row.single = 4;
+	row.multi = vec![5, 6];
+	runtime.push_item(form.rows_collection(), row);
+	form.into_page()
+}
+
+const STATIC_CHOICE_VALUES: &[(&str, &str, &str)] = &[
+	("plain", "select-one", "1"),
+	("grouped", "select-multiple", "2,3"),
+	("rows_0_single", "select-one", "4"),
+	("rows_0_multi", "select-multiple", "5,6"),
+];
+
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
 	use super::*;
@@ -142,6 +200,25 @@ mod native {
 					"{id}: initial value HTML"
 				);
 			}
+		}
+	}
+
+	#[rstest]
+	#[serial_test::serial(form_static_choice_expressions)]
+	fn static_choice_expressions_are_evaluated_once_for_value_and_selection() {
+		// Arrange: every expression returns a different value on each evaluation.
+		let page = static_choice_expression_page();
+
+		// Act.
+		let html = page.render_to_string();
+
+		// Assert: flat, grouped, and collection options reuse their emitted value.
+		assert_eq!(
+			STATIC_CHOICE_EVALUATIONS.load(std::sync::atomic::Ordering::Relaxed),
+			6
+		);
+		for &(id, kind, expected) in STATIC_CHOICE_VALUES {
+			assert_html_value(&html, id, kind, expected);
 		}
 	}
 
@@ -444,6 +521,35 @@ mod browser {
 					.dyn_ref::<web_sys::Element>()
 					.map(web_sys::Element::id),
 			);
+		}
+	}
+
+	#[rstest::rstest]
+	#[test_attr(wasm_bindgen_test)]
+	#[serial(form_value_sync_dom)]
+	fn static_choice_expressions_are_evaluated_once_for_value_and_selection() {
+		// Arrange and act: mount flat, grouped, and collection select expressions.
+		let mounted = MountedForm::new(static_choice_expression_page());
+
+		// Assert: selected attributes and live selection use the same serialized values.
+		assert_eq!(
+			STATIC_CHOICE_EVALUATIONS.load(std::sync::atomic::Ordering::Relaxed),
+			6
+		);
+		assert_values(&mounted, STATIC_CHOICE_VALUES);
+		for &(id, _, expected) in STATIC_CHOICE_VALUES {
+			let options = mounted.control(id).query_selector_all("option").unwrap();
+			let defaults = (0..options.length())
+				.map(|index| {
+					options
+						.item(index)
+						.unwrap()
+						.unchecked_into::<web_sys::HtmlOptionElement>()
+				})
+				.filter(web_sys::HtmlOptionElement::default_selected)
+				.map(|option| option.value())
+				.collect::<Vec<_>>();
+			assert_eq!(defaults.join(","), expected, "{id}: default selection");
 		}
 	}
 

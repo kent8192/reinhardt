@@ -190,7 +190,7 @@ fn configured_radio_wrappers_preserve_semantics_and_other_control_labels() {
 			),
 			concat!(
 				"<div class=\"reinhardt-field\"><label for=\"username\" class=\"reinhardt-label\">Username</label>",
-				"<input type=\"text\" name=\"username\" id=\"username\" class=\"reinhardt-input\" placeholder=\"\" /></div>",
+				"<input type=\"text\" name=\"username\" id=\"username\" class=\"reinhardt-input\" placeholder=\"\" value=\"\" /></div>",
 			),
 			concat!(
 				"<div class=\"reinhardt-field\"><label for=\"standalone\" class=\"reinhardt-label\">Standalone</label>",

@@ -51,6 +51,8 @@ pub use into_page::{
 pub use props::Props;
 #[cfg(wasm)]
 pub use reactive_if::{ReactiveIfNode, ReactiveNode, cleanup_reactive_nodes, store_reactive_node};
+#[doc(hidden)]
+pub use reinhardt_core::types::page::{ControlBinding, ControlKind, ControlValue};
 pub use suspense::{ResourceTracker, SuspenseBoundary};
 pub use r#trait::Component;
 pub use view_transition::{

@@ -39,6 +39,8 @@
 //! element.set_reactive_attribute("data-count", count.clone());
 //! ```
 
+#[cfg(wasm)]
+pub(crate) mod control_binding;
 pub mod document;
 pub mod element;
 pub mod event;

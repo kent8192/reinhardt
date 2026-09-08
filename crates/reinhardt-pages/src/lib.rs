@@ -95,6 +95,23 @@
 //! tracked for dirty/touched state without treating the file payload as a
 //! serializable scalar.
 //!
+//! Generated native HTML includes current field values, checkbox state, textarea
+//! content, and selected options. Bound controls synchronize signal updates and
+//! runtime reset through their existing DOM nodes. `bind: false` renders only
+//! a value snapshot without ongoing synchronization. File inputs remain clear-only for
+//! programmatic updates. Optional temporal/UUID/IP values render empty for
+//! `None`; datetime-local uses `T`, and JSON values use compact serialization.
+//! Hydration preserves browser edits and selected files, while explicit runtime
+//! setters and field resets take precedence for their own field or collection path.
+//! Unchanged multiple selections retain source order. Leading textarea line feeds
+//! survive HTML parsing, including selective hydration. Native reset clears touched
+//! state and errors without emitting edit or validation events, and preserves
+//! subscriptions to later custom widget errors and field edits.
+//! Static choice values are evaluated once per option. Textarea hydration compares
+//! normalized HTML line endings so parsing alone does not create an edit.
+//! Unbound textarea snapshots preserve whitespace and validate parsed default text.
+//! Reconciled pristine defaults remain preferred only for their updated fields and paths.
+//!
 //! Stable native widget coverage includes the following `form!` DSL items:
 //!
 //! | DSL item | HTML output | Value state |

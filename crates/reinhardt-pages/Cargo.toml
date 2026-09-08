@@ -184,12 +184,16 @@ web-sys = { version = "0.3.83", features = [
 	"HtmlFormElement",
 	"HtmlTextAreaElement",
 	"HtmlSelectElement",
+	"HtmlOptionElement",
+	"HtmlOptionsCollection",
 	# DOM manipulation
 	"DomTokenList",
 	"NamedNodeMap",
 	"Attr",
 	"HtmlCollection",
 	"NodeList",
+	"MutationObserver",
+	"MutationObserverInit",
 	"HtmlDocument",
 	"HtmlHeadElement",
 	# History API (for router)
@@ -218,6 +222,8 @@ reinhardt-core = {workspace = true, default-features = false, features = ["react
 smallvec = { workspace = true }
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 wasm-bindgen-futures = "0.4.56"
+# Observe native form reset after its browser default action finishes.
+gloo-timers = { version = "0.3", features = ["futures"] }
 getrandom = { version = "0.3", features = ["wasm_js"] }
 uuid = { version = "1.7", features = ["v7", "js"] }
 # Issue #4217: depend on reinhardt-urls on wasm to consume the canonical
@@ -261,11 +267,6 @@ tempfile = { workspace = true }
 # `chrono::Naive*` paths, so trybuild fixtures exercising those fields need
 # `chrono` resolvable in the generated fixture binary.
 chrono = { workspace = true }
-
-[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
-# Used by tests/wasm/client_launcher_navigation_test.rs (Refs #4075) to
-# yield to the reactive scheduler between `Router::push` calls.
-gloo-timers = { version = "0.3", features = ["futures"] }
 
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]
 criterion = { workspace = true }

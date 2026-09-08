@@ -21,10 +21,14 @@
 //! let html = view.render_to_string();
 //! ```
 
+#[doc(hidden)]
+pub mod control_binding;
 pub mod event;
 pub mod head;
 mod util;
 
+#[doc(hidden)]
+pub use control_binding::{ControlBinding, ControlKind, ControlValue};
 pub use event::EventType;
 pub use head::{Head, LinkTag, MetaTag, ScriptTag, StyleTag};
 pub(crate) use util::html_escape;
@@ -252,6 +256,8 @@ pub struct PageElement {
 	is_void: bool,
 	/// Event handlers attached to this element.
 	event_handlers: Vec<(EventType, PageEventHandler)>,
+	/// A generated form control's retained state binding.
+	control_binding: Option<ControlBinding>,
 }
 
 impl std::fmt::Debug for PageElement {
@@ -262,6 +268,7 @@ impl std::fmt::Debug for PageElement {
 			.field("children", &self.children)
 			.field("is_void", &self.is_void)
 			.field("event_handlers_count", &self.event_handlers.len())
+			.field("control_binding", &self.control_binding)
 			.finish()
 	}
 }
@@ -291,6 +298,7 @@ impl PageElement {
 			children: Vec::new(),
 			is_void,
 			event_handlers: Vec::new(),
+			control_binding: None,
 		}
 	}
 
@@ -374,6 +382,19 @@ impl PageElement {
 	pub fn on(mut self, event_type: EventType, handler: PageEventHandler) -> Self {
 		self.event_handlers.push((event_type, handler));
 		self
+	}
+
+	/// Attaches the retained state binding used by generated form controls.
+	#[doc(hidden)]
+	pub fn control_binding(mut self, binding: ControlBinding) -> Self {
+		self.control_binding = Some(binding);
+		self
+	}
+
+	/// Returns the retained state binding without changing `into_parts`.
+	#[doc(hidden)]
+	pub fn bound_control(&self) -> Option<&ControlBinding> {
+		self.control_binding.as_ref()
 	}
 
 	/// Adds an event listener using string event name (convenience method).
@@ -695,6 +716,7 @@ impl Page {
 	/// Renders the view to an HTML string.
 	///
 	/// This is the core SSR method that converts the view tree to HTML.
+	/// Leading textarea newlines are preserved through HTML parsing.
 	pub fn render_to_string(&self) -> String {
 		let mut output = String::new();
 		self.render_to_string_inner(&mut output);
@@ -734,8 +756,15 @@ impl Page {
 					output.push_str(" />");
 				} else {
 					output.push('>');
+					let content_start = output.len();
 					for child in el.child_views() {
 						child.render_to_string_inner(output);
+					}
+					if el.tag_name().eq_ignore_ascii_case("textarea")
+						&& output[content_start..].starts_with(['\n', '\r'])
+					{
+						// HTML parsing normalizes CR/CRLF before discarding one leading LF.
+						output.insert(content_start, '\n');
 					}
 					output.push_str("</");
 					output.push_str(el.tag_name());
@@ -1082,6 +1111,31 @@ mod tests {
 			view.render_to_string(),
 			"<div>Hello, <strong>World</strong></div>"
 		);
+	}
+
+	#[rstest::rstest]
+	fn render_textarea_preserves_leading_line_feeds_through_html_parsing() {
+		for (value, expected) in [
+			("", "<textarea></textarea>"),
+			("notes", "<textarea>notes</textarea>"),
+			("\n", "<textarea>\n\n</textarea>"),
+			("\nnotes", "<textarea>\n\nnotes</textarea>"),
+			("\n\nnotes", "<textarea>\n\n\nnotes</textarea>"),
+			("\n<&", "<textarea>\n\n&lt;&amp;</textarea>"),
+			("\r", "<textarea>\n\r</textarea>"),
+			("\r\n", "<textarea>\n\r\n</textarea>"),
+			("\rnotes", "<textarea>\n\rnotes</textarea>"),
+			("\r\nnotes", "<textarea>\n\r\nnotes</textarea>"),
+			("\r\n\rnotes", "<textarea>\n\r\n\rnotes</textarea>"),
+		] {
+			// Arrange: fragment children may hide the first rendered text node.
+			let view = PageElement::new("textarea")
+				.child(Page::fragment([Page::Empty, Page::text(value)]))
+				.into_page();
+
+			// Act and assert.
+			assert_eq!(view.render_to_string(), expected);
+		}
 	}
 
 	#[test]

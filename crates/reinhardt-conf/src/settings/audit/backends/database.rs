@@ -322,6 +322,8 @@ impl AuditBackend for DatabaseAuditBackend {
 mod tests {
 	use super::*;
 	use reinhardt_query::Func;
+	use reinhardt_test::fixtures::random_test_key;
+	use rstest::{fixture, rstest};
 	use serde_json::json;
 	use std::sync::Once;
 
@@ -333,25 +335,29 @@ mod tests {
 		});
 	}
 
-	async fn create_test_backend() -> DatabaseAuditBackend {
+	#[fixture]
+	fn database_url() -> String {
+		// Share one in-memory database within the pool, while isolating each
+		// backend's audit records from concurrently active test backends.
+		format!("sqlite:file:{}?mode=memory&cache=shared", random_test_key())
+	}
+
+	#[fixture]
+	async fn backend(database_url: String) -> DatabaseAuditBackend {
 		init_drivers();
-		// Use named in-memory SQLite database with shared cache
-		// The "file:" prefix with "mode=memory" and "cache=shared" ensures
-		// all connections in the pool share the same in-memory database
-		let db_url = "sqlite:file:memdb1?mode=memory&cache=shared";
 
 		// Create backend with AnyPool
 		use sqlx::any::AnyPoolOptions;
 
 		let pool = AnyPoolOptions::new()
 			.max_connections(5)
-			.connect(db_url)
+			.connect(&database_url)
 			.await
 			.expect("Failed to connect to test database");
 
 		let backend = DatabaseAuditBackend {
 			pool: std::sync::Arc::new(pool),
-			database_url: db_url.to_string(),
+			database_url,
 		};
 		backend
 			.init_tables()
@@ -360,10 +366,9 @@ mod tests {
 		backend
 	}
 
+	#[rstest]
 	#[tokio::test]
-	async fn test_database_backend_init() {
-		let backend = create_test_backend().await;
-
+	async fn test_database_backend_init(#[future(awt)] backend: DatabaseAuditBackend) {
 		// Verify tables were created
 		let stmt = Query::select()
 			.expr_as(
@@ -374,6 +379,16 @@ mod tests {
 			.to_owned();
 		let sql = stmt.to_string(SqliteQueryBuilder);
 
+		// Keep one connection checked out so the pool must use a second one.
+		let mut connection = backend.pool.acquire().await.unwrap();
+		let first_count: i64 = sqlx::query(&sql)
+			.fetch_one(&mut *connection)
+			.await
+			.unwrap()
+			.try_get("count")
+			.unwrap();
+		assert_eq!(first_count, 0);
+
 		let rows = sqlx::query(&sql)
 			.fetch_all(backend.pool.as_ref())
 			.await
@@ -383,10 +398,15 @@ mod tests {
 		assert_eq!(count, 0);
 	}
 
+	#[rstest]
 	#[tokio::test]
-	async fn test_database_backend_log_event() {
-		let backend = create_test_backend().await;
-
+	async fn test_database_backend_log_event(
+		#[future(awt)] backend: DatabaseAuditBackend,
+		#[from(backend)]
+		#[future(awt)]
+		independent_backend: DatabaseAuditBackend,
+	) {
+		// Arrange
 		let mut changes = HashMap::new();
 		changes.insert(
 			"test_key".to_string(),
@@ -402,17 +422,19 @@ mod tests {
 			changes,
 		);
 
+		// Act
 		backend.log_event(event).await.unwrap();
 
+		// Assert
 		let events = backend.get_events(None).await.unwrap();
 		assert_eq!(events.len(), 1);
 		assert_eq!(events[0].event_type, EventType::ConfigUpdate);
+		assert_eq!(independent_backend.get_events(None).await.unwrap().len(), 0);
 	}
 
+	#[rstest]
 	#[tokio::test]
-	async fn test_database_backend_filter_by_type() {
-		let backend = create_test_backend().await;
-
+	async fn test_database_backend_filter_by_type(#[future(awt)] backend: DatabaseAuditBackend) {
 		for i in 0..5 {
 			let event_type = if i % 2 == 0 {
 				EventType::ConfigUpdate
@@ -444,10 +466,9 @@ mod tests {
 		assert_eq!(update_events.len(), 3);
 	}
 
+	#[rstest]
 	#[tokio::test]
-	async fn test_database_backend_filter_by_user() {
-		let backend = create_test_backend().await;
-
+	async fn test_database_backend_filter_by_user(#[future(awt)] backend: DatabaseAuditBackend) {
 		for i in 0..5 {
 			let user = if i % 2 == 0 { "alice" } else { "bob" };
 

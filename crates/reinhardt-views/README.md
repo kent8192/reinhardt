@@ -119,6 +119,9 @@ applications wire persistence behavior through their serializers and managers.
 #### Browsable API
 
 - Basic rendering infrastructure (minimal stub)
+- Syntax highlighting uses syntect's bundled syntaxes and themes with the
+  Oniguruma regex backend. External plist/YAML syntax and theme loading is
+  disabled to avoid unused parser dependencies.
 
 #### Admin Integration
 

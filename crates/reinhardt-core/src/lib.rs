@@ -49,7 +49,8 @@
 //! With the `reactive` feature, explicit `batch()` calls defer layout and passive
 //! effects until the outermost batch exits, then flush layout work before passive
 //! consumers while preserving write order within each timing. Layout effects remain
-//! synchronous outside batches, allowing form resets to publish one complete value snapshot.
+//! synchronous outside batches. Callback writes stay batched through the complete flush
+//! and deduplicate against pending callbacks, preserving complete form reset snapshots.
 //!
 //! ## Feature Flags
 //!

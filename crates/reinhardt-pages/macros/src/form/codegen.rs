@@ -5949,10 +5949,24 @@ fn generate_into_page(macro_ast: &TypedFormMacro, pages_crate: &TokenStream) -> 
 				let form_element = form_element.listener("reset", move |event| {
 					let __radio_form = __radio_form.clone();
 					#(#collection_snapshot_clones)*
+					let __reset_superseded = ::std::rc::Rc::new(::std::cell::Cell::new(false));
+					let __reset_observer = #pages_crate::reactive::Effect::new_with_timing({
+						let __watched_form = __radio_form.clone();
+						let __reset_superseded = ::std::rc::Rc::clone(&__reset_superseded);
+						move || {
+							let _ = #pages_crate::FormRuntimeSource::runtime_current_values(&__watched_form);
+							for field in #pages_crate::FormRuntimeSource::runtime_fields(&__watched_form) {
+								let _ = #pages_crate::FormRuntimeSource::runtime_custom_widget_error(&__watched_form, *field);
+							}
+							__reset_superseded.set(true);
+						}
+					}, #pages_crate::reactive::EffectTiming::Layout);
+					// The first read installs subscriptions; later writes supersede this reset.
+					__reset_superseded.set(false);
 					// Run after the native reset and honor cancellation by other listeners.
 					#pages_crate::platform::spawn_task(async move {
+						let _reset_observer = __reset_observer;
 						if !event.default_prevented() {
-							let __defaults = __radio_form.__initial_values.borrow().clone();
 							use ::wasm_bindgen::JsCast;
 							let __reset_form = event.target()
 								.and_then(|target| target.dyn_into::<::web_sys::HtmlFormElement>().ok());
@@ -5964,13 +5978,16 @@ fn generate_into_page(macro_ast: &TypedFormMacro, pages_crate: &TokenStream) -> 
 									#(#collection_dom_resets)*
 								}
 							};
-							#pages_crate::reactive::batch(|| {
-								#(#scalar_resets)*
-								#(#collection_resets)*
-								__sync_dom();
-								__radio_form.__native_reset_epoch.update(|epoch| *epoch = epoch.wrapping_add(1));
-							});
-							// Collection effects may have replaced controls while flushing the batch.
+							if !__reset_superseded.get() {
+								let __defaults = __radio_form.__initial_values.borrow().clone();
+								#pages_crate::reactive::batch(|| {
+									#(#scalar_resets)*
+									#(#collection_resets)*
+									__sync_dom();
+									__radio_form.__native_reset_epoch.update(|epoch| *epoch = epoch.wrapping_add(1));
+								});
+							}
+							// Preserve later writes after the browser reset and any reactive replacements.
 							__sync_dom();
 						}
 					});

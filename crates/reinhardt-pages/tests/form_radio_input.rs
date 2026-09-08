@@ -422,6 +422,96 @@ mod browser {
 	}
 
 	#[wasm_bindgen_test]
+	async fn native_radio_reset_preserves_writes_after_dispatch() {
+		// Arrange: a radio and ordinary controls share the pending reset operation.
+		let radio = form! {
+			name: DeferredResetRadios,
+			fields: {
+				answer: ChoiceField<String> {
+					widget: RadioInput,
+					choices: [("yes", "Yes")],
+				}
+				name: CharField {
+					initial: "initial name"
+				}
+				enabled: BooleanField {}
+			}
+		};
+		let runtime = use_form(&radio).revalidate_on(RevalidateOn::Change).build();
+		let container = TestContainer::mount(radio.clone().into_page());
+		radio.answer().set(String::from("other"));
+		runtime.set_value(radio.name_field(), String::from("edited name"));
+		runtime.set_value(radio.enabled_field(), true);
+
+		// A synchronous write after reset() wins over its pending synchronization task.
+		container.native_form().reset();
+		runtime.set_value(radio.answer_field(), String::from("yes"));
+		runtime.set_error(radio.answer_field(), FieldError::new("new error"));
+		gloo_timers::future::TimeoutFuture::new(0).await;
+		assert_eq!(runtime.watch().get().answer, "yes");
+		assert!(container.input("answer").checked());
+		assert_eq!(runtime.watch().get().name, "edited name");
+		assert_eq!(container.input("name").value(), "edited name");
+		assert!(runtime.get_values().enabled);
+		assert!(container.input("enabled").checked());
+		assert!(runtime.get_field_state(radio.answer_field()).is_touched);
+		assert_eq!(
+			runtime.get_field_state(radio.answer_field()).error,
+			Some(FieldError::new("new error"))
+		);
+
+		// Later non-cancelling reset listeners can also replace the pending reset.
+		radio.answer().set(String::from("other"));
+		{
+			let form_element = Element::new(container.native_form().into());
+			let listener_runtime = runtime.clone();
+			let field = radio.answer_field();
+			let name_field = radio.name_field();
+			let _later_reset = form_element.add_event_listener_with_event("reset", move |_| {
+				listener_runtime.set_value(field, String::from("yes"));
+				listener_runtime.set_value(name_field, String::from("listener name"));
+				listener_runtime.set_error(field, FieldError::new("listener error"));
+			});
+			container.native_form().reset();
+			gloo_timers::future::TimeoutFuture::new(0).await;
+			assert_eq!(runtime.watch().get().answer, "yes");
+			assert!(container.input("answer").checked());
+			assert_eq!(runtime.watch().get().name, "listener name");
+			assert_eq!(container.input("name").value(), "listener name");
+			assert!(runtime.get_field_state(radio.answer_field()).is_touched);
+			assert_eq!(
+				runtime.get_field_state(radio.answer_field()).error,
+				Some(FieldError::new("listener error"))
+			);
+		}
+
+		// Equal-value writes still supersede a reset and retain newer validation state.
+		container.native_form().reset();
+		runtime.set_value(radio.answer_field(), String::from("yes"));
+		runtime.set_error(radio.answer_field(), FieldError::new("same-value error"));
+		gloo_timers::future::TimeoutFuture::new(0).await;
+		assert_eq!(runtime.watch().get().answer, "yes");
+		assert!(container.input("answer").checked());
+		assert!(runtime.get_field_state(radio.answer_field()).is_touched);
+		assert_eq!(
+			runtime.get_field_state(radio.answer_field()).error,
+			Some(FieldError::new("same-value error"))
+		);
+
+		// Completed guards are disposed, so the next ordinary reset can finish normally.
+		container.native_form().reset();
+		gloo_timers::future::TimeoutFuture::new(0).await;
+		assert_eq!(runtime.watch().get().answer, "");
+		assert!(!container.input("answer").checked());
+		assert_eq!(runtime.watch().get().name, "initial name");
+		assert_eq!(container.input("name").value(), "initial name");
+		assert!(!runtime.get_values().enabled);
+		assert!(!container.input("enabled").checked());
+		assert!(!runtime.form_state().is_touched.get());
+		assert_eq!(runtime.get_field_state(radio.answer_field()).error, None);
+	}
+
+	#[wasm_bindgen_test]
 	async fn native_radio_reset_restores_mixed_fields_and_collection_paths() {
 		struct LoadedFields {
 			answer: String,

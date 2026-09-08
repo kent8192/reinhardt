@@ -859,7 +859,9 @@
 //! use their values at page construction, or field defaults for new rows. Reset
 //! preserves collection keys, order, and unbound values, and clears file inputs.
 //! DOM and signal values are restored before runtime touched state and errors are
-//! cleared without change or validation events. Custom widget errors remain
+//! cleared without change or validation events. Later reset listeners or immediate
+//! source writes after `reset()` supersede the pending reset, even for equal values.
+//! Custom widget errors remain
 //! reactive after reset. Scalar and collection
 //! radios preserve `autocomplete` and retain focus within their reactive subtree.
 //! For scalar fields, `bind: false` snapshots the current value without binding.

@@ -485,6 +485,14 @@ cargo make fmt-check
 cargo make clippy-check
 ```
 
+**Breaking-change warning check:**
+`Warn Invalid Breaking Change Target` posts to the PR conversation through the
+issue-comment API and requires `pull-requests: write` alongside `issues: write`.
+A `403 Resource not accessible by integration` during comment creation is a
+workflow permission failure. This `pull_request_target` workflow runs from the
+base branch, so permission repairs must reach that branch before a new PR event
+can validate them; changing only the affected PR head does not update the workflow.
+
 ### RP-2 (SHOULD): Self-Review
 
 - Review your own PR before requesting review from others

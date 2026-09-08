@@ -12,6 +12,8 @@ concurrency:
 
 permissions:
   issues: write
+  # The issue-comment endpoint also requires access to the PR conversation.
+  pull-requests: write
 
 jobs:
   warn:

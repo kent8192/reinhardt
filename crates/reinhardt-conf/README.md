@@ -392,9 +392,10 @@ use reinhardt::conf::settings::{SettingsBuilder, SettingsConfig};
 
 ## Testing
 
-Database audit tests use a uniquely named in-memory SQLite database for each
-backend. Connections within one pool share that database, while concurrent
-backends remain isolated.
+Database audit tests inject an async `rstest` backend fixture, composed with
+`reinhardt_test::fixtures::random_test_key` for each in-memory SQLite database.
+Connections within one pool share that database, while independently injected
+backends remain isolated. Pool cleanup follows the fixture's lifetime.
 
 ```bash
 cargo test -p reinhardt-conf --all-features --lib settings::audit::backends::database::tests -- --test-threads=8

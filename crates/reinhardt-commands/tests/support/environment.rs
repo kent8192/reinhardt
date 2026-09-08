@@ -1,17 +1,15 @@
-//! Environment restoration for serial-protected command tests.
+//! Environment fixtures for serial-protected command tests.
 
-use std::ffi::OsString;
+use reinhardt_test::{TeardownGuard, TestResource};
+use rstest::fixture;
+use std::ffi::{OsStr, OsString};
 
-pub(super) struct EnvVarGuard {
+pub(super) struct EnvVars {
 	vars: Vec<(String, Option<OsString>)>,
 }
 
-impl EnvVarGuard {
-	pub(super) fn new() -> Self {
-		Self { vars: Vec::new() }
-	}
-
-	pub(super) fn set(&mut self, key: &str, value: &str) {
+impl EnvVars {
+	pub(super) fn set(&mut self, key: &str, value: impl AsRef<OsStr>) {
 		self.vars.push((key.to_owned(), std::env::var_os(key)));
 		// SAFETY: environment-changing callers share a serial test group.
 		unsafe {
@@ -20,8 +18,12 @@ impl EnvVarGuard {
 	}
 }
 
-impl Drop for EnvVarGuard {
-	fn drop(&mut self) {
+impl TestResource for EnvVars {
+	fn setup() -> Self {
+		Self { vars: Vec::new() }
+	}
+
+	fn teardown(&mut self) {
 		for (key, original) in self.vars.iter().rev() {
 			// SAFETY: the caller retains its serial test guard during cleanup.
 			unsafe {
@@ -32,4 +34,9 @@ impl Drop for EnvVarGuard {
 			}
 		}
 	}
+}
+
+#[fixture]
+pub(super) fn env_vars() -> TeardownGuard<EnvVars> {
+	TeardownGuard::new()
 }

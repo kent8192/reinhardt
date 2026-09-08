@@ -12,7 +12,8 @@ use reinhardt_pages::dom::Element;
 use reinhardt_pages::prelude::defer_yield;
 use reinhardt_pages::reactive::{ReactiveScope, Signal, with_runtime};
 use reinhardt_pages::{PageElement, page};
-use rstest::rstest;
+use reinhardt_test::wasm::Screen;
+use rstest::{fixture, rstest};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_test::*;
@@ -22,6 +23,37 @@ wasm_bindgen_test_configure!(run_in_browser);
 struct SsrStateElement(web_sys::Element);
 
 struct AttachedRootCleanup(web_sys::Element);
+
+struct ControlFixture {
+	// Tear down mounted owners before their reactive scope is disposed.
+	root: AttachedRootCleanup,
+	scope: ReactiveScope,
+	screen: Screen,
+}
+
+#[fixture]
+fn controls() -> ControlFixture {
+	let document = web_sys::window()
+		.expect("window")
+		.document()
+		.expect("document");
+	let root = document.create_element("div").expect("root");
+	let screen = Screen::within(&root);
+	ControlFixture {
+		root: AttachedRootCleanup(root),
+		scope: ReactiveScope::new(),
+		screen,
+	}
+}
+
+#[fixture]
+fn ssr_state() -> SsrStateElement {
+	let document = web_sys::window()
+		.expect("window")
+		.document()
+		.expect("document");
+	SsrStateElement::install(&document)
+}
 
 struct HydratedControlPage(Page);
 
@@ -509,14 +541,13 @@ fn shared_range_removal_reconciles_only_live_surviving_controls(
 #[case(false)]
 #[case(true)]
 #[wasm_bindgen_test]
-fn reactive_multiple_reconciles_email_value_sanitization(#[case] nested_in_reactive_if: bool) {
-	ReactiveScope::run(|| {
+fn reactive_multiple_reconciles_email_value_sanitization(
+	controls: ControlFixture,
+	#[case] nested_in_reactive_if: bool,
+) {
+	controls.scope.enter(|| {
 		// Arrange
-		let document = web_sys::window()
-			.expect("window")
-			.document()
-			.expect("document");
-		let root = Element::new(document.create_element("div").expect("root"));
+		let root = Element::new(controls.root.0.clone());
 		let value = Signal::new("a@example.test,  b@example.test ".to_owned());
 		let multiple = Signal::new(false);
 		let reactive_multiple = multiple.clone();
@@ -537,10 +568,10 @@ fn reactive_multiple_reconciles_email_value_sanitization(#[case] nested_in_react
 			email()
 		};
 		page.mount(&root).expect("mount");
-		let input: web_sys::HtmlInputElement = root
-			.as_web_sys()
-			.first_element_child()
-			.expect("email")
+		let input: web_sys::HtmlInputElement = controls
+			.screen
+			.query_selector("input")
+			.get_only()
 			.unchecked_into();
 
 		// Act
@@ -550,7 +581,6 @@ fn reactive_multiple_reconciles_email_value_sanitization(#[case] nested_in_react
 		// Assert
 		assert_eq!(value.get(), "a@example.test,b@example.test");
 		assert_eq!(input.value(), "a@example.test,b@example.test");
-		reinhardt_pages::cleanup_reactive_nodes();
 	});
 }
 
@@ -2553,14 +2583,11 @@ fn number_binding_recovers_incomplete_raw_from_sanitized_browser_input() {
 	});
 }
 
+#[rstest]
 #[wasm_bindgen_test]
-fn rejected_number_raw_survives_an_error_driven_reactive_remount() {
-	ReactiveScope::run(|| {
-		let document = web_sys::window()
-			.expect("window")
-			.document()
-			.expect("document");
-		let root = Element::new(document.create_element("div").expect("root"));
+fn rejected_number_raw_survives_an_error_driven_reactive_remount(controls: ControlFixture) {
+	controls.scope.enter(|| {
+		let root = Element::new(controls.root.0.clone());
 		let value = Signal::new(7_i32);
 		let error = Signal::new(None::<NumberParseError>);
 		let render_value = value.clone();
@@ -2585,11 +2612,10 @@ fn rejected_number_raw_survives_an_error_driven_reactive_remount() {
 		})
 		.mount(&root)
 		.expect("mount");
-		let input: web_sys::HtmlInputElement = root
-			.as_web_sys()
+		let input: web_sys::HtmlInputElement = controls
+			.screen
 			.query_selector("input")
-			.expect("query")
-			.expect("input")
+			.get_only()
 			.unchecked_into();
 
 		dispatch_keydown(&input, "Home", false);
@@ -2601,16 +2627,15 @@ fn rejected_number_raw_survives_an_error_driven_reactive_remount() {
 		assert_eq!(value.get(), 7);
 		assert_eq!(error.get().expect("rejected number").raw(), "1e-");
 		assert!(
-			root.as_web_sys()
+			controls
+				.screen
 				.query_selector("#number-validation")
-				.expect("query")
-				.is_some()
+				.exists()
 		);
-		let replacement: web_sys::HtmlInputElement = root
-			.as_web_sys()
+		let replacement: web_sys::HtmlInputElement = controls
+			.screen
 			.query_selector("input")
-			.expect("query")
-			.expect("replacement")
+			.get_only()
 			.unchecked_into();
 		dispatch_before_input(&replacement, Some("0"), "insertText");
 		replacement.set_value("");
@@ -2618,7 +2643,6 @@ fn rejected_number_raw_survives_an_error_driven_reactive_remount() {
 
 		assert_eq!(value.get(), 1);
 		assert_eq!(error.get(), None);
-		reinhardt_pages::cleanup_reactive_nodes();
 	});
 }
 
@@ -2992,14 +3016,15 @@ impl Component for FailingHydrationRoot {
 	}
 }
 
+#[rstest]
 #[wasm_bindgen_test]
-fn failed_root_hydration_rolls_back_earlier_reactive_siblings() {
-	ReactiveScope::run(|| {
-		let document = web_sys::window()
-			.expect("window")
-			.document()
-			.expect("document");
-		let raw_root = document.create_element("div").expect("root");
+fn failed_root_hydration_rolls_back_earlier_reactive_siblings(
+	controls: ControlFixture,
+	#[from(ssr_state)] _state: SsrStateElement,
+) {
+	controls.scope.enter(|| {
+		let raw_root = controls.root.0.clone();
+		let document = raw_root.owner_document().expect("document");
 		let raw_button = document.create_element("button").expect("button");
 		raw_button.set_id("reactive-sibling");
 		raw_button.set_text_content(Some("ready"));
@@ -3012,7 +3037,6 @@ fn failed_root_hydration_rolls_back_earlier_reactive_siblings() {
 		let trigger = Signal::new(0_u32);
 		let render_count = Rc::new(Cell::new(0));
 		let listener_count = Rc::new(Cell::new(0));
-		let _state = SsrStateElement::install(&document);
 
 		let error = reinhardt_pages::hydration::hydrate(
 			&FailingHydrationRoot {
@@ -3629,14 +3653,15 @@ impl Component for HydratedReactiveIfInput {
 	}
 }
 
+#[rstest]
 #[wasm_bindgen_test]
-fn hydrated_reactive_if_adopts_before_subscribing_and_transfers_guards() {
-	ReactiveScope::run(|| {
-		let document = web_sys::window()
-			.expect("window")
-			.document()
-			.expect("document");
-		let raw_root = document.create_element("div").expect("root");
+fn hydrated_reactive_if_adopts_before_subscribing_and_transfers_guards(
+	controls: ControlFixture,
+	#[from(ssr_state)] _state: SsrStateElement,
+) {
+	controls.scope.enter(|| {
+		let raw_root = controls.root.0.clone();
+		let document = raw_root.owner_document().expect("document");
 		let raw_input = document.create_element("input").expect("input");
 		raw_input.set_id("primary");
 		let primary: web_sys::HtmlInputElement = raw_input.clone().unchecked_into();
@@ -3646,7 +3671,6 @@ fn hydrated_reactive_if_adopts_before_subscribing_and_transfers_guards() {
 		let alternate = Signal::new(false);
 		let value = Signal::new("server".to_owned());
 		let observed = Rc::new(RefCell::new(String::new()));
-		let _state = SsrStateElement::install(&document);
 
 		reinhardt_pages::hydration::hydrate(
 			&HydratedReactiveIfInput {
@@ -3659,10 +3683,10 @@ fn hydrated_reactive_if_adopts_before_subscribing_and_transfers_guards() {
 		.expect("hydrate");
 		assert_eq!(value.get(), "restored");
 		// Adoption changes the condition, so hydration converges before returning.
-		let converged: web_sys::HtmlInputElement = root
-			.as_web_sys()
-			.first_element_child()
-			.expect("converged false branch")
+		let converged: web_sys::HtmlInputElement = controls
+			.screen
+			.query_selector("input")
+			.get_only()
 			.unchecked_into();
 		assert_eq!(converged.id(), "replacement");
 		assert!(!raw_input.is_same_node(Some(&converged)));
@@ -3674,10 +3698,10 @@ fn hydrated_reactive_if_adopts_before_subscribing_and_transfers_guards() {
 		assert_eq!(&*observed.borrow(), "");
 
 		alternate.set(true);
-		let switched: web_sys::HtmlInputElement = root
-			.as_web_sys()
-			.first_element_child()
-			.expect("switched branch")
+		let switched: web_sys::HtmlInputElement = controls
+			.screen
+			.query_selector("input")
+			.get_only()
 			.unchecked_into();
 		assert_eq!(switched.id(), "primary");
 		converged.set_value("stale");
@@ -3696,7 +3720,6 @@ fn hydrated_reactive_if_adopts_before_subscribing_and_transfers_guards() {
 			.expect("dispatch");
 		assert_eq!(value.get(), "new branch");
 		assert_eq!(&*observed.borrow(), "new branch");
-		reinhardt_pages::cleanup_reactive_nodes();
 	});
 }
 
@@ -3704,12 +3727,14 @@ fn hydrated_reactive_if_adopts_before_subscribing_and_transfers_guards() {
 #[case::mount(false)]
 #[case::hydrate(true)]
 #[wasm_bindgen_test]
-fn reactive_if_preserves_owners_when_the_condition_stays_true(#[case] hydrate: bool) {
-	ReactiveScope::run(|| {
+fn reactive_if_preserves_owners_when_the_condition_stays_true(
+	controls: ControlFixture,
+	#[from(ssr_state)] _state: SsrStateElement,
+	#[case] hydrate: bool,
+) {
+	controls.scope.enter(|| {
 		// Arrange
-		let document = web_sys::window().unwrap().document().unwrap();
-		let container = document.create_element("div").unwrap();
-		let _cleanup = AttachedRootCleanup(container.clone());
+		let container = controls.root.0.clone();
 		let condition = Signal::new(0);
 		let value = Signal::new("initial".to_owned());
 		let observed = Signal::new(String::new());
@@ -3728,23 +3753,19 @@ fn reactive_if_preserves_owners_when_the_condition_stays_true(#[case] hydrate: b
 				|| Page::Empty,
 			))
 			.into_page();
-		let root = if hydrate {
+		if hydrate {
 			container.set_inner_html(&page.render_to_string());
 			let root = Element::new(container.first_element_child().unwrap());
-			let _state = SsrStateElement::install(&document);
 			reinhardt_pages::hydration::hydrate(&HydratedControlPage(page), &root).unwrap();
-			root
 		} else {
 			let root = Element::new(container);
 			page.mount(&root).unwrap();
-			root
-		};
+		}
 		condition.set(1);
-		let input: web_sys::HtmlInputElement = root
-			.as_web_sys()
+		let input: web_sys::HtmlInputElement = controls
+			.screen
 			.query_selector("input")
-			.unwrap()
-			.unwrap()
+			.get_only()
 			.unchecked_into();
 
 		// Act: the condition re-evaluates without replacing the branch.
@@ -3753,14 +3774,7 @@ fn reactive_if_preserves_owners_when_the_condition_stays_true(#[case] hydrate: b
 
 		// Assert
 		assert_eq!(input.value(), "updated");
-		assert!(
-			input.is_same_node(
-				root.as_web_sys()
-					.query_selector("input")
-					.unwrap()
-					.as_deref()
-			)
-		);
+		assert!(input.is_same_node(controls.screen.query_selector("input").query().as_deref()));
 		input.set_value("edited");
 		input
 			.dispatch_event(&web_sys::InputEvent::new("input").unwrap())

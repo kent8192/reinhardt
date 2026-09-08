@@ -960,6 +960,12 @@ let validator = ConditionalValidator::unless(
 );
 ```
 
+## Testing
+
+Reactive batching regressions inject `rstest` scope fixtures. Native fixtures use
+`reinhardt-test` teardown guards around the local runtime's `ReactiveScope`; WASM
+fixtures retain the same scope type and its existing automatic cleanup.
+
 ## License
 
 Licensed under the BSD 3-Clause License.

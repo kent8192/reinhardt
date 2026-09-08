@@ -761,8 +761,32 @@ pub(crate) fn subscribe_node_to_observer(node: NodeId, observer: NodeId) {
 mod tests {
 	use super::*;
 	use crate::reactive::{Effect, Memo, ReactiveScope, Signal};
+	#[cfg(native)]
+	use reinhardt_test::resource::{TeardownGuard, TestResource};
 	use serial_test::serial;
 	use std::{cell::Cell, rc::Rc};
+
+	#[cfg(native)]
+	impl TestResource for ReactiveScope {
+		fn setup() -> Self {
+			Self::new()
+		}
+
+		fn teardown(&mut self) {
+			self.dispose();
+		}
+	}
+
+	// Keep unit tests on this crate's runtime rather than the facade's compiled core.
+	#[cfg(native)]
+	type ReactiveScopeFixture = TeardownGuard<ReactiveScope>;
+	#[cfg(wasm)]
+	type ReactiveScopeFixture = ReactiveScope;
+
+	#[rstest::fixture]
+	fn reactive_scope() -> ReactiveScopeFixture {
+		ReactiveScopeFixture::default()
+	}
 
 	#[test]
 	#[serial]
@@ -1086,8 +1110,11 @@ mod tests {
 	#[case::layout(EffectTiming::Layout)]
 	#[case::passive(EffectTiming::Passive)]
 	#[serial(reactive_runtime)]
-	fn nested_batch_defers_effects_but_keeps_memo_reads_current(#[case] timing: EffectTiming) {
-		ReactiveScope::run(|| {
+	fn nested_batch_defers_effects_but_keeps_memo_reads_current(
+		reactive_scope: ReactiveScopeFixture,
+		#[case] timing: EffectTiming,
+	) {
+		reactive_scope.enter(|| {
 			// Arrange
 			let source = Signal::new(0);
 			let derived = Memo::new(move || source.get() * 2);
@@ -1119,10 +1146,13 @@ mod tests {
 	#[case::layout(EffectTiming::Layout)]
 	#[case::passive(EffectTiming::Passive)]
 	#[serial(reactive_runtime)]
-	fn batch_releases_effects_after_error_and_unwind(#[case] timing: EffectTiming) {
+	fn batch_releases_effects_after_error_and_unwind(
+		reactive_scope: ReactiveScopeFixture,
+		#[case] timing: EffectTiming,
+	) {
 		use std::panic::{AssertUnwindSafe, catch_unwind};
 
-		ReactiveScope::run(|| {
+		reactive_scope.enter(|| {
 			// Arrange
 			let source = Signal::new(0);
 			let observed = Rc::new(RefCell::new(Vec::new()));

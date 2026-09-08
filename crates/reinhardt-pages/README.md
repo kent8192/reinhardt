@@ -1600,6 +1600,12 @@ fn counter() -> View {
 | `ast` | AST processing support |
 | `web-sys-full` | All required web-sys features for WASM applications |
 
+## Testing
+
+Controlled-input browser regressions inject `rstest` fixtures for reactive scopes,
+DOM roots, and SSR state. Queries use `reinhardt-test` screens scoped to each root;
+fixture teardown releases mounted owners before disposing their reactive scope.
+
 ## License
 
 Licensed under the BSD 3-Clause License.

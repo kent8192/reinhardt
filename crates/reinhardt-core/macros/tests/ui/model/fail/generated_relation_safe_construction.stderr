@@ -27,4 +27,6 @@ note: if you're trying to build a new `RelationPath<Document, Project, Generated
            candidate #8: `parking_lot_core::thread_parker::ThreadParkerT`
            candidate #9: `rand::distr::uniform::UniformSampler`
            candidate #10: `ring::aead::BoundKey`
-           candidate #11: `typenum::marker_traits::Bit`
+           candidate #11: `simdutf8::basic::imp::ChunkedUtf8Validator`
+           candidate #12: `simdutf8::basic::imp::Utf8Validator`
+           candidate #13: `typenum::marker_traits::Bit`

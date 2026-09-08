@@ -84,7 +84,7 @@ skip = [
   { crate = "getrandom@0.2.17", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "getrandom@0.3.4", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "hashbrown@0.16.1", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
-  { crate = "hashlink@0.12.1", reason = "evcxr 0.22.0 salsa 0.28 (issue #5825)" },
+  { crate = "hashlink:>=0.12,<0.13", reason = "evcxr 0.22.0 uses salsa's 0.12 API while SQLx requires the incompatible 0.10 line (issue #5825); allow compatible patch updates." },
   { crate = "icu_collections@1.5.0", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "icu_provider@1.5.0", reason = "Duplicate line retained by upstream dependency constraints in the full feature graph." },
   { crate = "inout@0.1.4", reason = "The full feature graph retains inout 0.1.4 and 0.2.2 through incompatible transitive dependency requirements; tracked in issue #5665." },

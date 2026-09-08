@@ -3984,14 +3984,15 @@ fn generate_collection_field_view(
 	let input_type = widget_to_input_type(&field.widget);
 	let label_text = field.display.label.as_deref().unwrap_or(&field_name_str);
 	let placeholder = field.display.placeholder.as_deref().unwrap_or("");
-	let required = field.validation.required;
 	let autocomplete_attr = field.display.autocomplete.as_deref().map(|val| {
 		quote! { .attr("autocomplete", #val) }
 	});
 	let wrapper_class = field.styling.wrapper_class();
 	let label_class = field.styling.label_class();
 	let input_class = field.styling.input_class();
-	let custom_attrs = generate_custom_attrs(&field.custom_attrs);
+	let field_id = quote! { __field_id };
+	let field_attrs = generate_field_attrs(field, &field_id, false);
+	let help_text = generate_field_help_text(field, &field_id);
 	let listener = generate_collection_bind_listener(field, pages_crate, collection_name);
 	let field_value = collection_field_value_expr(field);
 	let value_attr = if matches!(
@@ -4018,7 +4019,6 @@ fn generate_collection_field_view(
 
 	let input_element = match &field.widget {
 		TypedWidget::RadioInput => {
-			let disabled = field.display.disabled;
 			quote! {
 				PageElement::new("input")
 					.attr("type", "radio")
@@ -4026,10 +4026,8 @@ fn generate_collection_field_view(
 					.attr("id", __field_id.clone())
 					#value_attr
 					.attr("class", #input_class)
-					.bool_attr("required", #required)
-					.bool_attr("disabled", #disabled)
+					#field_attrs
 					#checked_attr
-					#custom_attrs
 					#listener
 			}
 		}
@@ -4040,9 +4038,8 @@ fn generate_collection_field_view(
 					.attr("id", __field_id.clone())
 					.attr("class", #input_class)
 					.attr("placeholder", #placeholder)
-					.bool_attr("required", #required)
 					#autocomplete_attr
-					#custom_attrs
+					#field_attrs
 					#listener
 					.child(#field_value)
 			}
@@ -4054,10 +4051,9 @@ fn generate_collection_field_view(
 					.attr("name", __field_name.clone())
 					.attr("id", __field_id.clone())
 					.attr("class", #input_class)
-					.bool_attr("required", #required)
 					.bool_attr("multiple", #multiple)
 					#autocomplete_attr
-					#custom_attrs
+					#field_attrs
 					#listener
 			}
 		}
@@ -4069,9 +4065,8 @@ fn generate_collection_field_view(
 					.attr("id", __field_id.clone())
 					.attr("class", #input_class)
 					.attr("value", "true")
-					.bool_attr("required", #required)
 					#checked_attr
-					#custom_attrs
+					#field_attrs
 					#listener
 			}
 		}
@@ -4083,10 +4078,9 @@ fn generate_collection_field_view(
 					.attr("id", __field_id.clone())
 					.attr("class", #input_class)
 					.attr("placeholder", #placeholder)
-					.bool_attr("required", #required)
 					#value_attr
 					#autocomplete_attr
-					#custom_attrs
+					#field_attrs
 					#listener
 			}
 		}
@@ -4148,6 +4142,7 @@ fn generate_collection_field_view(
 					#wrapper_attrs
 					#label_element
 					.child(#input_element)
+					#help_text
 			}
 		}
 	}
@@ -4464,9 +4459,9 @@ fn generate_field_view(
 	let label_class = field.styling.label_class();
 	let input_class = field.styling.input_class();
 
-	// Generate custom attributes (aria-*, data-*)
-	let custom_attrs = generate_custom_attrs(&field.custom_attrs);
-	let native_attrs = generate_native_attrs(&field.native_attrs);
+	let field_id = quote! { #field_name_str };
+	let field_attrs = generate_field_attrs(field, &field_id, false);
+	let help_text = generate_field_help_text(field, &field_id);
 
 	// Generate event listener for two-way binding
 	let event_listener =
@@ -4476,7 +4471,6 @@ fn generate_field_view(
 	let input_element = match &field.widget {
 		TypedWidget::RadioInput => {
 			let value = radio_input_value(field);
-			let disabled = field.display.disabled;
 			let input = quote! {
 				PageElement::new("input")
 					.attr("type", "radio")
@@ -4484,11 +4478,8 @@ fn generate_field_view(
 					.attr("id", #field_name_str)
 					.attr("value", #value)
 					.attr("class", #input_class)
-					.bool_attr("required", #required)
-					.bool_attr("disabled", #disabled)
+					#field_attrs
 					.bool_attr("checked", __radio_checked)
-					#native_attrs
-					#custom_attrs
 					#event_listener
 			};
 			if let Some(signal_ident) = signal_ident {
@@ -4574,10 +4565,8 @@ fn generate_field_view(
 					.attr("id", #field_name_str)
 					.attr("class", #input_class)
 					.attr("placeholder", #placeholder)
-						.bool_attr("required", #required)
 						#autocomplete_attr
-						#native_attrs
-						#custom_attrs
+						#field_attrs
 						#event_listener
 			}
 		}
@@ -4724,11 +4713,9 @@ fn generate_field_view(
 					.attr("name", #field_name_str)
 					.attr("id", #field_name_str)
 					.attr("class", #input_class)
-					.bool_attr("required", #required)
 					.bool_attr("multiple", #multiple)
 					#autocomplete_attr
-					#native_attrs
-					#custom_attrs
+					#field_attrs
 					#event_listener
 					#choice_children
 			}
@@ -4740,13 +4727,12 @@ fn generate_field_view(
 					.attr("name", #field_name_str)
 					.attr("id", #field_name_str)
 						.attr("class", #input_class)
-						.bool_attr("required", #required)
-						#native_attrs
-						#custom_attrs
+						#field_attrs
 						#event_listener
 			}
 		}
 		TypedWidget::RadioSelect if field.choices_config.is_some() => {
+			let field_attrs = generate_field_attrs(field, &field_id, true);
 			let choices_name =
 				syn::Ident::new(&format!("{}_choices", field.name), field.name.span());
 			let choice_items_name =
@@ -4809,11 +4795,8 @@ fn generate_field_view(
 											.attr("id", __choice_id)
 											.attr("value", choice_value.to_string())
 											.attr("class", #input_class)
-											.bool_attr("required", #required)
-											.bool_attr("disabled", choice.disabled)
 											#checked_attr
-											#native_attrs
-											#custom_attrs
+											#field_attrs
 											#event_listener
 									)
 									.child(choice.label)
@@ -4832,9 +4815,7 @@ fn generate_field_view(
 					.attr("name", #field_name_str)
 					.attr("id", #field_name_str)
 						.attr("class", #input_class)
-						.bool_attr("required", #required)
-						#native_attrs
-						#custom_attrs
+						#field_attrs
 						#event_listener
 			}
 		}
@@ -4847,10 +4828,8 @@ fn generate_field_view(
 					.attr("id", #field_name_str)
 					.attr("class", #input_class)
 						.attr("placeholder", #placeholder)
-						.bool_attr("required", #required)
 						#autocomplete_attr
-						#native_attrs
-						#custom_attrs
+						#field_attrs
 						#event_listener
 			}
 		}
@@ -4874,16 +4853,29 @@ fn generate_field_view(
 		(None, TokenStream::new(), TokenStream::new())
 	};
 
-	// Generate label element (skip for hidden inputs)
+	let is_radio_group =
+		matches!(field.widget, TypedWidget::RadioSelect) && field.choices_config.is_some();
+	let group_label_id = format!("{field_name_str}--label");
+
+	// Native radio groups use legends; custom wrappers need a non-label caption.
 	let label_element = if matches!(field.widget, TypedWidget::HiddenInput) {
 		quote! {}
 	} else {
+		let (label_tag, label_target) = if is_radio_group {
+			if field.wrapper.is_some() {
+				("span", quote! { .attr("id", #group_label_id) })
+			} else {
+				("legend", TokenStream::new())
+			}
+		} else {
+			("label", quote! { .attr("for", #field_name_str) })
+		};
 		// If icon position is Label, include the icon inside the label
 		let icon_child = icon_in_label.unwrap_or_default();
 		quote! {
 			.child(
-				PageElement::new("label")
-					.attr("for", #field_name_str)
+				PageElement::new(#label_tag)
+					#label_target
 					.attr("class", #label_class)
 					#icon_child
 					.child(#label_text)
@@ -4895,21 +4887,33 @@ fn generate_field_view(
 	if matches!(field.widget, TypedWidget::HiddenInput) {
 		input_element
 	} else {
-		// Use custom wrapper if specified, otherwise default to div
+		// Custom wrappers can be phrasing elements that cannot contain a fieldset.
 		let wrapper_attrs = generate_wrapper_attrs(&field.wrapper, wrapper_class);
 		let wrapper_tag = field
 			.wrapper
 			.as_ref()
 			.map(|w| w.tag.as_str())
-			.unwrap_or("div");
+			.unwrap_or(if is_radio_group { "fieldset" } else { "div" });
+		let group_attrs = if is_radio_group && field.wrapper.is_some() {
+			let has_role = field
+				.wrapper
+				.as_ref()
+				.is_some_and(|wrapper| wrapper.attrs.iter().any(|attr| attr.name == "role"));
+			let role = (!has_role).then(|| quote! { .attr("role", "group") });
+			quote! { #role .attr("aria-labelledby", #group_label_id) }
+		} else {
+			TokenStream::new()
+		};
 
 		quote! {
 			PageElement::new(#wrapper_tag)
 				#wrapper_attrs
+				#group_attrs
 				#label_element
 				#icon_left
 				.child(#input_element)
 				#icon_right
+				#help_text
 		}
 	}
 }
@@ -5024,18 +5028,152 @@ fn generate_icon_child_attrs(attrs: &[reinhardt_manouche::core::TypedIconAttr]) 
 	result
 }
 
-/// Generates custom attribute code (aria-*, data-*) for form field input elements.
+/// Lowers field metadata once for ordinary controls, radio choices, and collection items.
+fn generate_field_attrs(
+	field: &TypedFormFieldDef,
+	field_id: &TokenStream,
+	radio_choice: bool,
+) -> TokenStream {
+	let text_input = matches!(
+		field.widget,
+		TypedWidget::TextInput
+			| TypedWidget::SearchInput
+			| TypedWidget::TelInput
+			| TypedWidget::UrlInput
+			| TypedWidget::EmailInput
+			| TypedWidget::PasswordInput
+	);
+	let textarea = matches!(field.widget, TypedWidget::Textarea);
+	let numeric = matches!(
+		field.widget,
+		TypedWidget::NumberInput | TypedWidget::RangeInput
+	);
+	let readonly = field.display.readonly
+		&& (text_input
+			|| textarea
+			|| matches!(
+				field.widget,
+				TypedWidget::NumberInput
+					| TypedWidget::DateInput
+					| TypedWidget::MonthInput
+					| TypedWidget::WeekInput
+					| TypedWidget::TimeInput
+					| TypedWidget::DateTimeInput
+			));
+	let required = field.validation.required
+		&& !matches!(
+			field.widget,
+			TypedWidget::HiddenInput | TypedWidget::RangeInput | TypedWidget::ColorInput
+		);
+	let disabled = field.display.disabled;
+	let autofocus = field.display.autofocus && !matches!(field.widget, TypedWidget::HiddenInput);
+	let (disabled, autofocus) = if radio_choice {
+		// A radio field disables every choice but assigns autofocus only once.
+		(
+			quote! { #disabled || choice.disabled },
+			quote! { #autofocus && i == 0 },
+		)
+	} else {
+		(quote! { #disabled }, quote! { #autofocus })
+	};
+	let mut result = quote! {
+		.bool_attr("required", #required)
+		.bool_attr("disabled", #disabled)
+		.bool_attr("readonly", #readonly)
+		.bool_attr("autofocus", #autofocus)
+	};
+
+	if text_input || textarea {
+		for (name, value) in [
+			("minlength", field.validation.min_length),
+			("maxlength", field.validation.max_length),
+		] {
+			if let Some(value) = value {
+				let value = value.to_string();
+				result.extend(quote! { .attr(#name, #value) });
+			}
+		}
+	}
+	if text_input && let Some(pattern) = &field.validation.pattern {
+		result.extend(quote! { .attr("pattern", #pattern) });
+	}
+	if numeric {
+		// Explicit native bounds take precedence independently, without duplicate attributes.
+		for (name, legacy, native) in [
+			("min", field.validation.min_value, &field.native_attrs.min),
+			("max", field.validation.max_value, &field.native_attrs.max),
+		] {
+			if native.is_none()
+				&& let Some(value) = legacy
+			{
+				let value = value.to_string();
+				result.extend(quote! { .attr(#name, #value) });
+			}
+		}
+	}
+	result.extend(generate_native_attrs(&field.native_attrs));
+	let help_id = field
+		.display
+		.help_text
+		.as_ref()
+		.filter(|_| !matches!(field.widget, TypedWidget::HiddenInput))
+		.map(|_| quote! { ::std::format!("{}--help", #field_id) });
+	result.extend(generate_custom_attrs(&field.custom_attrs, help_id.as_ref()));
+	result
+}
+
+/// Renders help as escaped text with an ID derived from the corresponding control.
+fn generate_field_help_text(field: &TypedFormFieldDef, field_id: &TokenStream) -> TokenStream {
+	if matches!(
+		field.widget,
+		TypedWidget::HiddenInput | TypedWidget::CustomExperimental(_)
+	) {
+		return TokenStream::new();
+	}
+	// Custom wrappers may accept only phrasing content, such as a paragraph.
+	let help_tag = if field.wrapper.is_some() { "span" } else { "p" };
+	field
+		.display
+		.help_text
+		.as_ref()
+		.map(|text| {
+			quote! {
+				.child(
+					PageElement::new(#help_tag)
+						.attr("id", ::std::format!("{}--help", #field_id))
+						.attr("class", "reinhardt-help")
+						.child(#text)
+				)
+			}
+		})
+		.unwrap_or_default()
+}
+
+/// Generates custom attributes, retaining existing descriptions when adding help text.
 ///
 /// Converts underscores in attribute names to hyphens for HTML output.
 /// For example, `aria_label` becomes `aria-label`.
-fn generate_custom_attrs(attrs: &[TypedCustomAttr]) -> TokenStream {
+fn generate_custom_attrs(attrs: &[TypedCustomAttr], help_id: Option<&TokenStream>) -> TokenStream {
 	let mut result = TokenStream::new();
+	let mut has_description = false;
 	for attr in attrs {
 		let html_name = attr.html_name(); // Convert underscores to hyphens
 		let value = &attr.value;
+		if html_name == "aria-describedby"
+			&& let Some(help_id) = help_id
+		{
+			result.extend(quote! {
+				.attr(#html_name, ::std::format!("{} {}", #value, #help_id))
+			});
+			has_description = true;
+			continue;
+		}
 		result.extend(quote! {
 			.attr(#html_name, #value)
 		});
+	}
+	if !has_description && let Some(help_id) = help_id {
+		result.extend(quote! { .attr("aria-describedby", #help_id) });
 	}
 	result
 }
@@ -7689,7 +7827,7 @@ mod tests {
 		assert!(output_str.contains("let choice_value = choice . value"));
 		assert!(output_str.contains(". attr (\"type\" , \"radio\")"));
 		assert!(output_str.contains(". attr (\"value\" , choice_value . to_string ())"));
-		assert!(output_str.contains(". bool_attr (\"disabled\" , choice . disabled)"));
+		assert!(output_str.contains(". bool_attr (\"disabled\" , false || choice . disabled)"));
 		assert!(output_str.contains(". child (choice . label)"));
 		assert!(output_str.contains(". listener (\"change\""));
 	}

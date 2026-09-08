@@ -390,6 +390,16 @@ These fields exist for Django settings compatibility but are **not yet consumed*
 use reinhardt::conf::settings::{SettingsBuilder, SettingsConfig};
 ```
 
+## Testing
+
+Database audit tests use a uniquely named in-memory SQLite database for each
+backend. Connections within one pool share that database, while concurrent
+backends remain isolated.
+
+```bash
+cargo test -p reinhardt-conf --all-features --lib settings::audit::backends::database::tests -- --test-threads=8
+```
+
 ## License
 
 Licensed under the BSD 3-Clause License.

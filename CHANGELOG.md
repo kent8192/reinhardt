@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.15...reinhardt-web@v0.3.16) - 2026-09-08
+
+### Fixed
+
+- *(views)* omit unused syntect parser dependencies
+
+### Maintenance
+
+- merge main into radio group accessibility
+
+### Testing
+
+- *(urls)* enforce inactive WASM server routing
+- *(commands)* restore admin script process state
+- *(conf)* isolate in-memory audit databases
+- *(commands)* inject shared fixtures into admin suites
+- *(conf)* compose audit backend fixtures with test helpers
+
 ## [0.3.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.14...reinhardt-web@v0.3.15) - 2026-09-01
 
 ### Documentation

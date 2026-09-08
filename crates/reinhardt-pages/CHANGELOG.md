@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.3.15...reinhardt-pages@v0.3.16) - 2026-09-08
+
+### Fixed
+
+- *(pages)* render form field attributes and help text
+
+### Maintenance
+
+- merge main into radio group accessibility
+
 ## [0.3.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.3.14...reinhardt-pages@v0.3.15) - 2026-09-01
 
 ### Fixed

@@ -304,6 +304,8 @@ edits made before hydration. The adopted value also becomes the browser reset
 default, so a later form reset preserves the pre-hydration control state. Later
 signal changes update the control. Password bindings set only the live value
 property and never expose the secret through an SSR or DOM `value` attribute.
+Reevaluating an unchanged condition retains the mounted branch's reactive scope,
+so its callbacks and controlled values remain active until the branch is replaced.
 Hydration failures preserve their specific error variant, including control
 attachment errors.
 Resetting a connected password form clears its bound signal in a deferred

@@ -3699,3 +3699,75 @@ fn hydrated_reactive_if_adopts_before_subscribing_and_transfers_guards() {
 		reinhardt_pages::cleanup_reactive_nodes();
 	});
 }
+
+#[rstest]
+#[case::mount(false)]
+#[case::hydrate(true)]
+#[wasm_bindgen_test]
+fn reactive_if_preserves_owners_when_the_condition_stays_true(#[case] hydrate: bool) {
+	ReactiveScope::run(|| {
+		// Arrange
+		let document = web_sys::window().unwrap().document().unwrap();
+		let container = document.create_element("div").unwrap();
+		let _cleanup = AttachedRootCleanup(container.clone());
+		let condition = Signal::new(0);
+		let value = Signal::new("initial".to_owned());
+		let observed = Signal::new(String::new());
+		let page = PageElement::new("div")
+			.child(Page::reactive_if(
+				move || condition.get() > 0,
+				move || {
+					page!({
+						input {
+							a11y: off,
+							bind: value,
+							@input: move |_| observed.set(value.get()),
+						}
+					})
+				},
+				|| Page::Empty,
+			))
+			.into_page();
+		let root = if hydrate {
+			container.set_inner_html(&page.render_to_string());
+			let root = Element::new(container.first_element_child().unwrap());
+			let _state = SsrStateElement::install(&document);
+			reinhardt_pages::hydration::hydrate(&HydratedControlPage(page), &root).unwrap();
+			root
+		} else {
+			let root = Element::new(container);
+			page.mount(&root).unwrap();
+			root
+		};
+		condition.set(1);
+		let input: web_sys::HtmlInputElement = root
+			.as_web_sys()
+			.query_selector("input")
+			.unwrap()
+			.unwrap()
+			.unchecked_into();
+
+		// Act: the condition re-evaluates without replacing the branch.
+		condition.set(2);
+		value.set("updated".to_owned());
+
+		// Assert
+		assert_eq!(input.value(), "updated");
+		assert!(
+			input.is_same_node(
+				root.as_web_sys()
+					.query_selector("input")
+					.unwrap()
+					.as_deref()
+			)
+		);
+		input.set_value("edited");
+		input
+			.dispatch_event(&web_sys::InputEvent::new("input").unwrap())
+			.unwrap();
+		assert_eq!(
+			(value.get(), observed.get()),
+			("edited".to_owned(), "edited".to_owned())
+		);
+	});
+}

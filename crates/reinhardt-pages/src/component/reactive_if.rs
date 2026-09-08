@@ -374,16 +374,21 @@ impl ReactiveIfNode {
 						}
 					}
 
-					let new_nodes = with_reactive_node_store(&branch_reactive_node_store, || {
-						// Generate the appropriate view
-						let view = if new_condition {
-							then_view()
-						} else {
-							else_view()
-						};
-
-						// Mount new nodes before the marker
-						mount_before_marker(&marker_clone, view)
+					let ScopedRender { view, scope } =
+						render_in_reactive_scope(&branch_reactive_node_store, || {
+							if new_condition {
+								then_view()
+							} else {
+								else_view()
+							}
+						});
+					let new_nodes = scope.enter(|| {
+						with_reactive_node_store(&branch_reactive_node_store, || {
+							mount_before_marker(&marker_clone, view)
+						})
+					});
+					with_reactive_node_store(&branch_reactive_node_store, || {
+						store_reactive_scope(scope)
 					});
 					*current_nodes_clone.borrow_mut() = new_nodes;
 				});
@@ -483,15 +488,22 @@ impl ReactiveIfNode {
 							}
 						}
 
-						let new_nodes =
-							with_reactive_node_store(&branch_reactive_node_store, || {
-								let view = if new_condition {
+						let ScopedRender { view, scope } =
+							render_in_reactive_scope(&branch_reactive_node_store, || {
+								if new_condition {
 									then_view()
 								} else {
 									else_view()
-								};
-								mount_before_marker(&marker_clone, view)
+								}
 							});
+						let new_nodes = scope.enter(|| {
+							with_reactive_node_store(&branch_reactive_node_store, || {
+								mount_before_marker(&marker_clone, view)
+							})
+						});
+						with_reactive_node_store(&branch_reactive_node_store, || {
+							store_reactive_scope(scope)
+						});
 						*current_nodes_clone.borrow_mut() = new_nodes;
 					});
 				};

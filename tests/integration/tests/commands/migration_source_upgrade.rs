@@ -115,7 +115,7 @@ fn compile_sources(root: &Path, relative_paths: &[&str]) -> BTreeMap<String, Mig
 	serde_json::from_slice(&output.stdout).unwrap()
 }
 
-#[test]
+#[rstest::rstest]
 fn legacy_drop_column_into_upgrade_compiles_through_public_facade() {
 	// Arrange
 	let directory = TempDir::new().unwrap();
@@ -126,12 +126,14 @@ fn legacy_drop_column_into_upgrade_compiles_through_public_facade() {
 		&path,
 		r#"use reinhardt::db::migrations::prelude::*;
 
+// Preserve the migration's explanation and surrounding layout.
 pub fn migration() -> Migration {
     Migration::new("0002_remove_owner", "legacy").add_operation(Operation::DropColumn {
         table: "items".into(),
         column: "owner_id".into(),
     })
 }
+// Keep unrelated application text byte-for-byte.
 "#,
 	)
 	.unwrap();
@@ -145,9 +147,18 @@ pub fn migration() -> Migration {
 
 	// Assert
 	let upgraded = fs::read_to_string(&path).unwrap();
-	assert!(upgraded.contains("table : \"items\" . to_string ()"));
-	assert!(upgraded.contains("column : \"owner_id\" . to_string ()"));
-	assert!(upgraded.contains("old_definition : None"));
+	assert_eq!(
+		upgraded,
+		r#"// reinhardt-migration-source: 1
+use reinhardt::db::migrations::prelude::*;
+
+// Preserve the migration's explanation and surrounding layout.
+pub fn migration() -> Migration {
+    Migration::new("0002_remove_owner", "legacy").add_operation(Operation :: DropColumn { table : "items" . to_string () , column : "owner_id" . to_string () , old_definition : None })
+}
+// Keep unrelated application text byte-for-byte.
+"#
+	);
 	let compiled = compile_sources(directory.path(), &[relative_path]);
 	assert_eq!(
 		compiled.get(relative_path).unwrap().operations,

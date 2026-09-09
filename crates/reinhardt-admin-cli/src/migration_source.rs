@@ -387,7 +387,7 @@ mod tests {
 }
 "#;
 
-	#[test]
+	#[rstest]
 	fn legacy_drop_column_check_upgrade_and_repeat() {
 		let directory = tempfile::tempdir().unwrap();
 		let path = directory.path().join("0002_remove_owner.rs");

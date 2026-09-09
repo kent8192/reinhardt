@@ -1815,7 +1815,7 @@ fn unrelated() -> u32 {{ 7 }}
 		}
 	}
 
-	#[test]
+	#[rstest]
 	fn preserves_explicit_drop_column_definitions() {
 		use super::super::{ColumnDefinition, FieldType, Operation};
 		let cases = [
@@ -1860,7 +1860,7 @@ fn unrelated() -> u32 {{ 7 }}
 		}
 	}
 
-	#[test]
+	#[rstest]
 	fn rejects_malformed_legacy_drop_column() {
 		let fields = [
 			r#"table: "items".into()"#,

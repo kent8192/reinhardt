@@ -262,7 +262,8 @@ jobs:
               --test client_launcher_navigation_test \
               --test navigation_guard_wasm_test \
               --test document_head_wasm_test \
-              --test query_client_wasm_test
+              --test query_client_wasm_test \
+              --test form_radio_input
 
       - name: Run WASM observer-system tests (reinhardt-urls)
         working-directory: crates/reinhardt-urls

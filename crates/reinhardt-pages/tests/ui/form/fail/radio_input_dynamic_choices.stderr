@@ -1,0 +1,5 @@
+error: RadioInput does not support dynamic choices; use RadioSelect for a group
+  --> tests/ui/form/fail/radio_input_dynamic_choices.rs:10:5
+   |
+10 |                 choices_from: "answers",
+   |                 ^^^^^^^^^^^^

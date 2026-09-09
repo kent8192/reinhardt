@@ -1196,6 +1196,7 @@ impl TypedFieldType {
 /// | `DateTimeInput` | `<input>` | `datetime-local` |
 /// | `CheckboxInput` | `<input>` | `checkbox` |
 /// | `RadioInput` | `<input>` | `radio` |
+/// | `RadioSelect` | multiple `<input>` | `radio` |
 /// | `FileInput` | `<input>` | `file` |
 /// | `HiddenInput` | `<input>` | `hidden` |
 /// | `Textarea` | `<textarea>` | - |
@@ -1259,9 +1260,13 @@ pub enum TypedWidget {
 	SelectMultiple,
 	/// Checkbox input (`<input type="checkbox">`).
 	CheckboxInput,
-	/// Radio button input (`<input type="radio">`).
+	/// Single radio input for `ChoiceField<String>` (`<input type="radio">`).
+	///
+	/// Uses the native `"on"` value by default, or exactly one static ungrouped
+	/// choice. Checked state compares the field value with the option value;
+	/// checked change events store that value. Use `RadioSelect` for a group.
 	RadioInput,
-	/// Radio button group rendered as a selection list.
+	/// Radio button group rendered from dynamic choice options.
 	RadioSelect,
 	/// File upload input (`<input type="file">`).
 	FileInput,

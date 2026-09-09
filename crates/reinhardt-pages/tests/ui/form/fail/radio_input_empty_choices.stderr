@@ -1,0 +1,5 @@
+error: RadioInput requires exactly one static choice; use RadioSelect for a group
+  --> tests/ui/form/fail/radio_input_empty_choices.rs:10:5
+   |
+10 |                 choices: [],
+   |                 ^^^^^^^

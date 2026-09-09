@@ -782,6 +782,8 @@ Stable native widget coverage includes the following `form!` DSL items:
 |---|---|---|
 | `MonthInput` | `<input type="month">` | string field |
 | `WeekInput` | `<input type="week">` | string field |
+| `RadioInput` | one `<input type="radio">` | `ChoiceField<String>` |
+| `RadioSelect` | a group of `<input type="radio">` controls | choice field |
 | `ResetButton` | `<button type="reset">` | none |
 | `Button` | `<button type="button">` | none |
 | `ImageInput` | `<input type="image">` | none |
@@ -790,6 +792,37 @@ Stable native widget coverage includes the following `form!` DSL items:
 | `Output` | `<output>` | none |
 | `Meter` | `<meter>` | none |
 | `Progress` | `<progress>` | none |
+
+`RadioInput` is one radio button for a string-valued `ChoiceField`, with the
+field's name and ID. Its option value is `"on"` by default; supply exactly one
+static option, such as `choices: [("yes", "Yes")]`, to choose another value.
+The associated label uses the field label, the option label, or the field name,
+in that order. An option marked `disabled` disables the control. Empty or
+multiple options, grouped options, dynamic choices, and other field types are
+rejected. Use `RadioSelect` with `choices_from` for a radio group and
+`CheckboxInput` for a boolean value.
+
+The single radio is checked when the field value equals the option value. On
+WASM, selecting it updates the field; an unchecked change event leaves the
+value unchanged. Programmatic signal updates and runtime `reset()` synchronize
+the checked state, with reset restoring the current defaults. Clicking a
+selected radio does not clear it. Forms with a bound scalar radio also restore
+their bound scalar and collection fields on native reset, including defaults
+loaded after mounting. Collection defaults follow item keys across reordering;
+without persisted loader defaults, existing rows use their values at page
+construction and new rows use field defaults. Native resets preserve collection
+keys, row order, and unbound values, and clear file inputs. The restored DOM and
+signals agree before runtime touched state and errors are cleared, without
+emitting change or validation events. Source writes made by later reset listeners
+or synchronously after `reset()` supersede the pending reset, including equal-value
+writes. Custom widget errors remain reactive after reset. `autocomplete` is
+preserved on scalar and collection radios,
+and reactive replacements retain focus within their own subtree. For scalar
+fields, `bind: false` renders the current value without installing two-way binding.
+Bound radios use controlled bindings and typed `ResetEvent` handling. Collections
+containing only bound `RadioInput` fields retain their controls while item keys
+and indices remain unchanged; other collection widgets keep their existing
+reactive rendering behavior.
 
 Typed native attributes are accepted for the controls that support them:
 

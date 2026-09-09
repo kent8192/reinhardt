@@ -1678,7 +1678,7 @@ fn transform_field(field: &FormFieldDef) -> Result<TypedFormFieldDef> {
 
 	// Extract properties into categories
 	let validation = extract_validation_properties(&field.properties)?;
-	let display = extract_display_properties(&field.properties)?;
+	let mut display = extract_display_properties(&field.properties)?;
 	let styling = extract_styling_properties(&field.properties)?;
 	let widget = extract_widget(&field.properties, &field_type)?;
 	validate_widget_field_compatibility(&field_type, &widget, field.span)?;
@@ -1691,6 +1691,28 @@ fn transform_field(field: &FormFieldDef) -> Result<TypedFormFieldDef> {
 	let initial_expr = extract_initial_expr(&field.properties);
 	let choices_config = extract_choices_config(&field.properties);
 	let static_choices_source = extract_static_choices(&field.properties)?;
+	if matches!(widget, TypedWidget::RadioInput) {
+		for property in &field.properties {
+			match property {
+				FormFieldProperty::Choices { choices, span } if choices.len() != 1 => {
+					return Err(Error::new(
+						*span,
+						"RadioInput requires exactly one static choice; use RadioSelect for a group",
+					));
+				}
+				FormFieldProperty::ChoicesFrom { span, .. }
+				| FormFieldProperty::ChoiceValue { span, .. }
+				| FormFieldProperty::ChoiceLabel { span, .. }
+				| FormFieldProperty::ChoiceDisabled { span, .. } => {
+					return Err(Error::new(
+						*span,
+						"RadioInput does not support dynamic choices; use RadioSelect for a group",
+					));
+				}
+				_ => {}
+			}
+		}
+	}
 
 	validate_radio_select_choice_group_properties(&field.properties, &widget)?;
 	validate_known_field_properties(&field.properties)?;
@@ -1717,15 +1739,34 @@ fn transform_field(field: &FormFieldDef) -> Result<TypedFormFieldDef> {
 	}
 
 	if !static_choices_source.is_empty()
-		&& !matches!(widget, TypedWidget::Select | TypedWidget::SelectMultiple)
-	{
+		&& !matches!(
+			widget,
+			TypedWidget::Select | TypedWidget::SelectMultiple | TypedWidget::RadioInput
+		) {
 		return Err(Error::new(
 			field.span,
-			"choices require Select or SelectMultiple widget",
+			"choices require Select, SelectMultiple, or RadioInput widget",
 		));
 	}
 
-	let static_choices = transform_static_choices(&static_choices_source, true, false)?;
+	let static_choices = transform_static_choices(
+		&static_choices_source,
+		!matches!(widget, TypedWidget::RadioInput),
+		false,
+	)?;
+	if matches!(widget, TypedWidget::RadioInput)
+		&& let Some(TypedChoiceItem::Option(option)) = static_choices.first()
+	{
+		expect_string_literal(&option.value, option.span, "RadioInput choice value")?;
+		if display.label.is_none() {
+			display.label = Some(expect_string_literal(
+				&option.label,
+				option.span,
+				"RadioInput choice label",
+			)?);
+		}
+		display.disabled |= option.disabled;
+	}
 
 	Ok(TypedFormFieldDef {
 		name: field.name.clone(),
@@ -1758,7 +1799,7 @@ fn validate_radio_select_choice_group_properties(
 	properties: &[FormFieldProperty],
 	widget: &TypedWidget,
 ) -> Result<()> {
-	if !matches!(widget, TypedWidget::RadioSelect) {
+	if !matches!(widget, TypedWidget::RadioSelect | TypedWidget::RadioInput) {
 		return Ok(());
 	}
 
@@ -2310,6 +2351,7 @@ fn parse_widget(ident: &syn::Ident) -> Result<TypedWidget> {
 		"NumberInput" => Ok(TypedWidget::NumberInput),
 		"Textarea" => Ok(TypedWidget::Textarea),
 		"CheckboxInput" => Ok(TypedWidget::CheckboxInput),
+		"RadioInput" => Ok(TypedWidget::RadioInput),
 		"RadioSelect" => Ok(TypedWidget::RadioSelect),
 		"Select" => Ok(TypedWidget::Select),
 		"SelectMultiple" => Ok(TypedWidget::SelectMultiple),
@@ -2329,7 +2371,7 @@ fn parse_widget(ident: &syn::Ident) -> Result<TypedWidget> {
 			ident.span(),
 			format!(
 				"unknown widget type: '{}'. Expected one of: TextInput, PasswordInput, \
-					EmailInput, NumberInput, Textarea, CheckboxInput, RadioSelect, Select, \
+					EmailInput, NumberInput, Textarea, CheckboxInput, RadioInput, RadioSelect, Select, \
 					SelectMultiple, DateInput, MonthInput, WeekInput, TimeInput, DateTimeInput, \
 					FileInput, HiddenInput, ColorInput, RangeInput, UrlInput, TelInput, SearchInput",
 				widget_str
@@ -2372,6 +2414,20 @@ fn validate_widget_field_compatibility(
 	span: Span,
 ) -> Result<()> {
 	match widget {
+		TypedWidget::RadioInput
+			if !matches!(field_type,
+				TypedFieldType::ChoiceField { inner: syn::Type::Path(path) }
+					if path.qself.is_none()
+						&& path.path.segments.iter().all(|segment| segment.arguments.is_none())
+						&& matches!(path.path.segments.iter().map(|segment| segment.ident.to_string()).collect::<Vec<_>>().join("::").as_str(),
+							"String" | "std::string::String" | "alloc::string::String")
+			) =>
+		{
+			Err(Error::new(
+				span,
+				"RadioInput is only supported on ChoiceField<String>",
+			))
+		}
 		TypedWidget::MonthInput if !is_string_valued_field(field_type) => Err(Error::new(
 			span,
 			"MonthInput is only supported on string-valued fields",

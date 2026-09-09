@@ -1,0 +1,5 @@
+error: choice_group is only supported on Select and SelectMultiple widgets
+  --> tests/ui/form/fail/radio_input_choice_group.rs:10:5
+   |
+10 |                 choice_group: "group",
+   |                 ^^^^^^^^^^^^

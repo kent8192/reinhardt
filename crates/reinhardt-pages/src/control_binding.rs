@@ -29,6 +29,7 @@ pub(crate) fn is_text_input_type(input_type: &str) -> bool {
 		"url",
 		"email",
 		"password",
+		"hidden",
 		"color",
 		"date",
 		"datetime-local",

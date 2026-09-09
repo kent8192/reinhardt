@@ -1016,3 +1016,32 @@ mod tests {
 		}
 	}
 }
+
+#[cfg(all(test, server))]
+mod projection_tests {
+	use super::*;
+	use crate::core::ModelAdminConfig;
+	use serde_json::json;
+	use std::collections::HashMap;
+
+	#[test]
+	fn list_projection_excludes_unconfigured_primary_key_and_hidden_fields() {
+		// Arrange
+		let model_admin = ModelAdminConfig::new("User").with_list_display(vec!["name"]);
+		let mut record = HashMap::from([
+			("id".to_string(), json!(7)),
+			("name".to_string(), json!("Alice")),
+			("secret".to_string(), json!("hidden")),
+		]);
+
+		// Act
+		let visible_fields = model_admin.list_display();
+		retain_allowed_fields(&mut record, &visible_fields);
+
+		// Assert
+		assert_eq!(
+			record,
+			HashMap::from([("name".to_string(), json!("Alice"))])
+		);
+	}
+}

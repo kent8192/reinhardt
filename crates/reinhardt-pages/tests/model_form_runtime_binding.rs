@@ -571,12 +571,18 @@ fn static_model_form_bindings_reject_unsupported_control_pairs() {
 			form.runtime_control_binding(form.metadata_field(), request(ControlKind::Text));
 		let select_many =
 			form.runtime_control_binding(form.title_field(), request(ControlKind::SelectMany));
+		let file_control =
+			form.runtime_control_binding(form.document_field(), request(ControlKind::File));
+		let text_as_file =
+			form.runtime_control_binding(form.title_field(), request(ControlKind::File));
 
 		// Assert
 		assert!(file.is_none());
 		assert!(image.is_none());
 		assert!(metadata.is_none());
 		assert!(select_many.is_none());
+		assert!(file_control.is_none());
+		assert!(text_as_file.is_none());
 	});
 }
 

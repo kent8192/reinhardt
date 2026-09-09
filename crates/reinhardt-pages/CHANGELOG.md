@@ -107,6 +107,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - *(pages)* support optional typed query extraction across route components, layouts, loaders, page props, and manual request props; optional loader cache identity distinguishes missing and present values
 
+## [0.3.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.3.15...reinhardt-pages@v0.3.16) - 2026-09-08
+
+### Fixed
+
+- *(pages)* render form field attributes and help text
+- *(pages)* preserve textarea and select state during hydration
+- *(pages)* preserve form ownership across hydration and reset
+- *(pages)* retain custom widget subscriptions after native reset
+- *(pages)* preserve pristine textarea state through newline normalization
+- *(pages)* evaluate static select choice expressions once
+- *(pages)* preserve reconciled defaults during hydration
+- *(pages)* reconcile unbound textarea snapshots
+
+### Maintenance
+
+- merge main into radio group accessibility
+- *(pages)* merge main field metadata and radio groups
+
+## [0.3.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.3.14...reinhardt-pages@v0.3.15) - 2026-09-01
+
+### Fixed
+
+- *(pages)* reject executable elements in all renderers
+- *(pages)* enforce safe rendering boundaries
+
+## [0.3.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.3.13...reinhardt-pages@v0.3.14) - 2026-08-29
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
 ## [0.3.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.3.12...reinhardt-pages@v0.3.13) - 2026-08-27
 
 ### Maintenance

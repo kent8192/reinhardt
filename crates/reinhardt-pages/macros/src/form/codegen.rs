@@ -385,24 +385,7 @@ fn generate_form_runtime_contract(
 		.collect();
 	apply_values_fields.extend(collections.iter().map(|collection| {
 		let name = &collection.name;
-		quote! {
-				self.__path_signals.borrow_mut().clear();
-				self.#name.set(
-					values
-						.#name
-					.iter()
-					.cloned()
-					.enumerate()
-					.map(|(index, value)| {
-						#pages_crate::CollectionItem::new(
-							#pages_crate::CollectionItemKey::from_runtime_index(index as u64),
-							index,
-							value,
-						)
-					})
-					.collect(),
-			);
-		}
+		generate_collection_value_replacement(collection, quote! { values.#name }, pages_crate)
 	}));
 
 	let field_variants: Vec<syn::Ident> = all_fields
@@ -578,6 +561,7 @@ fn generate_form_runtime_contract(
 						::std::boxed::Box::new(value);
 					match boxed.downcast::<#ty>() {
 						Ok(value) => {
+							self.__source_preferred_fields.borrow_mut().insert(::std::string::String::from(stringify!(#name)));
 							self.#name.set(*value);
 							#number_error_reset
 							#custom_widget_touched_set
@@ -604,6 +588,7 @@ fn generate_form_runtime_contract(
 				});
 			quote! {
 				#field_ident::#variant => {
+					self.__source_preferred_fields.borrow_mut().insert(::std::string::String::from(stringify!(#name)));
 					self.#name.set(values.#name.clone());
 				#number_error_reset
 					#custom_widget_touched_reset
@@ -802,7 +787,8 @@ fn generate_form_runtime_contract(
 				let name = &field.name;
 				let number_error_reset = number_parse_error_reset(field);
 				quote! {
-					if current.#name == old_defaults.#name {
+					if current.#name == old_defaults.#name && current.#name != new_defaults.#name {
+						self.__source_preferred_fields.borrow_mut().insert(::std::string::String::from(stringify!(#name)));
 						self.#name.set(new_defaults.#name.clone());
 						#number_error_reset
 					}
@@ -813,25 +799,15 @@ fn generate_form_runtime_contract(
 			.iter()
 			.map(|collection| {
 				let name = &collection.name;
+				let replacement = generate_collection_value_replacement(
+					collection,
+					quote! { new_defaults.#name },
+					pages_crate,
+				);
 				quote! {
-						if current.#name == old_defaults.#name {
-							self.__path_signals.borrow_mut().clear();
-							self.#name.set(
-								new_defaults
-									.#name
-								.iter()
-								.cloned()
-								.enumerate()
-								.map(|(index, value)| {
-									#pages_crate::CollectionItem::new(
-										#pages_crate::CollectionItemKey::from_runtime_index(index as u64),
-										index,
-										value,
-									)
-								})
-								.collect(),
-						);
-					}
+						if current.#name == old_defaults.#name && current.#name != new_defaults.#name {
+							#replacement
+						}
 				}
 			})
 			.collect();
@@ -844,6 +820,7 @@ fn generate_form_runtime_contract(
 		) {
 			#(#scalar_pristine_assignments)*
 			#(#collection_pristine_assignments)*
+			self.runtime_sync_path_signals();
 		}
 		}
 	};
@@ -1311,6 +1288,7 @@ fn generate_form_runtime_contract(
 												item_index,
 												item_value,
 											);
+											self.__source_preferred_fields.borrow_mut().insert(path_key.clone());
 											self.#collection_name.set(items);
 											let signal = self
 												.__path_signals
@@ -1718,6 +1696,10 @@ fn generate_form_runtime_contract(
 				self.__reinhardt_reactive_scope.clone()
 			}
 
+			fn runtime_native_reset_epoch(&self) -> u64 {
+				self.__native_reset_epoch.get()
+			}
+
 			fn runtime_initial_values(&self) -> Self::Values {
 				self.__initial_values.borrow().clone()
 			}
@@ -1736,7 +1718,9 @@ fn generate_form_runtime_contract(
 			}
 
 			fn runtime_apply_values(&self, values: &Self::Values) {
+				self.__explicitly_reset.set(true);
 				#(#apply_values_fields)*
+				self.runtime_sync_path_signals();
 			}
 
 			fn runtime_set_field_value<T>(&self, field: Self::Field, value: T)
@@ -1904,6 +1888,46 @@ fn number_parse_error_reset(field: &TypedFormFieldDef) -> Option<TokenStream> {
 		span = field.name.span()
 	);
 	Some(quote! { self.#error.set(::core::option::Option::None); })
+}
+
+/// Retains row identity and hydration preference for explicit value replacements.
+fn generate_collection_value_replacement(
+	collection: &TypedFormFieldCollection,
+	values: TokenStream,
+	pages_crate: &TokenStream,
+) -> TokenStream {
+	let name = &collection.name;
+	let collection_name = name.to_string();
+	let field_names: Vec<_> = collect_scalar_fields(&collection.fields)
+		.iter()
+		.map(|field| field.name.to_string())
+		.collect();
+	let path_prefix = format!("{name}:");
+	quote! {
+		{
+			let __previous = self.#name.get_untracked();
+			let __values = &#values;
+			let __same_length = __previous.len() == __values.len();
+			if !__same_length {
+				self.__path_signals.borrow_mut()
+					.retain(|path, _| !path.starts_with(#path_prefix));
+			}
+			self.#name.set(__values.iter().cloned().enumerate().map(|(index, value)| {
+				let key = if __same_length {
+					__previous[index].key()
+				} else {
+					#pages_crate::CollectionItemKey::from_runtime_index(index as u64)
+				};
+				{
+					let mut preferred = self.__source_preferred_fields.borrow_mut();
+					#(
+						preferred.insert(::std::format!("{}:{:?}:{}", #collection_name, key, #field_names));
+					)*
+				}
+				#pages_crate::CollectionItem::new(key, index, value)
+			}).collect());
+		}
+	}
 }
 
 fn field_variant_ident(ident: &syn::Ident) -> syn::Ident {
@@ -2599,6 +2623,8 @@ fn generate_model_form(
 						#pages_crate::component::ControlValue::Text(_) => "text",
 						#pages_crate::component::ControlValue::Checked(_) => "checked",
 						#pages_crate::component::ControlValue::SelectedValues(_) => "selected-values",
+						#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+						#pages_crate::component::ControlValue::File(_) => "file",
 					}
 				}
 
@@ -2730,7 +2756,8 @@ fn generate_model_form(
 										.expect("validated model form radio field");
 									#pages_crate::component::ControlWriteOutcome::Committed
 								}
-								#pages_crate::component::ControlKind::SelectMany => {
+								#pages_crate::component::ControlKind::SelectMany
+								| #pages_crate::component::ControlKind::File => {
 									return ::core::result::Result::Err(mismatch());
 								}
 							};
@@ -4708,6 +4735,8 @@ pub(super) fn generate(
 					>,
 					__explicitly_reset: ::std::rc::Rc<::std::cell::Cell<bool>>,
 					#field_decls
+					__source_preferred_fields: ::std::rc::Rc<::std::cell::RefCell<::std::collections::HashSet<::std::string::String>>>,
+					__native_reset_epoch: #pages_crate::reactive::Signal<u64>,
 					#runtime_initial_values_field_decl
 					#state_decls
 					#watch_field_decls
@@ -4728,6 +4757,8 @@ pub(super) fn generate(
 						__reinhardt_reactive_scope,
 						__explicitly_reset: ::std::rc::Rc::new(::std::cell::Cell::new(false)),
 							#field_inits
+							__source_preferred_fields: ::std::rc::Rc::new(::std::cell::RefCell::new(::std::collections::HashSet::new())),
+							__native_reset_epoch: #pages_crate::reactive::Signal::new(0),
 							#runtime_initial_values_field_default_init
 							#state_inits
 						#watch_field_default_inits
@@ -5826,8 +5857,19 @@ fn generate_into_page(macro_ast: &TypedFormMacro, pages_crate: &TokenStream) -> 
 
 	quote! {
 		pub fn into_page(self) -> #pages_crate::component::Page {
+			let scope = self.__reinhardt_reactive_scope.clone();
+			match scope {
+				Some(scope) => scope.enter(|| self.__into_page_in_scope()),
+				None => self.__into_page_in_scope(),
+			}
+		}
+
+		fn __into_page_in_scope(self) -> #pages_crate::component::Page {
 			use #pages_crate::component::{PageElement, IntoPage};
 
+			let __explicitly_reset = self.__explicitly_reset.clone();
+			let __source_preferred_fields = self.__source_preferred_fields.clone();
+			let __native_reset_epoch = self.__native_reset_epoch.clone();
 			#(#signal_bindings)*
 
 			#onsubmit_handler
@@ -6486,7 +6528,7 @@ fn generate_datalist_view(datalist: &TypedDatalistDef, pages_crate: &TokenStream
 	let option_children: Vec<TokenStream> = datalist
 		.static_choices
 		.iter()
-		.map(generate_static_choice_item_view)
+		.map(|choice| generate_static_choice_item_view(choice, None))
 		.collect();
 
 	quote! {
@@ -6496,16 +6538,19 @@ fn generate_datalist_view(datalist: &TypedDatalistDef, pages_crate: &TokenStream
 	}
 }
 
-fn generate_static_choice_item_view(choice: &TypedChoiceItem) -> TokenStream {
+fn generate_static_choice_item_view(
+	choice: &TypedChoiceItem,
+	selected: Option<&TokenStream>,
+) -> TokenStream {
 	match choice {
-		TypedChoiceItem::Option(option) => generate_static_choice_option_view(option),
+		TypedChoiceItem::Option(option) => generate_static_choice_option_view(option, selected),
 		TypedChoiceItem::Group(group) => {
 			let label = &group.label;
 			let disabled = group.disabled;
 			let option_children: Vec<TokenStream> = group
 				.options
 				.iter()
-				.map(generate_static_choice_option_view)
+				.map(|option| generate_static_choice_option_view(option, selected))
 				.collect();
 
 			quote! {
@@ -6518,16 +6563,31 @@ fn generate_static_choice_item_view(choice: &TypedChoiceItem) -> TokenStream {
 	}
 }
 
-fn generate_static_choice_option_view(option: &TypedChoiceOption) -> TokenStream {
+/// Serializes each option value once for its attribute and initial selection.
+fn generate_static_choice_option_view(
+	option: &TypedChoiceOption,
+	selected: Option<&TokenStream>,
+) -> TokenStream {
 	let value = &option.value;
 	let label = &option.label;
 	let disabled = option.disabled;
 
+	let selected = selected
+		.map(|values| {
+			quote! { (#values).iter().any(|selected| selected == &__choice_value) }
+		})
+		.unwrap_or_else(|| quote! { false });
+
 	quote! {
-		PageElement::new("option")
-			.attr("value", (#value).to_string())
-			.bool_attr("disabled", #disabled)
-			.child((#label).to_string())
+		{
+			let __choice_value = (#value).to_string();
+			let __choice_selected = #selected;
+			PageElement::new("option")
+				.attr("value", __choice_value)
+				.bool_attr("disabled", #disabled)
+				.bool_attr("selected", __choice_selected)
+				.child((#label).to_string())
+		}
 	}
 }
 
@@ -6596,9 +6656,23 @@ fn generate_collection_view(
 		{
 			let __collection_signal = self.#collection_name.clone();
 			let __path_signals = self.__path_signals.clone();
+			let __explicitly_reset = __explicitly_reset.clone();
+			let __source_preferred_fields = __source_preferred_fields.clone();
+			let __native_reset_epoch = __native_reset_epoch.clone();
+			let __shape = #pages_crate::reactive::Signal::new(::std::vec::Vec::new());
+			let __shape_effect = ::std::rc::Rc::new(#pages_crate::reactive::Effect::new_with_timing({
+				let collection = __collection_signal.clone();
+				let shape = __shape.clone();
+				move || {
+					let next = collection.get().iter().map(|item| (item.key(), item.index())).collect::<::std::vec::Vec<_>>();
+					if shape.get_untracked() != next { shape.set(next); }
+				}
+			}, #pages_crate::reactive::EffectTiming::Layout));
 			#pages_crate::component::Page::reactive(move || {
 				let _ = &__path_signals;
-				let __items = __collection_signal.get();
+				let _ = &__shape_effect;
+				let _ = __shape.get();
+				let __items = __collection_signal.get_untracked();
 				let mut __item_pages = ::std::vec::Vec::new();
 				for item in __items {
 					let item_value = item.value().clone();
@@ -6641,15 +6715,21 @@ fn generate_collection_field_view(
 	let input_type = widget_to_input_type(&field.widget);
 	let label_text = field.display.label.as_deref().unwrap_or(&field_name_str);
 	let placeholder = field.display.placeholder.as_deref().unwrap_or("");
-	let required = field.validation.required;
 	let autocomplete_attr = field.display.autocomplete.as_deref().map(|val| {
 		quote! { .attr("autocomplete", #val) }
 	});
 	let wrapper_class = field.styling.wrapper_class();
 	let label_class = field.styling.label_class();
 	let input_class = field.styling.input_class();
-	let custom_attrs = generate_custom_attrs(&field.custom_attrs);
-	let listener = generate_collection_bind_listener(field, pages_crate, collection_name);
+	let field_id = quote! { __field_id };
+	let field_attrs = generate_field_attrs(field, &field_id, false);
+	let help_text = generate_field_help_text(field, &field_id);
+	let binding = generate_collection_control_binding(field, pages_crate, collection_name, None);
+	let listener = if binding.is_empty() {
+		generate_collection_bind_listener(field, pages_crate, collection_name)
+	} else {
+		TokenStream::new()
+	};
 	let field_value = collection_field_value_expr(field);
 	let value_attr = if matches!(
 		field.field_type,
@@ -6674,25 +6754,33 @@ fn generate_collection_field_view(
 					.attr("id", __field_id.clone())
 					.attr("class", #input_class)
 					.attr("placeholder", #placeholder)
-					.bool_attr("required", #required)
 					#autocomplete_attr
-					#custom_attrs
+					#field_attrs
 					#listener
+					#binding
 					.child(#field_value)
 			}
 		}
 		TypedWidget::Select | TypedWidget::SelectMultiple => {
 			let multiple = matches!(field.widget, TypedWidget::SelectMultiple);
+			let name = &field.name;
+			let selected = field_selected_values_expr(field, quote! { item_value.#name });
+			let options: Vec<_> = field
+				.static_choices
+				.iter()
+				.map(|choice| generate_static_choice_item_view(choice, Some(&selected)))
+				.collect();
 			quote! {
 				PageElement::new("select")
 					.attr("name", __field_name.clone())
 					.attr("id", __field_id.clone())
 					.attr("class", #input_class)
-					.bool_attr("required", #required)
 					.bool_attr("multiple", #multiple)
 					#autocomplete_attr
-					#custom_attrs
+					#field_attrs
 					#listener
+					#binding
+					#(.child(#options))*
 			}
 		}
 		TypedWidget::CheckboxInput => {
@@ -6703,10 +6791,10 @@ fn generate_collection_field_view(
 					.attr("id", __field_id.clone())
 					.attr("class", #input_class)
 					.attr("value", "true")
-					.bool_attr("required", #required)
 					#checked_attr
-					#custom_attrs
+					#field_attrs
 					#listener
+					#binding
 			}
 		}
 		_ => {
@@ -6717,11 +6805,11 @@ fn generate_collection_field_view(
 					.attr("id", __field_id.clone())
 					.attr("class", #input_class)
 					.attr("placeholder", #placeholder)
-					.bool_attr("required", #required)
 					#value_attr
 					#autocomplete_attr
-					#custom_attrs
+					#field_attrs
 					#listener
+					#binding
 			}
 		}
 	};
@@ -6782,50 +6870,90 @@ fn generate_collection_field_view(
 					#wrapper_attrs
 					#label_element
 					.child(#input_element)
+					#help_text
 			}
 		}
 	}
 }
 
+fn generate_collection_control_binding(
+	field: &TypedFormFieldDef,
+	pages_crate: &TokenStream,
+	collection_name: &str,
+	radio_value: Option<TokenStream>,
+) -> TokenStream {
+	if !field.bind || matches!(field.widget, TypedWidget::RadioSelect) {
+		return TokenStream::new();
+	}
+	let field_name = &field.name;
+	let field_type = field_type_to_value_type(&field.field_type);
+	let assignment = collection_field_assignment(field, pages_crate, collection_name);
+	let field_name_str = field.name.to_string();
+	let setup = quote! {
+		let __source_preference_key = ::std::format!("{}:{:?}:{}", #collection_name, item.key(), #field_name_str);
+		let __binding_target = #pages_crate::reactive::NodeId::new();
+		let __binding_source = __collection_signal.id();
+		let __read_value = {
+			let collection = __collection_signal.clone();
+			let key = item.key();
+			// Resolve the row by stable key so reordering preserves this binding.
+			move || collection.get().iter().find(|item| item.key() == key)
+				.map(|item| item.value().#field_name.clone()).unwrap_or_default()
+		};
+		let __write_value = {
+			let __field_collection_signal = __collection_signal.clone();
+			let __field_path_signals = __path_signals.clone();
+			let __item_key = item.key();
+			move |__new_value: #field_type| { #assignment }
+		};
+	};
+	generate_control_binding_operations(field, pages_crate, setup, radio_value)
+}
+
 fn collection_field_value_expr(field: &TypedFormFieldDef) -> TokenStream {
 	let field_name = &field.name;
+	field_value_expr(field, quote! { item_value.#field_name })
+}
+
+/// Formats stable form values identically for ordinary and collection controls.
+fn field_value_expr(field: &TypedFormFieldDef, value: TokenStream) -> TokenStream {
 	match &field.field_type {
 		TypedFieldType::CharField
 		| TypedFieldType::TextField
 		| TypedFieldType::EmailField
 		| TypedFieldType::PasswordField
 		| TypedFieldType::UrlField
-		| TypedFieldType::SlugField => quote! { item_value.#field_name.clone() },
+		| TypedFieldType::SlugField => quote! { (#value).clone() },
 		TypedFieldType::DateField
 		| TypedFieldType::TimeField
 		| TypedFieldType::UuidField
 		| TypedFieldType::IpAddressField => quote! {
-			item_value
-				.#field_name
+			(#value)
 				.as_ref()
 				.map(::std::string::ToString::to_string)
 				.unwrap_or_default()
 		},
 		TypedFieldType::DateTimeField => quote! {
-			item_value
-				.#field_name
+			(#value)
 				.as_ref()
-				.map(|value| value.format("%Y-%m-%dT%H:%M:%S").to_string())
+				.map(|value| value.format("%Y-%m-%dT%H:%M:%S%.f").to_string())
 				.unwrap_or_default()
 		},
 		TypedFieldType::MultipleChoiceField { .. } => quote! {
-			item_value
-				.#field_name
+			(#value)
 				.iter()
 				.map(::std::string::ToString::to_string)
 				.collect::<::std::vec::Vec<_>>()
 				.join(",")
 		},
 		TypedFieldType::JsonField { .. } => quote! {
-			::serde_json::to_string(&item_value.#field_name).unwrap_or_default()
+			::serde_json::to_string(&(#value)).unwrap_or_default()
 		},
 		TypedFieldType::FileField | TypedFieldType::ImageField => {
 			quote! { ::std::string::String::new() }
+		}
+		TypedFieldType::ChoiceField { inner } if type_is_string(inner) => {
+			quote! { (#value).clone() }
 		}
 		TypedFieldType::IntegerField
 		| TypedFieldType::FloatField
@@ -6833,7 +6961,7 @@ fn collection_field_value_expr(field: &TypedFormFieldDef) -> TokenStream {
 		| TypedFieldType::BooleanField
 		| TypedFieldType::HiddenField { .. }
 		| TypedFieldType::ChoiceField { .. } => {
-			quote! { item_value.#field_name.to_string() }
+			quote! { (#value).to_string() }
 		}
 	}
 }
@@ -6843,6 +6971,295 @@ fn collection_field_checked_expr(field: &TypedFormFieldDef) -> TokenStream {
 	match &field.field_type {
 		TypedFieldType::BooleanField => quote! { item_value.#field_name },
 		_ => quote! { false },
+	}
+}
+
+fn field_selected_values_expr(field: &TypedFormFieldDef, value: TokenStream) -> TokenStream {
+	if matches!(field.field_type, TypedFieldType::MultipleChoiceField { .. }) {
+		quote! {
+			(#value).iter().map(::std::string::ToString::to_string)
+				.collect::<::std::vec::Vec<_>>()
+		}
+	} else {
+		let value = field_value_expr(field, value);
+		quote! { ::std::vec![#value] }
+	}
+}
+
+/// Lowers generated form fields into typed control descriptors.
+/// Unparseable text keeps the prior field value.
+fn generate_generated_control_binding(
+	field: &TypedFormFieldDef,
+	pages_crate: &TokenStream,
+	signal_ident: Option<&syn::Ident>,
+	radio_value: Option<TokenStream>,
+) -> TokenStream {
+	let Some(signal_ident) = signal_ident else {
+		return TokenStream::new();
+	};
+	if radio_value.is_none() && matches!(field.widget, TypedWidget::RadioSelect) {
+		return TokenStream::new();
+	}
+	if radio_value.is_none() {
+		let typed_binding = generate_typed_control_binding(
+			Some(signal_ident),
+			&field.widget,
+			&field.field_type,
+			pages_crate,
+		);
+		if !typed_binding.is_empty() {
+			return typed_binding;
+		}
+	}
+	let field_name = field.name.to_string();
+	let setup = quote! {
+		let __source_preference_key = ::std::string::String::from(#field_name);
+		let __binding_target = #signal_ident.id();
+		let __binding_source = __binding_target;
+		let __read_value = { let signal = #signal_ident.clone(); move || signal.get() };
+		let __write_value = { let signal = #signal_ident.clone(); move |value| signal.set(value) };
+	};
+	generate_control_binding_operations(field, pages_crate, setup, radio_value)
+}
+
+fn generate_control_binding_operations(
+	field: &TypedFormFieldDef,
+	pages_crate: &TokenStream,
+	setup: TokenStream,
+	radio_value: Option<TokenStream>,
+) -> TokenStream {
+	let value = field_value_expr(field, quote! { __read_value() });
+	let assignment = quote! { __write_value(__new_value); };
+	let parse = generate_text_value_update(&field.field_type, quote! { __raw }, assignment);
+	let (kind, read, write) = if matches!(
+		field.field_type,
+		TypedFieldType::FileField | TypedFieldType::ImageField
+	) {
+		(
+			quote! { File },
+			quote! { ControlValue::Checked(__read_value().is_some()) },
+			quote! {
+				match __value {
+					#[cfg(target_arch = "wasm32")]
+					ControlValue::File(file) => __write_value(file),
+					ControlValue::Checked(false) => __write_value(::core::option::Option::None),
+					_ => {}
+				}
+			},
+		)
+	} else if let Some(radio_value) = radio_value {
+		return quote! {
+			.control_binding({
+				use #pages_crate::component::{ControlBinding, ControlKind, ControlValue};
+				#setup
+				let __read_value = ::std::rc::Rc::new(__read_value);
+				let __write_value = ::std::rc::Rc::new(__write_value);
+				let __snapshot_restore = {
+					let read = __read_value.clone();
+					let write = __write_value.clone();
+					move || {
+						let value = #pages_crate::reactive::untracked(|| read());
+						let write = write.clone();
+						::std::boxed::Box::new(move || write(value)) as ::std::boxed::Box<dyn FnOnce()>
+					}
+				};
+				let __read_radio_value = (#radio_value).to_string();
+				let __write_radio_value = __read_radio_value.clone();
+				ControlBinding::from_parts(
+					ControlKind::Radio,
+					Some(__read_radio_value.clone()),
+					__binding_target,
+					move || ControlValue::Checked(#value == __read_radio_value),
+					move |__value| {
+						if let ControlValue::Checked(true) = __value {
+							let __raw = __write_radio_value.clone();
+							#parse
+							Ok(#pages_crate::component::ControlWriteOutcome::Committed)
+						} else {
+							Ok(#pages_crate::component::ControlWriteOutcome::Ignored)
+						}
+					},
+					__snapshot_restore,
+				).with_lifetime_target(__binding_source).prefer_source_on_hydration({
+					let __explicitly_reset = __explicitly_reset.clone();
+					let __source_preferred_fields = __source_preferred_fields.clone();
+					move || __explicitly_reset.get() || __source_preferred_fields.borrow().contains(&__source_preference_key)
+				}).on_native_reset({
+					let epoch = __native_reset_epoch.clone();
+					move || epoch.update(|version| *version = version.wrapping_add(1))
+				})
+			})
+		};
+	} else if matches!(field.widget, TypedWidget::CheckboxInput)
+		&& matches!(field.field_type, TypedFieldType::BooleanField)
+	{
+		(
+			quote! { Checkbox },
+			quote! { ControlValue::Checked(__read_value()) },
+			quote! {
+				if let ControlValue::Checked(__value) = __value {
+					__write_value(__value);
+				}
+			},
+		)
+	} else if let TypedFieldType::MultipleChoiceField { inner } = &field.field_type {
+		let values = field_selected_values_expr(field, quote! { __read_value() });
+		(
+			quote! { SelectMany },
+			quote! { ControlValue::SelectedValues(#values) },
+			quote! {
+				if let ControlValue::SelectedValues(__values) = __value {
+					__write_value(__values.iter()
+						.filter_map(|__value| __value.parse::<#inner>().ok()).collect());
+				}
+			},
+		)
+	} else {
+		let kind = if matches!(field.widget, TypedWidget::Select) {
+			quote! { SelectOne }
+		} else if matches!(
+			field.widget,
+			TypedWidget::NumberInput | TypedWidget::RangeInput
+		) {
+			quote! { Number }
+		} else {
+			quote! { Text }
+		};
+		(
+			kind,
+			quote! { ControlValue::Text(#value) },
+			quote! { if let ControlValue::Text(__raw) = __value { #parse } },
+		)
+	};
+	quote! {
+		.control_binding({
+			use #pages_crate::component::{ControlBinding, ControlKind, ControlValue};
+			#setup
+				let __read_value = ::std::rc::Rc::new(__read_value);
+				let __write_value = ::std::rc::Rc::new(__write_value);
+				let __snapshot_restore = {
+					let read = __read_value.clone();
+					let write = __write_value.clone();
+					move || {
+						let value = #pages_crate::reactive::untracked(|| read());
+						let write = write.clone();
+						::std::boxed::Box::new(move || write(value)) as ::std::boxed::Box<dyn FnOnce()>
+					}
+				};
+			ControlBinding::from_parts(ControlKind::#kind, None, __binding_target, move || #read, move |__value| {
+				#write
+				Ok(#pages_crate::component::ControlWriteOutcome::Committed)
+			}, __snapshot_restore).with_lifetime_target(__binding_source).prefer_source_on_hydration({
+				let __explicitly_reset = __explicitly_reset.clone();
+				let __source_preferred_fields = __source_preferred_fields.clone();
+				move || __explicitly_reset.get() || __source_preferred_fields.borrow().contains(&__source_preference_key)
+			}).on_native_reset({
+				let epoch = __native_reset_epoch.clone();
+				move || epoch.update(|version| *version = version.wrapping_add(1))
+			})
+		})
+	}
+}
+
+/// Shares stable text parsing between DOM listeners and hydration/reset adoption.
+fn generate_text_value_update(
+	field_type: &TypedFieldType,
+	raw: TokenStream,
+	assignment: TokenStream,
+) -> TokenStream {
+	let optional_type = match field_type {
+		TypedFieldType::DateField => Some(quote! { chrono::NaiveDate }),
+		TypedFieldType::TimeField => Some(quote! { chrono::NaiveTime }),
+		TypedFieldType::UuidField => Some(quote! { uuid::Uuid }),
+		TypedFieldType::IpAddressField => Some(quote! { ::std::net::IpAddr }),
+		_ => None,
+	};
+	if let Some(ty) = optional_type {
+		return quote! {
+			let __raw = #raw;
+			if __raw.is_empty() {
+				let __new_value = ::core::option::Option::None;
+				#assignment
+			} else if let Ok(__parsed) = __raw.parse::<#ty>() {
+				let __new_value = ::core::option::Option::Some(__parsed);
+				#assignment
+			}
+		};
+	}
+	match field_type {
+		TypedFieldType::CharField
+		| TypedFieldType::TextField
+		| TypedFieldType::EmailField
+		| TypedFieldType::PasswordField
+		| TypedFieldType::UrlField
+		| TypedFieldType::SlugField => quote! { let __new_value = #raw; #assignment },
+		TypedFieldType::DateTimeField => quote! {
+			let __raw = #raw;
+			if __raw.is_empty() {
+				let __new_value = ::core::option::Option::None;
+				#assignment
+			} else if let Ok(__parsed) =
+				chrono::NaiveDateTime::parse_from_str(&__raw, "%Y-%m-%dT%H:%M:%S%.f")
+					.or_else(|_| chrono::NaiveDateTime::parse_from_str(&__raw, "%Y-%m-%dT%H:%M"))
+			{
+				let __new_value = ::core::option::Option::Some(__parsed);
+				#assignment
+			}
+		},
+		TypedFieldType::JsonField { inner } => quote! {
+			if let Ok(__new_value) = ::serde_json::from_str::<#inner>(&#raw) { #assignment }
+		},
+		TypedFieldType::FileField
+		| TypedFieldType::ImageField
+		| TypedFieldType::MultipleChoiceField { .. } => TokenStream::new(),
+		_ => {
+			let ty = field_type_to_value_type(field_type);
+			quote! { if let Ok(__new_value) = (#raw).parse::<#ty>() { #assignment } }
+		}
+	}
+}
+
+fn collection_field_assignment(
+	field: &TypedFormFieldDef,
+	pages_crate: &TokenStream,
+	collection_name_str: &str,
+) -> TokenStream {
+	let field_name = &field.name;
+	let field_name_str = ident_to_wire_name(&field.name);
+	let field_type = field_type_to_value_type(&field.field_type);
+	quote! {
+		let mut __items = __field_collection_signal.get();
+		if let ::core::option::Option::Some(__position) =
+			__items.iter().position(|entry| entry.key() == __item_key)
+		{
+			let __item_index = __items[__position].index();
+			let mut __item_value = __items[__position].value().clone();
+			let __path_value = __new_value.clone();
+			__item_value.#field_name = __new_value;
+			__items[__position] = #pages_crate::CollectionItem::new(
+				__item_key,
+				__item_index,
+				__item_value,
+			);
+			__field_collection_signal.set(__items);
+			let __path_key = ::std::format!(
+				"{}:{:?}:{}",
+				#collection_name_str,
+				__item_key,
+				#field_name_str,
+			);
+			let __path_signal = __field_path_signals
+				.borrow()
+				.get(&__path_key)
+				.and_then(|signal| {
+					signal
+						.downcast_ref::<#pages_crate::reactive::Signal<#field_type>>()
+						.cloned()
+				});
+			if let ::core::option::Option::Some(__path_signal) = __path_signal {
+				__path_signal.set(__path_value);
+			}
+		}
 	}
 }
 
@@ -7152,6 +7569,11 @@ fn generate_field_view(
 	pages_crate: &TokenStream,
 	signal_ident: Option<&syn::Ident>,
 ) -> TokenStream {
+	let choice_values_equal = if choice_inner_type_is_string(&field.field_type) {
+		quote! { __metadata.value == value }
+	} else {
+		quote! { __metadata.value.to_string() == value.to_string() }
+	};
 	let field_name = &field.name;
 	let field_name_str = field_name.to_string();
 	let input_type = widget_to_input_type(&field.widget);
@@ -7167,51 +7589,41 @@ fn generate_field_view(
 	let label_class = field.styling.label_class();
 	let input_class = field.styling.input_class();
 
-	// Generate custom attributes (aria-*, data-*)
-	let custom_attrs = generate_custom_attrs(&field.custom_attrs);
-	let native_attrs = generate_native_attrs(&field.native_attrs);
+	let field_id = quote! { #field_name_str };
+	let field_attrs = generate_field_attrs(field, &field_id, false);
+	let help_text = generate_field_help_text(field, &field_id);
 
-	// Generate event listener for two-way binding
-	let event_listener = generate_bind_listener(
-		signal_ident,
-		&field.widget,
-		&field.field_type,
-		pages_crate,
-		&field_name_str,
-	);
-	let control_binding = generate_generated_control_binding(
-		signal_ident,
-		&field.widget,
-		&field.field_type,
-		pages_crate,
-	);
+	let control_binding =
+		generate_generated_control_binding(field, pages_crate, signal_ident, None);
+	// Bound controls install their typed listeners through the descriptor.
 	let event_listener = if control_binding.is_empty() {
-		event_listener
-	} else {
-		control_binding
-	};
-	let (radio_reset_capture, radio_binding) = if let Some(radio_signal) = signal_ident
-		&& matches!(field.widget, TypedWidget::RadioSelect)
-		&& is_string_valued_field(&field.field_type)
-	{
-		(
-			quote! {
-				let __radio_explicitly_reset = self.__explicitly_reset.clone();
-			},
-			quote! {
-				.control_binding(
-					#pages_crate::component::ControlBinding::radio(
-						#radio_signal.clone(), choice_value.to_string(),
-					)
-					.prefer_source_on_hydration({
-						let explicitly_reset = __radio_explicitly_reset.clone();
-						move || explicitly_reset.get()
-					})
-				)
-			},
+		generate_bind_listener(
+			signal_ident,
+			&field.widget,
+			&field.field_type,
+			pages_crate,
+			&field_name_str,
 		)
 	} else {
-		(TokenStream::new(), event_listener.clone())
+		TokenStream::new()
+	};
+
+	let initial_value = field_value_expr(field, quote! { self.#field_name.get_untracked() });
+	let selected_values =
+		field_selected_values_expr(field, quote! { self.#field_name.get_untracked() });
+
+	let initial_attr = if matches!(
+		field.field_type,
+		TypedFieldType::FileField | TypedFieldType::ImageField
+	) {
+		TokenStream::new()
+	} else {
+		quote! { .attr("value", #initial_value) }
+	};
+	let checked_attr = if matches!(field.field_type, TypedFieldType::BooleanField) {
+		quote! { .bool_attr("checked", self.#field_name.get_untracked()) }
+	} else {
+		TokenStream::new()
 	};
 
 	// Generate input element based on widget type
@@ -7283,11 +7695,11 @@ fn generate_field_view(
 					.attr("id", #field_name_str)
 					.attr("class", #input_class)
 					.attr("placeholder", #placeholder)
-						.bool_attr("required", #required)
 						#autocomplete_attr
-						#native_attrs
-						#custom_attrs
-										#event_listener
+						#field_attrs
+																#event_listener
+					#control_binding
+					.child(#initial_value)
 			}
 		}
 		TypedWidget::Select | TypedWidget::SelectMultiple => {
@@ -7299,6 +7711,7 @@ fn generate_field_view(
 					syn::Ident::new(&format!("{}_choice_items", field.name), field.name.span());
 				quote! {
 						.child({
+							let __selected_values = #selected_values;
 							let __choices_signal = self.#choices_name.clone();
 							let __choice_items_signal = self.#choice_items_name.clone();
 							#pages_crate::component::Page::reactive(move || {
@@ -7310,7 +7723,7 @@ fn generate_field_view(
 									.map(|(i, (value, label))| {
 										match __choice_items.get(i) {
 											::core::option::Option::Some(__metadata)
-												if __metadata.value.to_string() == value.to_string()
+												if #choice_values_equal
 													&& __metadata.label.as_str() == label.as_str() =>
 											{
 												__ReinhardtChoiceItem {
@@ -7341,6 +7754,7 @@ fn generate_field_view(
 							for choice in __choices.into_iter() {
 								let __option = PageElement::new("option")
 									.attr("value", choice.value.to_string())
+									.bool_attr("selected", __selected_values.iter().any(|selected| selected == &choice.value.to_string()))
 									.bool_attr("disabled", choice.disabled)
 									.child(choice.label)
 									.into_page();
@@ -7422,7 +7836,7 @@ fn generate_field_view(
 				let choice_children: Vec<TokenStream> = field
 					.static_choices
 					.iter()
-					.map(generate_static_choice_item_view)
+					.map(|choice| generate_static_choice_item_view(choice, Some(&selected_values)))
 					.collect();
 				quote! {
 					#(.child(#choice_children))*
@@ -7433,12 +7847,11 @@ fn generate_field_view(
 					.attr("name", #field_name_str)
 					.attr("id", #field_name_str)
 					.attr("class", #input_class)
-					.bool_attr("required", #required)
 					.bool_attr("multiple", #multiple)
 					#autocomplete_attr
-					#native_attrs
-					#custom_attrs
-										#event_listener
+					#field_attrs
+															#event_listener
+					#control_binding
 					#choice_children
 			}
 		}
@@ -7449,33 +7862,37 @@ fn generate_field_view(
 					.attr("name", #field_name_str)
 					.attr("id", #field_name_str)
 						.attr("class", #input_class)
-						.bool_attr("required", #required)
-						#native_attrs
-						#custom_attrs
+						#field_attrs
 						#event_listener
+					#checked_attr
+					#control_binding
 			}
 		}
 		TypedWidget::RadioSelect if field.choices_config.is_some() => {
+			let field_attrs = generate_field_attrs(field, &field_id, true);
 			let choices_name =
 				syn::Ident::new(&format!("{}_choices", field.name), field.name.span());
 			let choice_items_name =
 				syn::Ident::new(&format!("{}_choice_items", field.name), field.name.span());
-			// Controlled string radios project checked state without rerendering the group.
-			let checked_attr = signal_ident
-				.filter(|_| !is_string_valued_field(&field.field_type))
-				.map(|signal_ident| {
-					quote! {
-							.bool_attr(
-							"checked",
-							#signal_ident.get().to_string() == choice_value.to_string(),
-						)
-					}
-				});
+			let radio_binding = generate_generated_control_binding(
+				field,
+				pages_crate,
+				signal_ident,
+				Some(quote! { choice_value }),
+			);
+			let checked_attr = quote! {
+				.bool_attr("checked", __initial_radio_value == choice_value)
+			};
+
 			quote! {
 					{
+						let __initial_radio_value = #initial_value;
+						let __explicitly_reset = __explicitly_reset.clone();
+						let __source_preferred_fields = __source_preferred_fields.clone();
+						let __native_reset_epoch = __native_reset_epoch.clone();
 						let __choices_signal = self.#choices_name.clone();
 						let __choice_items_signal = self.#choice_items_name.clone();
-						#radio_reset_capture
+
 						#pages_crate::component::Page::reactive(move || {
 							let __choice_items = __choice_items_signal.get();
 							let __choices: ::std::vec::Vec<_> = __choices_signal
@@ -7485,7 +7902,7 @@ fn generate_field_view(
 								.map(|(i, (value, label))| {
 									match __choice_items.get(i) {
 										::core::option::Option::Some(__metadata)
-											if __metadata.value.to_string() == value.to_string()
+											if #choice_values_equal
 												&& __metadata.label.as_str() == label.as_str() =>
 										{
 											__ReinhardtChoiceItem {
@@ -7509,7 +7926,7 @@ fn generate_field_view(
 							let mut __children = ::std::vec::Vec::new();
 							for (i, choice) in __choices.into_iter().enumerate() {
 							let _ = (&choice.group, choice.group_disabled);
-							let choice_value = choice.value;
+							let choice_value = choice.value.to_string();
 							let __choice_id =
 								::std::format!("{}_{}", #field_name_str, i);
 							__children.push(
@@ -7520,14 +7937,11 @@ fn generate_field_view(
 											.attr("type", "radio")
 											.attr("name", #field_name_str)
 											.attr("id", __choice_id)
-											.attr("value", choice_value.to_string())
+											.attr("value", choice_value.clone())
 											.attr("class", #input_class)
-											.bool_attr("required", #required)
-											.bool_attr("disabled", choice.disabled)
 											#checked_attr
-										#native_attrs
-										#custom_attrs
-										#radio_binding
+										#field_attrs
+																				#radio_binding
 									)
 									.child(choice.label)
 									.into_page(),
@@ -7544,11 +7958,9 @@ fn generate_field_view(
 					.attr("type", "radio")
 					.attr("name", #field_name_str)
 					.attr("id", #field_name_str)
-						.attr("class", #input_class)
-						.bool_attr("required", #required)
-						#native_attrs
-						#custom_attrs
-						#event_listener
+					.attr("class", #input_class)
+					#field_attrs
+					#event_listener
 			}
 		}
 		_ => {
@@ -7560,11 +7972,11 @@ fn generate_field_view(
 					.attr("id", #field_name_str)
 					.attr("class", #input_class)
 						.attr("placeholder", #placeholder)
-						.bool_attr("required", #required)
 						#autocomplete_attr
-						#native_attrs
-						#custom_attrs
+						#field_attrs
 						#event_listener
+					#initial_attr
+					#control_binding
 			}
 		}
 	};
@@ -7587,16 +7999,29 @@ fn generate_field_view(
 		(None, TokenStream::new(), TokenStream::new())
 	};
 
-	// Generate label element (skip for hidden inputs)
+	let is_radio_group =
+		matches!(field.widget, TypedWidget::RadioSelect) && field.choices_config.is_some();
+	let group_label_id = format!("{field_name_str}--label");
+
+	// Native radio groups use legends; custom wrappers need a non-label caption.
 	let label_element = if matches!(field.widget, TypedWidget::HiddenInput) {
 		quote! {}
 	} else {
+		let (label_tag, label_target) = if is_radio_group {
+			if field.wrapper.is_some() {
+				("span", quote! { .attr("id", #group_label_id) })
+			} else {
+				("legend", TokenStream::new())
+			}
+		} else {
+			("label", quote! { .attr("for", #field_name_str) })
+		};
 		// If icon position is Label, include the icon inside the label
 		let icon_child = icon_in_label.unwrap_or_default();
 		quote! {
 			.child(
-				PageElement::new("label")
-					.attr("for", #field_name_str)
+				PageElement::new(#label_tag)
+					#label_target
 					.attr("class", #label_class)
 					#icon_child
 					.child(#label_text)
@@ -7608,38 +8033,38 @@ fn generate_field_view(
 	if matches!(field.widget, TypedWidget::HiddenInput) {
 		input_element
 	} else {
-		// Use custom wrapper if specified, otherwise default to div
+		// Custom wrappers can be phrasing elements that cannot contain a fieldset.
 		let wrapper_attrs = generate_wrapper_attrs(&field.wrapper, wrapper_class);
 		let wrapper_tag = field
 			.wrapper
 			.as_ref()
 			.map(|w| w.tag.as_str())
-			.unwrap_or("div");
+			.unwrap_or(if is_radio_group { "fieldset" } else { "div" });
+		let group_attrs = if is_radio_group && field.wrapper.is_some() {
+			let has_role = field
+				.wrapper
+				.as_ref()
+				.is_some_and(|wrapper| wrapper.attrs.iter().any(|attr| attr.name == "role"));
+			let role = (!has_role).then(|| quote! { .attr("role", "group") });
+			quote! { #role .attr("aria-labelledby", #group_label_id) }
+		} else {
+			TokenStream::new()
+		};
 
 		quote! {
 			PageElement::new(#wrapper_tag)
 				#wrapper_attrs
+				#group_attrs
 				#label_element
 				#icon_left
 				.child(#input_element)
 				#icon_right
+				#help_text
 		}
 	}
 }
 
-fn is_string_valued_field(field_type: &TypedFieldType) -> bool {
-	matches!(
-		field_type,
-		TypedFieldType::CharField
-			| TypedFieldType::TextField
-			| TypedFieldType::EmailField
-			| TypedFieldType::PasswordField
-			| TypedFieldType::UrlField
-			| TypedFieldType::SlugField
-	) || matches!(field_type, TypedFieldType::ChoiceField { inner } if type_is_string(inner))
-}
-
-fn generate_generated_control_binding(
+fn generate_typed_control_binding(
 	signal_ident: Option<&syn::Ident>,
 	widget: &TypedWidget,
 	field_type: &TypedFieldType,
@@ -7651,7 +8076,13 @@ fn generate_generated_control_binding(
 	let hydration_preference = quote! {
 		.prefer_source_on_hydration({
 			let explicitly_reset = self.__explicitly_reset.clone();
-			move || explicitly_reset.get()
+			let preferred = self.__source_preferred_fields.clone();
+			let field_name = ::std::string::String::from(stringify!(#signal_ident).trim_end_matches("_signal"));
+			move || explicitly_reset.get() || preferred.borrow().contains(&field_name)
+		})
+		.on_native_reset({
+			let epoch = self.__native_reset_epoch;
+			move || epoch.update(|epoch| *epoch = epoch.wrapping_add(1))
 		})
 	};
 	match (widget, field_type) {
@@ -7843,18 +8274,152 @@ fn generate_icon_child_attrs(attrs: &[reinhardt_manouche::core::TypedIconAttr]) 
 	result
 }
 
-/// Generates custom attribute code (aria-*, data-*) for form field input elements.
+/// Lowers field metadata once for ordinary controls, radio choices, and collection items.
+fn generate_field_attrs(
+	field: &TypedFormFieldDef,
+	field_id: &TokenStream,
+	radio_choice: bool,
+) -> TokenStream {
+	let text_input = matches!(
+		field.widget,
+		TypedWidget::TextInput
+			| TypedWidget::SearchInput
+			| TypedWidget::TelInput
+			| TypedWidget::UrlInput
+			| TypedWidget::EmailInput
+			| TypedWidget::PasswordInput
+	);
+	let textarea = matches!(field.widget, TypedWidget::Textarea);
+	let numeric = matches!(
+		field.widget,
+		TypedWidget::NumberInput | TypedWidget::RangeInput
+	);
+	let readonly = field.display.readonly
+		&& (text_input
+			|| textarea
+			|| matches!(
+				field.widget,
+				TypedWidget::NumberInput
+					| TypedWidget::DateInput
+					| TypedWidget::MonthInput
+					| TypedWidget::WeekInput
+					| TypedWidget::TimeInput
+					| TypedWidget::DateTimeInput
+			));
+	let required = field.validation.required
+		&& !matches!(
+			field.widget,
+			TypedWidget::HiddenInput | TypedWidget::RangeInput | TypedWidget::ColorInput
+		);
+	let disabled = field.display.disabled;
+	let autofocus = field.display.autofocus && !matches!(field.widget, TypedWidget::HiddenInput);
+	let (disabled, autofocus) = if radio_choice {
+		// A radio field disables every choice but assigns autofocus only once.
+		(
+			quote! { #disabled || choice.disabled },
+			quote! { #autofocus && i == 0 },
+		)
+	} else {
+		(quote! { #disabled }, quote! { #autofocus })
+	};
+	let mut result = quote! {
+		.bool_attr("required", #required)
+		.bool_attr("disabled", #disabled)
+		.bool_attr("readonly", #readonly)
+		.bool_attr("autofocus", #autofocus)
+	};
+
+	if text_input || textarea {
+		for (name, value) in [
+			("minlength", field.validation.min_length),
+			("maxlength", field.validation.max_length),
+		] {
+			if let Some(value) = value {
+				let value = value.to_string();
+				result.extend(quote! { .attr(#name, #value) });
+			}
+		}
+	}
+	if text_input && let Some(pattern) = &field.validation.pattern {
+		result.extend(quote! { .attr("pattern", #pattern) });
+	}
+	if numeric {
+		// Explicit native bounds take precedence independently, without duplicate attributes.
+		for (name, legacy, native) in [
+			("min", field.validation.min_value, &field.native_attrs.min),
+			("max", field.validation.max_value, &field.native_attrs.max),
+		] {
+			if native.is_none()
+				&& let Some(value) = legacy
+			{
+				let value = value.to_string();
+				result.extend(quote! { .attr(#name, #value) });
+			}
+		}
+	}
+	result.extend(generate_native_attrs(&field.native_attrs));
+	let help_id = field
+		.display
+		.help_text
+		.as_ref()
+		.filter(|_| !matches!(field.widget, TypedWidget::HiddenInput))
+		.map(|_| quote! { ::std::format!("{}--help", #field_id) });
+	result.extend(generate_custom_attrs(&field.custom_attrs, help_id.as_ref()));
+	result
+}
+
+/// Renders help as escaped text with an ID derived from the corresponding control.
+fn generate_field_help_text(field: &TypedFormFieldDef, field_id: &TokenStream) -> TokenStream {
+	if matches!(
+		field.widget,
+		TypedWidget::HiddenInput | TypedWidget::CustomExperimental(_)
+	) {
+		return TokenStream::new();
+	}
+	// Custom wrappers may accept only phrasing content, such as a paragraph.
+	let help_tag = if field.wrapper.is_some() { "span" } else { "p" };
+	field
+		.display
+		.help_text
+		.as_ref()
+		.map(|text| {
+			quote! {
+				.child(
+					PageElement::new(#help_tag)
+						.attr("id", ::std::format!("{}--help", #field_id))
+						.attr("class", "reinhardt-help")
+						.child(#text)
+				)
+			}
+		})
+		.unwrap_or_default()
+}
+
+/// Generates custom attributes, retaining existing descriptions when adding help text.
 ///
 /// Converts underscores in attribute names to hyphens for HTML output.
 /// For example, `aria_label` becomes `aria-label`.
-fn generate_custom_attrs(attrs: &[TypedCustomAttr]) -> TokenStream {
+fn generate_custom_attrs(attrs: &[TypedCustomAttr], help_id: Option<&TokenStream>) -> TokenStream {
 	let mut result = TokenStream::new();
+	let mut has_description = false;
 	for attr in attrs {
 		let html_name = attr.html_name(); // Convert underscores to hyphens
 		let value = &attr.value;
+		if html_name == "aria-describedby"
+			&& let Some(help_id) = help_id
+		{
+			result.extend(quote! {
+				.attr(#html_name, ::std::format!("{} {}", #value, #help_id))
+			});
+			has_description = true;
+			continue;
+		}
 		result.extend(quote! {
 			.attr(#html_name, #value)
 		});
+	}
+	if !has_description && let Some(help_id) = help_id {
+		result.extend(quote! { .attr("aria-describedby", #help_id) });
 	}
 	result
 }
@@ -11144,13 +11709,14 @@ mod tests {
 		assert!(output_str.contains("PageElement :: new (\"datalist\")"));
 		assert!(output_str.contains(". attr (\"id\" , \"suggestions\")"));
 		assert!(output_str.contains("PageElement :: new (\"option\")"));
-		assert!(output_str.contains(". attr (\"value\" , (\"a\") . to_string ())"));
-		assert!(output_str.contains(". attr (\"value\" , (\"b\") . to_string ())"));
+		assert!(output_str.contains("let __choice_value = (\"a\") . to_string () ;"));
+		assert!(output_str.contains("let __choice_value = (\"b\") . to_string () ;"));
+		assert!(output_str.contains(". attr (\"value\" , __choice_value)"));
 		assert!(output_str.contains(". bool_attr (\"disabled\" , true)"));
 		assert!(output_str.contains("PageElement :: new (\"select\")"));
 		assert!(output_str.contains("PageElement :: new (\"optgroup\")"));
 		assert!(output_str.contains(". attr (\"label\" , \"Active\")"));
-		assert!(output_str.contains(". attr (\"value\" , (\"open\") . to_string ())"));
+		assert!(output_str.contains("let __choice_value = (\"open\") . to_string () ;"));
 	}
 
 	// ========================================
@@ -11293,13 +11859,13 @@ mod tests {
 		assert!(output_str.contains("for (i , choice) in __choices . into_iter () . enumerate ()"));
 		assert!(output_str.contains("let choice_value = choice . value"));
 		assert!(output_str.contains(". attr (\"type\" , \"radio\")"));
-		assert!(output_str.contains(". attr (\"value\" , choice_value . to_string ())"));
-		assert!(output_str.contains(". bool_attr (\"disabled\" , choice . disabled)"));
+		assert!(output_str.contains(". attr (\"value\" , choice_value . clone ())"));
+		assert!(output_str.contains(". bool_attr (\"disabled\" , false || choice . disabled)"));
 		assert!(output_str.contains(". child (choice . label)"));
-		assert!(output_str.contains("KnownEvent :: Change"));
-		assert!(output_str.contains("ChangeEvent"));
-		assert!(output_str.contains("event . value ()"));
-		assert!(!output_str.contains("ControlBinding :: radio"));
+		assert_eq!(output_str.matches("ControlKind :: Radio").count(), 1);
+		assert!(output_str.contains("ControlValue :: Checked (true)"));
+		assert!(output_str.contains("parse :: < i64 >"));
+		assert_eq!(output_str.matches("KnownEvent :: Change").count(), 0);
 	}
 
 	#[rstest::rstest]
@@ -11366,7 +11932,7 @@ mod tests {
 	}
 
 	#[rstest::rstest]
-	fn test_generate_bind_file_field_uses_change_event_and_files() {
+	fn test_generate_bind_file_field_uses_browser_owned_file_binding() {
 		let input = quote! {
 			name: FileBindForm,
 			action: "/test",
@@ -11381,11 +11947,10 @@ mod tests {
 		let output = parse_validate_generate(input);
 		let output_str = output.to_string();
 
-		assert!(output_str.contains("typed_event_handler :: <"));
-		assert!(output_str.contains("ChangeEvent"));
-		assert!(output_str.contains("event . files ()"));
-		assert!(output_str.contains("file . raw () . clone ()"));
-		assert!(output_str.contains("failed to extract `files`"));
+		assert_eq!(output_str.matches("ControlKind :: File").count(), 1);
+		assert!(output_str.contains("ControlValue :: File (file) => __write_value (file)"));
+		assert!(output_str.contains("ControlValue :: Checked (false)"));
+		assert_eq!(output_str.matches("typed_event_handler :: <").count(), 0);
 		assert!(output_str.contains("\"document\""));
 	}
 

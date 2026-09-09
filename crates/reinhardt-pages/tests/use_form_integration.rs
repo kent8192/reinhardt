@@ -635,6 +635,80 @@ fn use_form_can_sync_after_native_reset() {
 }
 
 #[test]
+fn native_reset_preserves_custom_widget_and_source_subscriptions() {
+	// Arrange: an invalid custom widget coexists with ordinary bound fields.
+	let booking = form! {
+		name: NativeResetCustomWidgetForm,
+		fields: {
+			answer: CharField {}
+			name: CharField {
+				initial: "before"
+			}
+			date_range: CharField {
+				initial: "2026-06-01..2026-06-02",
+				widget: CustomWidget(capturing_date_range_picker) {
+					experimental,
+					adapter: DateRangeAdapter,
+				},
+			}
+		}
+	};
+	let runtime = use_form(&booking)
+		.revalidate_on(RevalidateOn::Change)
+		.build();
+	let _page = booking.clone().into_page();
+	let props = take_last_custom_widget_props();
+	assert!((props.on_raw_change)(CustomWidgetRawValue::String(String::from("invalid"))).is_err());
+	assert_eq!(
+		runtime.get_field_state(booking.date_range_field()).error,
+		Some(FieldError::new("invalid date range"))
+	);
+	let event_count = Rc::new(Cell::new(0));
+	let observed_events = Rc::clone(&event_count);
+	let _subscription = runtime.subscribe(move |_| observed_events.set(observed_events.get() + 1));
+
+	// Act: an epoch-only reset runs directly, without an enclosing reactive batch.
+	booking
+		.__native_reset_epoch
+		.update(|epoch| *epoch = epoch.wrapping_add(1));
+
+	// Assert: clearing the custom error keeps every source subscription active.
+	assert_eq!(
+		runtime.get_field_state(booking.date_range_field()).error,
+		None
+	);
+	assert!(!runtime.form_state().is_touched.get());
+	assert_eq!(event_count.get(), 0);
+	assert!(
+		(props.on_raw_change)(CustomWidgetRawValue::String(String::from("still invalid"))).is_err()
+	);
+	assert_eq!(
+		runtime.get_field_state(booking.date_range_field()).error,
+		Some(FieldError::new("invalid date range"))
+	);
+	assert!(
+		(props.on_raw_change)(CustomWidgetRawValue::String(String::from(
+			"2026-06-03..2026-06-04"
+		)))
+		.is_ok()
+	);
+	assert_eq!(runtime.watch().get().date_range, "2026-06-03..2026-06-04");
+	assert_eq!(
+		runtime.get_field_state(booking.date_range_field()).error,
+		None
+	);
+	assert_eq!(event_count.get(), 2);
+	booking.name().set(String::from("after"));
+	assert_eq!(runtime.watch().get().name, "after");
+	assert!(runtime.get_field_state(booking.name_field()).is_touched);
+	assert_eq!(event_count.get(), 4);
+	booking.answer().set(String::from("on"));
+	assert_eq!(runtime.watch().get().answer, "on");
+	assert!(runtime.form_state().is_touched.get());
+	assert_eq!(event_count.get(), 6);
+}
+
+#[test]
 fn custom_widget_bridge_parse_error_sets_runtime_field_error() {
 	let booking = form! {
 		name: CustomWidgetRuntimeForm,

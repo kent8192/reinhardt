@@ -420,8 +420,10 @@ mod tests {
 			changes,
 		);
 
+		// Act
 		backend.log_event(event).await.unwrap();
 
+		// Assert
 		let events = backend.get_events(None).await.unwrap();
 		assert_eq!(events.len(), 1);
 		assert_eq!(events[0].event_type, EventType::ConfigUpdate);

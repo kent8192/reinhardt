@@ -26,6 +26,8 @@ pub enum ControlKind {
 	SelectOne,
 	/// A multiple-selection control.
 	SelectMany,
+	/// A browser-owned file selection; only clearing is writable.
+	File,
 }
 
 impl fmt::Display for ControlKind {
@@ -37,6 +39,7 @@ impl fmt::Display for ControlKind {
 			Self::Radio => f.write_str("radio"),
 			Self::SelectOne => f.write_str("select-one"),
 			Self::SelectMany => f.write_str("select-many"),
+			Self::File => f.write_str("file"),
 		}
 	}
 }
@@ -59,6 +62,7 @@ pub fn controlled_attribute_update_is_supported(
 				value.is_some_and(|value| value.eq_ignore_ascii_case("checkbox"))
 			}
 			ControlKind::Radio => value.is_some_and(|value| value.eq_ignore_ascii_case("radio")),
+			ControlKind::File => value.is_some_and(|value| value.eq_ignore_ascii_case("file")),
 			ControlKind::SelectOne | ControlKind::SelectMany => true,
 		};
 	}
@@ -70,7 +74,8 @@ pub fn controlled_attribute_update_is_supported(
 			ControlKind::Text
 			| ControlKind::Number
 			| ControlKind::Checkbox
-			| ControlKind::Radio => true,
+			| ControlKind::Radio
+			| ControlKind::File => true,
 		};
 	}
 	true
@@ -110,6 +115,7 @@ fn is_text_input_type(input_type: &str) -> bool {
 		"url",
 		"email",
 		"password",
+		"hidden",
 		"color",
 		"date",
 		"datetime-local",
@@ -136,6 +142,9 @@ pub enum ControlValue {
 	Checked(bool),
 	/// Values selected by a multiple-selection control.
 	SelectedValues(Vec<String>),
+	/// The actual browser-owned file selected during hydration or native reset.
+	#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+	File(Option<web_sys::File>),
 }
 
 impl ControlValue {
@@ -144,6 +153,8 @@ impl ControlValue {
 			Self::Text(_) => "text",
 			Self::Checked(_) => "checked",
 			Self::SelectedValues(_) => "selected-values",
+			#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+			Self::File(_) => "file",
 		}
 	}
 }
@@ -320,6 +331,8 @@ pub struct ControlBinding {
 	write: WriteValue,
 	snapshot: SnapshotValue,
 	hydration_preference: Option<HydrationPreference>,
+	native_reset: Option<Shared<dyn Fn()>>,
+	lifetime_target: Option<NodeId>,
 }
 
 impl fmt::Debug for ControlBinding {
@@ -355,6 +368,8 @@ impl ControlBinding {
 			}),
 			snapshot,
 			hydration_preference: None,
+			native_reset: None,
+			lifetime_target: None,
 		}
 	}
 
@@ -379,6 +394,8 @@ impl ControlBinding {
 			}),
 			snapshot,
 			hydration_preference: None,
+			native_reset: None,
+			lifetime_target: None,
 		}
 	}
 
@@ -405,6 +422,8 @@ impl ControlBinding {
 			}),
 			snapshot,
 			hydration_preference: None,
+			native_reset: None,
+			lifetime_target: None,
 		}
 	}
 
@@ -442,6 +461,12 @@ impl ControlBinding {
 		(self.read)()
 	}
 
+	/// Reads the source without subscribing the current reactive observer.
+	#[doc(hidden)]
+	pub fn read_untracked(&self) -> ControlValue {
+		crate::reactive::runtime::run_without_observer(|| self.read())
+	}
+
 	/// Applies a cross-target value to the bound signal.
 	pub fn write(&self, value: ControlValue) -> Result<ControlWriteOutcome, ControlBindingError> {
 		(self.write)(value)
@@ -473,6 +498,8 @@ impl ControlBinding {
 				restore: Some(snapshot_restore()),
 			}),
 			hydration_preference: None,
+			native_reset: None,
+			lifetime_target: None,
 		}
 	}
 
@@ -489,6 +516,40 @@ impl ControlBinding {
 		self.hydration_preference
 			.as_ref()
 			.is_some_and(|predicate| predicate())
+	}
+
+	/// Associates a projected binding with the signal that owns its lifetime.
+	#[doc(hidden)]
+	pub fn with_lifetime_target(mut self, target: NodeId) -> Self {
+		self.lifetime_target = Some(target);
+		self
+	}
+
+	/// Returns the signal whose disposal ends this binding's updates.
+	#[doc(hidden)]
+	pub fn lifetime_target(&self) -> NodeId {
+		self.lifetime_target.unwrap_or(self.target)
+	}
+
+	/// Registers runtime bookkeeping after all native reset values are adopted.
+	#[doc(hidden)]
+	pub fn on_native_reset(mut self, callback: impl Fn() + 'static) -> Self {
+		self.native_reset = Some(Shared::new(callback));
+		self
+	}
+
+	/// Returns whether a generated form owns native reset bookkeeping.
+	#[doc(hidden)]
+	pub fn has_native_reset(&self) -> bool {
+		self.native_reset.is_some()
+	}
+
+	/// Updates native reset bookkeeping within the batch of browser value writes.
+	#[doc(hidden)]
+	pub fn notify_native_reset(&self) {
+		if let Some(callback) = &self.native_reset {
+			callback();
+		}
 	}
 
 	fn string_value(kind: ControlKind, signal: Signal<String>) -> Self {
@@ -508,6 +569,8 @@ impl ControlBinding {
 			}),
 			snapshot,
 			hydration_preference: None,
+			native_reset: None,
+			lifetime_target: None,
 		}
 	}
 
@@ -571,6 +634,8 @@ impl ControlBinding {
 				}
 			}),
 			hydration_preference: None,
+			native_reset: None,
+			lifetime_target: None,
 		}
 	}
 }

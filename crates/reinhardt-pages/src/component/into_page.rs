@@ -166,7 +166,7 @@ pub(crate) fn controlled_attribute_is_overridden(
 		ControlKind::Radio => {
 			name.eq_ignore_ascii_case("checked") || name.eq_ignore_ascii_case("value")
 		}
-		ControlKind::SelectOne | ControlKind::SelectMany => false,
+		ControlKind::SelectOne | ControlKind::SelectMany | ControlKind::File => false,
 	})
 }
 
@@ -217,7 +217,7 @@ pub(crate) fn controlled_attribute_affects_value(
 			.iter()
 			.any(|attribute| name.eq_ignore_ascii_case(attribute)),
 		ControlKind::SelectOne | ControlKind::SelectMany => name.eq_ignore_ascii_case("multiple"),
-		ControlKind::Checkbox | ControlKind::Radio => false,
+		ControlKind::Checkbox | ControlKind::Radio | ControlKind::File => false,
 	}
 }
 

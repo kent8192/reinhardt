@@ -79,6 +79,24 @@ breaking boundary.
 
 - *(db)* align migration compatibility contracts
 
+## [0.3.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.3.15...reinhardt-db@v0.3.16) - 2026-09-08
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.3.14...reinhardt-db@v0.3.15) - 2026-09-01
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.3.13...reinhardt-db@v0.3.14) - 2026-08-29
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
 ## [0.3.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.3.12...reinhardt-db@v0.3.13) - 2026-08-27
 
 ### Fixed

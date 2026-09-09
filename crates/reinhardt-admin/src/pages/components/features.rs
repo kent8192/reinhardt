@@ -5271,7 +5271,7 @@ mod tests {
 		inline_scalar_value, inline_value_kind, list_view, list_view_with_actions,
 		list_view_with_date_hierarchy, model_form, normalized_inline_original,
 		nullable_boolean_choices, record_primary_key, scalar_object_id, set_page_selected,
-		set_record_selected, tagged_inline_json_value,
+		set_record_selected, table_row, tagged_inline_json_value,
 	};
 	use crate::types::{
 		AdminActionRequest, AdminHistoryEntry, DateHierarchyInfo, DateHierarchyLevel,
@@ -5703,6 +5703,37 @@ mod tests {
 			assert!(html.contains("&lt;/script&gt;&lt;script&gt;alert(1)&lt;/script&gt;"));
 			assert_eq!(html.matches("<script").count(), 0);
 		});
+	}
+
+	#[rstest]
+	fn table_row_uses_custom_primary_key_without_overwriting_displayed_id() {
+		// Arrange
+		let columns = vec![Column {
+			field: "id".to_string(),
+			label: "Legacy ID".to_string(),
+			sortable: true,
+			editable: false,
+			linked: true,
+			required: false,
+			nullable: false,
+			step: None,
+			form_spec: None,
+		}];
+		let record = HashMap::from([
+			("id".to_string(), serde_json::json!("displayed-id")),
+			("slug".to_string(), serde_json::json!("routing-slug")),
+		]);
+
+		// Act
+		let html = table_row(&columns, &record, "Article", "slug", None, None).render_to_string();
+
+		// Assert
+		assert_eq!(html.matches(">displayed-id</a>").count(), 1);
+		assert_eq!(
+			html.split_once("data-row-pk=\"")
+				.and_then(|(_, value)| value.split('"').next()),
+			Some("routing-slug")
+		);
 	}
 
 	/// Verifies that detail_table renders fields in alphabetical order regardless

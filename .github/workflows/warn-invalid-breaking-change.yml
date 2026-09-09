@@ -3,7 +3,7 @@ name: Warn Invalid Breaking Change Target
 on:
   pull_request_target:
     branches: [main]
-    types: [opened, edited, synchronize, reopened, labeled]
+    types: [opened, edited, synchronize, reopened, labeled, unlabeled, ready_for_review]
 
 # Use the PR number because pull_request_target runs on the base branch ref.
 concurrency:
@@ -24,17 +24,29 @@ jobs:
         uses: actions/github-script@v8
         with:
           script: |
-            const pr = context.payload.pull_request;
+            // Read current metadata so queued title, label, or base changes
+            // cannot leave an obsolete policy result on the current commit.
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+            });
             const sourceBranch = pr.head.ref;
             const labels = pr.labels.map(label => label.name);
             const breakingTitle = /^(?:[a-z][a-z0-9-]*!(?:\([^)]*\))?|[a-z][a-z0-9-]*\([^)]*\)!)\s*:/i.test(pr.title);
             const breakingChange = labels.includes('breaking-change') || breakingTitle;
             const validDevelopBranch = /^develop\/\d+\.\d+\.\d+$/.test(sourceBranch);
 
-            if (!breakingChange || validDevelopBranch) {
+            if (pr.base.ref !== 'main' || !breakingChange || validDevelopBranch) {
               core.info('No invalid breaking-change target detected.');
               return;
             }
+
+            // Fail before comment delivery or deduplication: neither approves
+            // a breaking change targeting the stable branch.
+            core.setFailed(
+              `Breaking change from '${sourceBranch}' must target a versioned develop/X.Y.Z branch, not main.`
+            );
 
             const marker = '<!-- invalid-breaking-change-target-warning -->';
             const comments = await github.paginate(github.rest.issues.listComments, {
@@ -58,7 +70,7 @@ jobs:
               `- Source branch: \`${sourceBranch}\``,
               `- Detected by: ${labels.includes('breaking-change') ? '`breaking-change` label' : 'breaking Conventional Commit title'}`,
               '',
-              'Breaking changes should target the appropriate versioned `develop/X.Y.Z` branch. Please retarget this PR or confirm the exception with the maintainers.',
+              'Breaking changes must target the appropriate versioned `develop/X.Y.Z` branch. This required check fails until the target or breaking-change classification is corrected.',
             ].join('\n');
 
             await github.rest.issues.createComment({
@@ -68,4 +80,4 @@ jobs:
               body,
             });
 
-            core.warning(`Posted invalid breaking-change target warning for PR #${pr.number}.`);
+            core.info(`Posted invalid breaking-change target warning for PR #${pr.number}.`);

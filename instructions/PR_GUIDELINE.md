@@ -486,12 +486,25 @@ cargo make clippy-check
 ```
 
 **Breaking-change warning check:**
+`Warn Invalid Breaking Change Target` is required alongside `CI Success` on
+`main`. A breaking title or `breaking-change` label fails this check unless the
+source is a versioned `develop/X.Y.Z` branch. It reads current PR metadata on
+title, label, base, and source changes, including label removal. The failed
+result is independent of warning-comment delivery or deduplication; an existing
+warning never makes an invalid target pass. Retarget the breaking change to the
+appropriate develop branch, or correct an inaccurate classification.
+
 `Warn Invalid Breaking Change Target` posts to the PR conversation through the
 issue-comment API and requires `pull-requests: write` alongside `issues: write`.
 A `403 Resource not accessible by integration` during comment creation is a
 workflow permission failure. This `pull_request_target` workflow runs from the
 base branch, so permission repairs must reach that branch before a new PR event
 can validate them; changing only the affected PR head does not update the workflow.
+
+Run `node --test scripts/tests/test-breaking-change-target.cjs` and
+`actionlint .github/workflows/warn-invalid-breaking-change.yml` after changing
+the policy. Keep its check name synchronized with the required status check in
+the main-branch ruleset.
 
 ### RP-2 (SHOULD): Self-Review
 

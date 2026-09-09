@@ -507,7 +507,9 @@ workflow permission failure. This `pull_request_target` workflow runs from the
 base branch, so permission repairs must reach that branch before a new PR event
 can validate them; changing only the affected PR head does not update the workflow.
 
-Run `node --test scripts/tests/test-breaking-change-target.cjs` and
+CI runs the policy suite through `scripts/tests/test-breaking-change-target.sh`,
+which is discovered by `bash scripts/tests/run-all.sh` in the Version Markers
+Lint job. Run `node --test scripts/tests/test-breaking-change-target.cjs` and
 `actionlint .github/workflows/warn-invalid-breaking-change.yml` after changing
 the policy. Keep its check name synchronized with the required status check in
 the main-branch ruleset.

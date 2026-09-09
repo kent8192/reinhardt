@@ -1,0 +1,5 @@
+error: OptGroup is only supported by Select and SelectMultiple widgets
+  --> tests/ui/form/fail/radio_input_grouped_choices.rs:10:15
+   |
+10 |                 choices: [OptGroup("Answers") {
+   |                           ^^^^^^^^

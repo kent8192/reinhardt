@@ -5823,14 +5823,47 @@ fn generate_into_page(macro_ast: &TypedFormMacro, pages_crate: &TokenStream) -> 
 
 	// Generate onsubmit handler for server_fn forms
 	let onsubmit_handler = generate_onsubmit_handler(macro_ast, pages_crate);
+	let radio_fields: Vec<_> = all_fields
+		.iter()
+		.filter(|field| field.bind && matches!(field.widget, TypedWidget::RadioInput))
+		.collect();
+	let (radio_reset_setup, radio_reset_listener) = if radio_fields.is_empty() {
+		(TokenStream::new(), TokenStream::new())
+	} else {
+		let names: Vec<_> = radio_fields.iter().map(|field| &field.name).collect();
+		(
+			quote! {
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+				let __radio_resets = ::std::vec![
+					#((self.#names.clone(), self.#names.get_untracked())),*
+				];
+			},
+			quote! {
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+				let form_element = form_element.listener("reset", move |event| {
+					let __radio_resets = __radio_resets.clone();
+					// Run after the native reset and honor cancellation by other listeners.
+					#pages_crate::platform::spawn_task(async move {
+						if !event.default_prevented() {
+							for (signal, value) in __radio_resets {
+								signal.set(value);
+							}
+						}
+					});
+				});
+			},
+		)
+	};
 
 	quote! {
 		pub fn into_page(self) -> #pages_crate::component::Page {
 			use #pages_crate::component::{PageElement, IntoPage};
 
 			#(#signal_bindings)*
+			#radio_reset_setup
 
 			#onsubmit_handler
+			#radio_reset_listener
 
 			form_element.into_page()
 		}
@@ -6656,17 +6689,40 @@ fn generate_collection_field_view(
 		TypedFieldType::FileField | TypedFieldType::ImageField
 	) {
 		quote! {}
+	} else if matches!(field.widget, TypedWidget::RadioInput) {
+		let value = radio_input_value(field);
+		quote! { .attr("value", #value) }
 	} else {
 		quote! { .attr("value", #field_value) }
 	};
 	let checked_attr = if matches!(field.widget, TypedWidget::CheckboxInput) {
 		let checked = collection_field_checked_expr(field);
 		quote! { .bool_attr("checked", #checked) }
+	} else if matches!(field.widget, TypedWidget::RadioInput) {
+		let value = radio_input_value(field);
+		let field_name = &field.name;
+		quote! { .bool_attr("checked", item_value.#field_name == #value) }
 	} else {
 		quote! {}
 	};
 
 	let input_element = match &field.widget {
+		TypedWidget::RadioInput => {
+			let disabled = field.display.disabled;
+			quote! {
+				PageElement::new("input")
+					.attr("type", "radio")
+					.attr("name", __field_name.clone())
+					.attr("id", __field_id.clone())
+					#value_attr
+					.attr("class", #input_class)
+					.bool_attr("required", #required)
+					.bool_attr("disabled", #disabled)
+					#checked_attr
+					#custom_attrs
+					#listener
+			}
+		}
 		TypedWidget::Textarea => {
 			quote! {
 				PageElement::new("textarea")
@@ -6863,6 +6919,7 @@ fn generate_collection_bind_listener(
 		TypedWidget::Select
 		| TypedWidget::SelectMultiple
 		| TypedWidget::CheckboxInput
+		| TypedWidget::RadioInput
 		| TypedWidget::RadioSelect => (
 			quote! { #pages_crate::event::KnownEvent::Change },
 			quote! { #pages_crate::event::ChangeEvent },
@@ -6913,6 +6970,13 @@ fn generate_collection_bind_listener(
 		&field_name_str,
 		assignment,
 	);
+	let typed_update = if matches!(field.widget, TypedWidget::RadioInput) {
+		quote! {
+			if matches!(event.checked(), ::core::result::Result::Ok(true)) { #typed_update }
+		}
+	} else {
+		typed_update
+	};
 
 	quote! {
 		.on(#event_type, {
@@ -7216,6 +7280,39 @@ fn generate_field_view(
 
 	// Generate input element based on widget type
 	let input_element = match &field.widget {
+		TypedWidget::RadioInput => {
+			let value = radio_input_value(field);
+			let disabled = field.display.disabled;
+			let input = quote! {
+				PageElement::new("input")
+					.attr("type", "radio")
+					.attr("name", #field_name_str)
+					.attr("id", #field_name_str)
+					.attr("value", #value)
+					.attr("class", #input_class)
+					.bool_attr("required", #required)
+					.bool_attr("disabled", #disabled)
+					.bool_attr("checked", __radio_checked)
+					#native_attrs
+					#custom_attrs
+					#event_listener
+			};
+			if let Some(signal_ident) = signal_ident {
+				quote! {
+					#pages_crate::component::Page::reactive(move || {
+						let __radio_checked = #signal_ident.get() == #value;
+						#input.into_page()
+					})
+				}
+			} else {
+				quote! {
+					{
+						let __radio_checked = self.#field_name.get_untracked() == #value;
+						#input
+					}
+				}
+			}
+		}
 		TypedWidget::CustomExperimental(custom) => {
 			let component = &custom.component;
 			let adapter = &custom.adapter;
@@ -7744,6 +7841,17 @@ fn generate_generated_control_binding(
 	}
 }
 
+/// Returns the fixed option value, independently of the current field selection.
+fn radio_input_value(field: &TypedFormFieldDef) -> TokenStream {
+	match field.static_choices.first() {
+		Some(TypedChoiceItem::Option(option)) => {
+			let value = &option.value;
+			quote! { #value }
+		}
+		_ => quote! { "on" },
+	}
+}
+
 /// Generates wrapper element attributes.
 ///
 /// If a custom wrapper is specified, uses its attributes (merging with default class if needed).
@@ -7944,6 +8052,7 @@ fn generate_bind_listener(
 		TypedWidget::Select
 		| TypedWidget::SelectMultiple
 		| TypedWidget::CheckboxInput
+		| TypedWidget::RadioInput
 		| TypedWidget::RadioSelect => (
 			quote! { #pages_crate::event::KnownEvent::Change },
 			quote! { #pages_crate::event::ChangeEvent },
@@ -7985,6 +8094,14 @@ fn generate_bind_listener(
 				}
 			}
 		}
+	};
+
+	let extraction = if matches!(widget, TypedWidget::RadioInput) {
+		quote! {
+			if matches!(event.checked(), ::core::result::Result::Ok(true)) { #extraction }
+		}
+	} else {
+		extraction
 	};
 
 	quote! {

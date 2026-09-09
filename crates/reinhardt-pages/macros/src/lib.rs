@@ -1196,10 +1196,29 @@ pub fn head(input: TokenStream) -> TokenStream {
 /// | Widget | HTML Element | Input Type | Description |
 /// |--------|--------------|------------|-------------|
 /// | `CheckboxInput` | `<input>` | `checkbox` | Single checkbox |
-/// | `RadioInput` | `<input>` | `radio` | Single radio button |
+/// | `RadioInput` | `<input>` | `radio` | Single radio button for `ChoiceField<String>` |
 /// | `RadioSelect` | multiple `<input>` | `radio` | Radio button group |
 /// | `Select` | `<select>` | - | Dropdown select |
 /// | `SelectMultiple` | `<select multiple>` | - | Multi-select list |
+///
+/// `RadioInput` renders one control for a string-valued `ChoiceField` (including
+/// `ChoiceField<String>`). Its value is `"on"` when `choices` is omitted, or the
+/// value from exactly one static option, such as `choices: [("yes", "Yes")]`.
+/// Empty or multiple options, `OptGroup`, and `choices_from` are rejected. Use
+/// `RadioSelect` for a group of radio buttons populated through `choices_from`.
+/// Boolean fields use `CheckboxInput` instead.
+///
+/// The single input keeps the field's name and ID. Its associated label uses
+/// `label`, then the option label, then the field name; an option marked
+/// `disabled` disables the input. The control is checked exactly when the
+/// field's string value equals the option value. On WASM, a checked `change`
+/// event stores that value; an unchecked event leaves the field unchanged.
+/// Programmatic signal changes and `use_form(&form).build().reset()` update the
+/// checked state, with reset restoring the runtime's current default value.
+/// Clicking an already selected radio does not clear it. Scalar fields also
+/// follow native form resets, restoring the values captured when the page was
+/// created. For scalar fields, `bind: false` captures the current value without
+/// installing two-way binding.
 ///
 /// ### Other Widgets
 ///

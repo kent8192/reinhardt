@@ -2005,6 +2005,36 @@ mod tests {
 		);
 	}
 
+	#[rstest::rstest]
+	#[serial(admin_form_resolver)]
+	fn prepare_create_data_rejects_readonly_import_fields() {
+		// Arrange
+		let _registry = register_article_metadata();
+		let site = AdminSite::new("Read-only import test");
+		let admin = ModelAdminConfig::builder()
+			.model_name(MODEL_NAME)
+			.table_name(TABLE_NAME)
+			.fields(vec!["id", "title", "rank"])
+			.readonly_fields(vec!["rank"])
+			.build()
+			.expect("test admin should build");
+		let data = std::collections::HashMap::from([
+			("title".to_owned(), serde_json::json!("safe")),
+			("rank".to_owned(), serde_json::json!(42)),
+		]);
+
+		// Act
+		let result = prepare_parent_form_data(&site, &admin, AdminFormMode::Create, data);
+
+		// Assert
+		assert_eq!(
+			result.expect_err("read-only create fields must be rejected"),
+			reinhardt_pages::server_fn::ServerFnError::application(
+				"Field 'rank' is read-only and cannot be modified"
+			)
+		);
+	}
+
 	#[test]
 	#[serial(admin_form_resolver)]
 	fn prepare_parent_form_data_allows_auto_increment_fields_to_be_omitted_on_create() {

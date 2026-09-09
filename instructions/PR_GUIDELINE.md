@@ -485,6 +485,35 @@ cargo make fmt-check
 cargo make clippy-check
 ```
 
+**Breaking-change warning check:**
+`Warn Invalid Breaking Change Target` is required alongside `CI Success` on
+`main`. A breaking title or `breaking-change` label fails this check unless the
+source is a versioned `develop/X.Y.Z` branch. It reads current PR metadata on
+title, label, base, and source changes, including label removal. The failed
+result is independent of warning-comment delivery or deduplication; an existing
+warning never makes an invalid target pass. Retarget the breaking change to the
+appropriate develop branch, or correct an inaccurate classification.
+
+The trusted `pull_request_target` workflow publishes this named check explicitly
+on the current `pr.head.sha` through the Checks API with `checks: write`. Both
+success and failure are published before comment delivery. The automatic job
+check belongs to the base commit and has a distinct name,
+`Publish Breaking Change Target Check`; it is not the required PR check.
+
+The workflow also posts to the PR conversation through the issue-comment API
+and requires `pull-requests: write` alongside `issues: write`.
+A `403 Resource not accessible by integration` during comment creation is a
+workflow permission failure. This `pull_request_target` workflow runs from the
+base branch, so permission repairs must reach that branch before a new PR event
+can validate them; changing only the affected PR head does not update the workflow.
+
+CI runs the policy suite through `scripts/tests/test-breaking-change-target.sh`,
+which is discovered by `bash scripts/tests/run-all.sh` in the Version Markers
+Lint job. Run `node --test scripts/tests/test-breaking-change-target.cjs` and
+`actionlint .github/workflows/warn-invalid-breaking-change.yml` after changing
+the policy. Keep its check name synchronized with the required status check in
+the main-branch ruleset.
+
 ### RP-2 (SHOULD): Self-Review
 
 - Review your own PR before requesting review from others

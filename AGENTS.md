@@ -349,7 +349,7 @@ See instructions/OBSIDIAN_WIKI.md for detailed standards (OW-1 ~ OW-7).
 ### Workflow Best Practices
 
 - Run dry-run for ALL batch operations before actual execution
-- Use parallel agents for independent file edits
+- Work in the current agent by default. Use subagents only when the user explicitly requests delegation for the current task.
 - NO batch commits (create one at a time with user confirmation)
 - Execute straightforward operations (branch deletion, worktree cleanup) immediately without planning
 
@@ -358,7 +358,7 @@ See instructions/OBSIDIAN_WIKI.md for detailed standards (OW-1 ~ OW-7).
 **Batch Issue Strategy:**
 - Group issues by fix pattern and process as a batch (HA-1)
 - Divide work into phases ordered by severity (HA-2)
-- Parallelize independent crate work using Agent Teams (HA-3)
+- Execute independent crate work in the current agent; delegate only on explicit user request (HA-3)
 - Organize phases into logically grouped branches and PRs (HA-4)
 
 **Work Unit Principles:**

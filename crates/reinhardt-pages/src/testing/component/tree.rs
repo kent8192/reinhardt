@@ -1124,6 +1124,12 @@ impl ElementNode {
 						.attr("type")
 						.is_some_and(|kind| kind.eq_ignore_ascii_case("checkbox"))
 			}
+			ControlKind::File => {
+				self.tag.eq_ignore_ascii_case("input")
+					&& self
+						.attr("type")
+						.is_some_and(|kind| kind.eq_ignore_ascii_case("file"))
+			}
 			ControlKind::Radio => {
 				self.tag.eq_ignore_ascii_case("input")
 					&& self

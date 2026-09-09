@@ -1233,6 +1233,24 @@ pub fn head(input: TokenStream) -> TokenStream {
 /// | `readonly` | flag/bool | `readonly` or `readonly: true` | Read-only input |
 /// | `autofocus` | flag/bool | `autofocus` or `autofocus: true` | Auto-focus on load |
 ///
+/// Built-in controls render these properties in both SSR and WASM, including
+/// fields inside groups and collections. False boolean flags are omitted.
+/// `min_length` and `max_length` become `minlength` and `maxlength` on text-like
+/// inputs and textareas; `pattern` applies only to text-like inputs. `readonly`
+/// applies to text-like, numeric, and temporal inputs and textareas, following
+/// native HTML semantics (not select, checkbox, radio, range, color, or file inputs).
+/// `min_value` and `max_value` become numeric input/range bounds. An explicit
+/// native `min` or `max` overrides the corresponding legacy bound independently.
+///
+/// `help_text` renders as escaped text in a `p.reinhardt-help` after the control,
+/// or a `span.reinhardt-help` inside a custom wrapper to preserve phrasing content.
+/// Its ID is the control ID followed by `--help`; `aria-describedby` combines this
+/// ID with any existing `attrs: { aria_describedby: "..." }` references. Hidden
+/// controls omit help text. Radio choices share a description ID based on the
+/// field name, respect both field-level and choice-level disabled flags, and apply
+/// autofocus only to the first choice. Custom widget adapters continue to own
+/// their rendered markup.
+///
 /// ### Data Properties
 ///
 /// | Property | Type | Syntax | Description |
@@ -1626,8 +1644,20 @@ pub fn head(input: TokenStream) -> TokenStream {
 ///
 /// ## Two-way Binding
 ///
-/// Control automatic @input handler generation with the `bind` property.
-/// Default is `true` (automatic binding enabled).
+/// The `bind` property controls both DOM-to-signal events and signal-to-DOM
+/// synchronization. It defaults to `true`. Signal changes and runtime reset
+/// update existing controls without replacing them. Native HTML includes the
+/// current value, checked state, textarea content, and selected options.
+/// `bind: false` renders a value snapshot with no ongoing binding. Ordinary and
+/// grouped fields snapshot in `into_page()`; collections snapshot when rows render.
+/// File/image controls never serialize a value or accept a programmatic file
+/// selection; setting their signal to `None` clears the mounted input.
+///
+/// Strings and numbers use their display values, optional date/time/UUID/IP
+/// values render empty for `None`, datetime-local uses `T` with fractional
+/// seconds when present, and JSON uses compact serialization. Month/week
+/// widgets accept string values in native HTML syntax. Native browser value
+/// constraints still apply; rejected typed edits keep the prior Rust value.
 ///
 /// ```ignore
 /// fields: {
@@ -2018,6 +2048,12 @@ pub fn head(input: TokenStream) -> TokenStream {
 ///
 /// Load choice options dynamically from a server function using `choices_loader`.
 /// Map loaded data to radio buttons or selects using field properties.
+/// Dynamic `RadioSelect` fields render a `<fieldset>` named by a `<legend>`
+/// containing the field label (or field name when no label is declared).
+/// Each radio keeps its own option label and indexed input ID. Styling classes
+/// are preserved. Custom wrappers keep their tag and attributes, with
+/// `aria-labelledby` pointing to a caption `<span>` and a default `group` role
+/// unless a wrapper role is explicit. Phrasing wrappers retain valid HTML.
 ///
 /// | Attribute | Level | Description |
 /// |-----------|-------|-------------|

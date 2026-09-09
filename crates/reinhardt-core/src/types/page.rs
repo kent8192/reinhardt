@@ -1169,6 +1169,7 @@ impl Page {
 	/// This is the core SSR method that converts the view tree to HTML.
 	/// Bound password values are omitted and marked with `data-rh-password-omitted`
 	/// so browser hydration can restore the bound value without exposing it in HTML.
+	/// Leading textarea newlines are preserved through HTML parsing.
 	pub fn render_to_string(&self) -> String {
 		let mut output = String::new();
 		self.render_to_string_inner(&mut output, None);
@@ -1363,6 +1364,7 @@ impl Page {
 					output.push_str(" />");
 				} else {
 					output.push('>');
+					let content_start = output.len();
 					if el.tag_name().eq_ignore_ascii_case("textarea")
 						&& let Some(ControlValue::Text(value)) = &binding_value
 					{
@@ -1379,6 +1381,12 @@ impl Page {
 								child_selection.as_ref().or(selection),
 							);
 						}
+					}
+					if el.tag_name().eq_ignore_ascii_case("textarea")
+						&& output[content_start..].starts_with(['\n', '\r'])
+					{
+						// HTML parsing normalizes CR/CRLF before discarding one leading LF.
+						output.insert(content_start, '\n');
 					}
 					output.push_str("</");
 					output.push_str(el.tag_name());
@@ -2471,6 +2479,31 @@ mod tests {
 			view.render_to_string(),
 			"<div>Hello, <strong>World</strong></div>"
 		);
+	}
+
+	#[rstest::rstest]
+	fn render_textarea_preserves_leading_line_feeds_through_html_parsing() {
+		for (value, expected) in [
+			("", "<textarea></textarea>"),
+			("notes", "<textarea>notes</textarea>"),
+			("\n", "<textarea>\n\n</textarea>"),
+			("\nnotes", "<textarea>\n\nnotes</textarea>"),
+			("\n\nnotes", "<textarea>\n\n\nnotes</textarea>"),
+			("\n<&", "<textarea>\n\n&lt;&amp;</textarea>"),
+			("\r", "<textarea>\n\r</textarea>"),
+			("\r\n", "<textarea>\n\r\n</textarea>"),
+			("\rnotes", "<textarea>\n\rnotes</textarea>"),
+			("\r\nnotes", "<textarea>\n\r\nnotes</textarea>"),
+			("\r\n\rnotes", "<textarea>\n\r\n\rnotes</textarea>"),
+		] {
+			// Arrange: fragment children may hide the first rendered text node.
+			let view = PageElement::new("textarea")
+				.child(Page::fragment([Page::Empty, Page::text(value)]))
+				.into_page();
+
+			// Act and assert.
+			assert_eq!(view.render_to_string(), expected);
+		}
 	}
 
 	#[test]

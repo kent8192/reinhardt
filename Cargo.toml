@@ -745,7 +745,7 @@ base64 = "0.22"
 
 # Template engine & syntax highlighting
 tera = { version = "1.20.1" }
-syntect = "5.3.0"
+syntect = { version = "5.3.0", default-features = false, features = ["default-syntaxes", "default-themes", "html", "regex-onig"] }
 
 # Proc macro dependencies
 syn = { version = "2.0", features = ["full", "parsing", "extra-traits"] }

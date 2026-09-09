@@ -592,8 +592,9 @@ source-first, clears field/collection/path/form/submit errors and
 touched/dirty/submitting/success state, and returns `use_form_action` handles
 to idle. It is not automatic after a successful submit and is not connected to
 a native `<button type="reset">` or reset event. Use
-`runtime.sync_after_native_reset()` only when the application deliberately
-handles the browser's native reset behavior. Pending network work continues;
+`runtime.sync_after_native_reset()` for application-owned controls after the
+browser resets them. Generated `form!` controls synchronize browser defaults
+automatically without invoking `runtime.reset()`. Pending network work continues;
 stale form-action completions cannot repopulate form-owned submit state, while
 standalone `use_action` handles are outside this reset boundary. Reset skips
 connected actions whose child scope has already been disposed.
@@ -776,6 +777,59 @@ contract as `Option<web_sys::File>` values. File values are browser-owned and
 are tracked for dirty/touched state without treating the file payload as a
 serializable scalar.
 
+Generated controls render the current field values in native HTML and on mount.
+Bound controls update their existing DOM properties when a signal changes or
+`runtime.reset()` runs; editing a value does not replace the control or its
+options. `bind: false` renders a value snapshot and installs neither an input
+listener nor ongoing synchronization. Ordinary and grouped fields take that
+snapshot in `into_page()`; collection fields take it when their row renders.
+Static choice expressions are evaluated once per option and reused for the value
+and selected state.
+Hydration adopts existing browser edits and selected files. Explicit runtime setters
+and field resets take precedence only for the affected field or collection path;
+a whole-form reset takes precedence for all fields. Unchanged multiple selections
+retain the source vector order. SSR preserves leading textarea line feeds through
+HTML parsing, and selective hydration preserves controlled select defaults across
+option groups and island boundaries.
+Textarea newline normalization by the HTML parser alone does not count as a
+browser edit or mark the form dirty during hydration.
+Unbound textarea snapshots also reconcile empty and whitespace-only content,
+normalize parsed line endings, and reject other changes to their default text.
+Reconciled pristine defaults retain preference for their updated fields and collection paths
+during hydration, while unrelated dirty controls remain eligible for browser edits.
+A native form reset adopts the browser's defaults after the reset event, including
+its cancellation rules, and clears touched state and errors without emitting edit
+or validation events. Custom widget errors and subsequent value edits remain observed
+after reset. Runtime reset uses the runtime's current defaults.
+
+| Field/control category | Rendered value |
+|---|---|
+| String fields, hidden, color, telephone, month/week | String unchanged; month/week use string fields with native HTML syntax |
+| Integer, float, decimal | Rust display formatting; `DecimalField` uses its `f64` representation |
+| Date, time, datetime-local | Optional date/time text; datetime uses `T` and preserves fractional seconds; `None` is empty |
+| UUID / IP address | Optional canonical display text; `None` is empty |
+| JSON | Compact JSON serialization |
+| Checkbox | Boolean checked property |
+| Single/multiple select and radio choices | Choice display strings determine selected/checked state; edits use the existing `FromStr` conversion |
+| File / image | No HTML value or programmatic file selection; clearing the value clears the mounted file input |
+
+Textarea values are escaped child text; select state is emitted on the actual
+options, including option groups. Invalid typed input preserves the previous
+Rust value. Native browser constraints still apply to color, range, numeric,
+and temporal values; use values representable by the selected control. Typed
+date fields require their matching temporal widgets; month/week values are
+strings. Custom experimental widgets continue to own their adapter behavior.
+Checkbox bindings require `BooleanField`; multiple selections require
+`MultipleChoiceField` with `SelectMultiple`. Arbitrary field/widget combinations
+that cannot represent the field's formatted value are unsupported.
+Collections share the same formatting and preserve controls during value edits
+while item keys and indices stay unchanged. Bulk value replacement and reset
+preserve keys by position and refresh existing path subscriptions when the row
+count is unchanged. Structural collection changes retain the renderer's
+replacement behavior. Radio groups use `choices_from`; static radio choices remain rejected by
+the parser. Collection items support static select choices, but reject dynamic
+choices, file/image fields, per-field `initial`, and nested groups.
+
 Stable native widget coverage includes the following `form!` DSL items:
 
 | DSL item | HTML output | Value state |
@@ -801,8 +855,31 @@ Typed native attributes are accepted for the controls that support them:
 | `multiple` | file-like inputs and multi-select |
 | `list` | datalist-compatible text-like inputs |
 
+Built-in fields render validation and display properties identically in SSR and
+WASM, including fields in groups and collections. `min_length` / `max_length`
+produce `minlength` / `maxlength` on text-like inputs and textareas; `pattern`
+applies to text-like inputs. `min_value` / `max_value` supply number/range bounds;
+an explicit native `min` or `max` takes precedence for that bound independently.
+`readonly` is emitted only for editable text, number, temporal, and textarea
+controls. False boolean flags are omitted. Field-level `disabled` also disables
+all generated radio choices; radio autofocus is assigned only to the first choice.
+
+`help_text` becomes escaped text in a `p.reinhardt-help` below the control (a
+`span.reinhardt-help` inside custom wrappers), linked through `aria-describedby`
+to `<control-id>--help`. Existing description references in `attrs` are retained.
+Collection descriptions use each indexed control ID;
+radio choices share a description ID based on the field name. Hidden inputs omit
+help text. Experimental custom widgets own their markup.
+
 `FieldGroup` renders as semantic `<fieldset>` output. When `label` is
 present, the label is rendered as a `<legend>` inside the fieldset.
+
+Dynamic `RadioSelect` fields also use `<fieldset>` / `<legend>` to name the
+radio group. Each option keeps its own label and indexed input ID. Field,
+label, and input CSS classes are preserved. Custom wrappers keep their tag and
+attributes, with `aria-labelledby` naming the group from a caption `<span>`
+instead of a legend. The default role is `group`; an explicit wrapper role is
+preserved.
 
 `CustomWidget` is experimental and must opt in explicitly:
 

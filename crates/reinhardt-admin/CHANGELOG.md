@@ -59,6 +59,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - merge main into develop/0.4.0
 
+## [0.3.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.3.15...reinhardt-admin@v0.3.16) - 2026-09-08
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.3.14...reinhardt-admin@v0.3.15) - 2026-09-01
+
+### Fixed
+
+- *(admin)* project response fields through admin policy
+- *(admin)* close response projection gaps
+- *(admin)* project field responses exactly
+- *(admin)* retain list record identifiers
+- *(admin)* separate list routing identifiers
+- *(admin)* preserve custom list primary keys
+- *(admin)* merge current main into advisory fix
+
+### Testing
+
+- *(admin)* grant empty object filters on permission-granting ModelAdmins
+
+## [0.3.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.3.13...reinhardt-admin@v0.3.14) - 2026-08-29
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
 ## [0.3.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.3.12...reinhardt-admin@v0.3.13) - 2026-08-27
 
 ### Maintenance

@@ -102,6 +102,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(macros)* keep server_only Info compile-fail on SecretInfo
 - *(macros)* isolate server_only Info compile-fail from serde bounds
 
+## [0.3.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.3.15...reinhardt-core@v0.3.16) - 2026-09-08
+
+### Fixed
+
+- *(pages)* retain form control bindings through mount and hydration
+- *(core)* defer layout effects within explicit batches
+- *(pages)* preserve textarea and select state during hydration
+- *(pages)* preserve form ownership across hydration and reset
+- *(core)* flush batched layout work before passive effects
+- *(core)* deduplicate layout callbacks while flushing batches
+- *(pages)* preserve pristine textarea state through newline normalization
+
+## [0.3.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.3.14...reinhardt-core@v0.3.15) - 2026-09-01
+
+### Fixed
+
+- *(core)* validate rendered element contexts
+- *(pages)* reject executable elements in all renderers
+- *(pages)* enforce safe rendering boundaries
+- *(core)* validate batch boolean attributes
+- *(core)* enable security with the page feature
+
+## [0.3.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.3.13...reinhardt-core@v0.3.14) - 2026-08-29
+
+### Added
+
+- *(macros)* add opt-in DTO schema generation
+
+### Fixed
+
+- *(macros)* address dto schema review feedback
+- *(macros)* complete dto schema facade wiring
+- *(macros)* match qualified validate derives
+- *(macros)* recognize direct rest schema derives
+
 ## [0.3.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.3.12...reinhardt-core@v0.3.13) - 2026-08-27
 
 ### Maintenance

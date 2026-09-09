@@ -113,6 +113,11 @@ keeps retained dynamic ranges, event handlers, keyed instances, and bound
 elements alive. Patches for templates that have not mounted yet are retained
 until their first mount and validated against that descriptor then.
 
+Server-side rendering treats development template and slot wrappers as
+transparent, retaining controlled option selection and async render state.
+This also works when another dependency enables `reinhardt-core/page-hot-reload`
+while the Pages `hmr` feature is disabled.
+
 Edits to Rust expressions, event handlers, bindings, control flow, components,
 the page callsite set, or shared/SSR-visible code are outside the safe static
 boundary and use the normal WASM/server rebuild path. Failed builds and patch

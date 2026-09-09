@@ -939,6 +939,33 @@ impl Page {
 		}
 	}
 
+	/// Borrows the immediate content of a development template or slot wrapper.
+	///
+	/// This accessor is available independently of `page-hot-reload`, so consumers
+	/// can traverse wrappers enabled by another dependency's feature selection.
+	/// Returns `None` for ordinary pages and when `page-hot-reload` is disabled.
+	/// This is a P2 API: native and WASM targets have identical behavior.
+	///
+	/// # Examples
+	///
+	/// ```rust
+	/// use reinhardt_core::types::page::Page;
+	///
+	/// assert!(Page::empty().as_dev_view().is_none());
+	/// # #[cfg(feature = "page-hot-reload")]
+	/// # {
+	/// let page = Page::text("content").with_dev_slot(1);
+	/// assert_eq!(page.as_dev_view().unwrap().render_to_string(), "content");
+	/// # }
+	/// ```
+	pub fn as_dev_view(&self) -> Option<&Page> {
+		match self {
+			#[cfg(feature = "page-hot-reload")]
+			Self::DevTemplate { view, .. } | Self::DevSlot { view, .. } => Some(view),
+			_ => None,
+		}
+	}
+
 	/// Attaches opaque development template metadata to this view.
 	#[cfg(feature = "page-hot-reload")]
 	pub fn with_dev_template_metadata<T>(self, metadata: T) -> Self

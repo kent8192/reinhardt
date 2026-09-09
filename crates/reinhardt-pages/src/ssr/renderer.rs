@@ -1436,14 +1436,8 @@ impl SsrRenderer {
 					}
 					html
 				}
-				Page::Empty => String::new(),
 				Page::WithHead { view, head } => {
 					self.record_rendered_head(head);
-					self.render_stream_shell_page_with_selection(view, boundaries, selection)
-						.await
-				}
-				#[cfg(feature = "hmr")]
-				Page::DevTemplate { view, .. } | Page::DevSlot { view, .. } => {
 					self.render_stream_shell_page_with_selection(view, boundaries, selection)
 						.await
 				}
@@ -1633,6 +1627,16 @@ impl SsrRenderer {
 						String::new()
 					}
 				}
+				// Core may expose development wrappers even when Pages' HMR is disabled.
+				// Preserve traversal state through wrappers; Empty has no wrapped view.
+				_ => {
+					if let Some(view) = view.as_dev_view() {
+						self.render_stream_shell_page_with_selection(view, boundaries, selection)
+							.await
+					} else {
+						String::new()
+					}
+				}
 			}
 		})
 	}
@@ -1718,16 +1722,10 @@ impl SsrRenderer {
 					}
 					html
 				}
-				Page::Empty => String::new(),
 				Page::WithHead { view, head } => {
 					if !matches!(mode, AsyncRenderMode::Discovery) {
 						self.record_rendered_head(head);
 					}
-					self.render_async_page_with_selection(view, mode, selection)
-						.await
-				}
-				#[cfg(feature = "hmr")]
-				Page::DevTemplate { view, .. } | Page::DevSlot { view, .. } => {
 					self.render_async_page_with_selection(view, mode, selection)
 						.await
 				}
@@ -1928,6 +1926,16 @@ impl SsrRenderer {
 				Page::Outlet(outlet) => {
 					if let Some(child) = outlet.child() {
 						self.render_async_page_with_selection(child, mode, selection)
+							.await
+					} else {
+						String::new()
+					}
+				}
+				// Core may expose development wrappers even when Pages' HMR is disabled.
+				// Preserve traversal state through wrappers; Empty has no wrapped view.
+				_ => {
+					if let Some(view) = view.as_dev_view() {
+						self.render_async_page_with_selection(view, mode, selection)
 							.await
 					} else {
 						String::new()
@@ -2638,6 +2646,61 @@ mod tests {
 	use reinhardt_core::types::page::{DeferredNode, EventFile, NativeEventFile};
 	use rstest::rstest;
 	use serial_test::serial;
+
+	#[cfg(feature = "hmr")]
+	#[rstest::fixture]
+	fn dev_wrapped_select() -> (ReactiveScope, Page) {
+		let scope = ReactiveScope::new();
+		let view = scope.enter(|| {
+			let option = PageElement::new("option")
+				.child(
+					Page::text(" Alpha ")
+						.with_dev_slot(1)
+						.with_dev_template_metadata("option text"),
+				)
+				.into_page();
+			PageElement::new("select")
+				.control_binding(ControlBinding::select_one(Signal::new("Alpha".to_owned())))
+				.child(option.clone().with_dev_slot(2))
+				.child(option.with_dev_template_metadata("duplicate option"))
+				.child(Page::empty().with_dev_slot(3))
+				.into_page()
+				.with_dev_template_metadata("select")
+				.with_dev_slot(4)
+		});
+		(scope, view)
+	}
+
+	#[cfg(feature = "hmr")]
+	#[rstest]
+	#[case::buffered(false)]
+	#[case::streaming(true)]
+	#[tokio::test]
+	async fn dev_wrappers_preserve_inferred_option_selection(
+		dev_wrapped_select: (ReactiveScope, Page),
+		#[case] streaming: bool,
+	) {
+		// Arrange
+		let (_scope, view) = dev_wrapped_select;
+		let mut renderer = SsrRenderer::new();
+
+		// Act
+		let html = if streaming {
+			renderer
+				.render_stream_shell_page(&view, &mut Vec::new())
+				.await
+		} else {
+			renderer
+				.render_async_page(&view, AsyncRenderMode::Buffered)
+				.await
+		};
+
+		// Assert
+		assert_eq!(
+			html,
+			"<select><option selected=\"selected\"> Alpha </option><option> Alpha </option></select>"
+		);
+	}
 
 	struct TestComponent {
 		message: String,

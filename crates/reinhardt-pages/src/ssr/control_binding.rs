@@ -138,13 +138,13 @@ fn page_option_text(page: &Page) -> String {
 			.map(|(_, child)| page_option_text(child))
 			.collect(),
 		Page::Outlet(outlet) => outlet.child().map(page_option_text).unwrap_or_default(),
-		Page::Empty => String::new(),
 		Page::WithHead { view, .. } => page_option_text(view),
-		#[cfg(feature = "hmr")]
-		Page::DevTemplate { view, .. } | Page::DevSlot { view, .. } => page_option_text(view),
 		Page::ReactiveIf(_) | Page::Reactive(_) | Page::Suspense(_) | Page::Deferred(_) => {
 			String::new()
 		}
+		// Core's development wrappers can be enabled without Pages' HMR feature.
+		// Empty pages have no wrapped view and contribute no option text.
+		_ => page.as_dev_view().map(page_option_text).unwrap_or_default(),
 	}
 }
 

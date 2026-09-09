@@ -96,15 +96,28 @@ Generated migration files use a version marker and stable constructors. Upgrade
 older generated files without connecting to a database:
 
 ```bash
-reinhardt-admin migrations upgrade-source migrations
-
 # Check only; exits unsuccessfully when a file needs upgrading
 reinhardt-admin migrations upgrade-source --check migrations
+
+reinhardt-admin migrations upgrade-source migrations
 ```
 
 The optional positional path may name one migration directory or one `.rs`
 file. The command updates only recognized generated spans and preserves custom
-code and comments.
+code and comments. Install a version of `reinhardt-admin` that includes the
+source upgrader before updating the application's framework dependency. Run
+the check before write mode and review the diff.
+
+After updating the dependency, compile the application, apply the complete
+history to an empty validation database, and run `makemigrations --check` with
+unchanged models.
+
+The upgrader completes legacy `DropColumn` operations with `old_definition:
+None` and preserves explicit definitions. Conversion and validation errors
+abort the entire preflight without writes. Successful preflight is followed by
+guarded per-file replacement; the command does not promise a multi-file
+transaction for later filesystem I/O failures. Repeating a successful upgrade
+leaves source bytes unchanged.
 
 ### Manage Plugins
 

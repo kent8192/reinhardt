@@ -1,0 +1,98 @@
+use reinhardt::db::migrations::FieldType;
+use reinhardt::db::migrations::prelude::*;
+pub(super) fn migration() -> Migration {
+	Migration {
+		app_label: "github".to_string(),
+		name: "0002_rename_github_projects_project_name_alter_g_and_more".to_string(),
+		operations: vec![
+			Operation::RenameColumn {
+				table: "github_projects".to_string(),
+				old_name: "app_name".to_string(),
+				new_name: "project_name".to_string(),
+			},
+			Operation::AlterColumn {
+				table: "github_installations".to_string(),
+				column: "organization_id".to_string(),
+				old_definition: None,
+				new_definition: ColumnDefinition {
+					name: "organization_id".to_string(),
+					type_definition: FieldType::BigInteger,
+					not_null: true,
+					unique: false,
+					primary_key: false,
+					auto_increment: false,
+					default: None,
+				},
+				mysql_options: None,
+			},
+			Operation::AlterColumn {
+				table: "github_projects".to_string(),
+				column: "deployment_id".to_string(),
+				old_definition: None,
+				new_definition: ColumnDefinition {
+					name: "deployment_id".to_string(),
+					type_definition: FieldType::BigInteger,
+					not_null: true,
+					unique: false,
+					primary_key: false,
+					auto_increment: false,
+					default: None,
+				},
+				mysql_options: None,
+			},
+			Operation::AlterColumn {
+				table: "github_projects".to_string(),
+				column: "organization_id".to_string(),
+				old_definition: None,
+				new_definition: ColumnDefinition {
+					name: "organization_id".to_string(),
+					type_definition: FieldType::BigInteger,
+					not_null: true,
+					unique: false,
+					primary_key: false,
+					auto_increment: false,
+					default: None,
+				},
+				mysql_options: None,
+			},
+			Operation::AlterColumn {
+				table: "github_projects".to_string(),
+				column: "repository_id".to_string(),
+				old_definition: None,
+				new_definition: ColumnDefinition {
+					name: "repository_id".to_string(),
+					type_definition: FieldType::BigInteger,
+					not_null: true,
+					unique: false,
+					primary_key: false,
+					auto_increment: false,
+					default: None,
+				},
+				mysql_options: None,
+			},
+			Operation::AlterColumn {
+				table: "github_repositories".to_string(),
+				column: "installation_id".to_string(),
+				old_definition: None,
+				new_definition: ColumnDefinition {
+					name: "installation_id".to_string(),
+					type_definition: FieldType::BigInteger,
+					not_null: true,
+					unique: false,
+					primary_key: false,
+					auto_increment: false,
+					default: None,
+				},
+				mysql_options: None,
+			},
+		],
+		dependencies: vec![("github".to_string(), "0001_initial".to_string())],
+		atomic: true,
+		replaces: vec![],
+		initial: None,
+		state_only: false,
+		database_only: false,
+		swappable_dependencies: vec![],
+		optional_dependencies: vec![],
+	}
+}

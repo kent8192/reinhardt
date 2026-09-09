@@ -70,3 +70,6 @@ mod collectstatic_admin_integration;
 // SQLite-backed target migration integration tests.
 #[path = "commands/migrate_target_sqlite_e2e.rs"]
 mod migrate_target_sqlite_e2e;
+
+#[path = "commands/migration_source_upgrade.rs"]
+mod migration_source_upgrade;

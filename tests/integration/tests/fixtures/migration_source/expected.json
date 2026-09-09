@@ -1,0 +1,2765 @@
+{
+  "cloud/auth/0001_initial.rs": {
+    "app_label": "auth",
+    "atomic": true,
+    "database_only": false,
+    "dependencies": [],
+    "initial": true,
+    "name": "0001_initial",
+    "operations": [
+      {
+        "columns": [
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "created_at",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "email",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 254
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "id",
+            "not_null": true,
+            "primary_key": true,
+            "type_definition": "Uuid",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "is_active",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "Boolean",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "last_login",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "password_hash",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 512
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "updated_at",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "username",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 150
+            },
+            "unique": true
+          }
+        ],
+        "constraints": [
+          {
+            "columns": [
+              "username"
+            ],
+            "name": "auth_user_username_uniq",
+            "type": "Unique"
+          }
+        ],
+        "name": "auth_users",
+        "type": "CreateTable"
+      }
+    ],
+    "optional_dependencies": [],
+    "replaces": [],
+    "state_only": false,
+    "swappable_dependencies": []
+  },
+  "cloud/auth/0002_add_email_unique.rs": {
+    "app_label": "auth",
+    "atomic": true,
+    "database_only": false,
+    "dependencies": [
+      [
+        "auth",
+        "0001_initial"
+      ]
+    ],
+    "initial": false,
+    "name": "0002_add_email_unique",
+    "operations": [
+      {
+        "constraint_sql": "CONSTRAINT auth_user_email_uniq UNIQUE (email)",
+        "table": "auth_users",
+        "type": "AddConstraint"
+      }
+    ],
+    "optional_dependencies": [],
+    "replaces": [],
+    "state_only": false,
+    "swappable_dependencies": []
+  },
+  "cloud/auth/0003_initial.rs": {
+    "app_label": "auth",
+    "atomic": true,
+    "database_only": false,
+    "dependencies": [
+      [
+        "auth",
+        "0002_add_email_unique"
+      ]
+    ],
+    "initial": null,
+    "name": "0003_initial",
+    "operations": [
+      {
+        "columns": [
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "app_label",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 100
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "codename",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 100
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": true,
+            "default": null,
+            "name": "id",
+            "not_null": true,
+            "primary_key": true,
+            "type_definition": "Uuid",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "name",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 255
+            },
+            "unique": false
+          }
+        ],
+        "constraints": [],
+        "name": "auth_permission",
+        "type": "CreateTable"
+      },
+      {
+        "columns": [
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "description",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 500
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": true,
+            "default": null,
+            "name": "id",
+            "not_null": true,
+            "primary_key": true,
+            "type_definition": "Uuid",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "name",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 150
+            },
+            "unique": true
+          }
+        ],
+        "constraints": [
+          {
+            "columns": [
+              "name"
+            ],
+            "name": "auth_group_name_uniq",
+            "type": "Unique"
+          }
+        ],
+        "name": "auth_group",
+        "type": "CreateTable"
+      },
+      {
+        "new_name": "date_joined",
+        "old_name": "created_at",
+        "table": "auth_users",
+        "type": "RenameColumn"
+      },
+      {
+        "column": {
+          "auto_increment": false,
+          "default": null,
+          "name": "first_name",
+          "not_null": true,
+          "primary_key": false,
+          "type_definition": {
+            "VarChar": 150
+          },
+          "unique": false
+        },
+        "table": "auth_users",
+        "type": "AddColumn"
+      },
+      {
+        "column": {
+          "auto_increment": false,
+          "default": null,
+          "name": "last_name",
+          "not_null": true,
+          "primary_key": false,
+          "type_definition": {
+            "VarChar": 150
+          },
+          "unique": false
+        },
+        "table": "auth_users",
+        "type": "AddColumn"
+      },
+      {
+        "column": {
+          "auto_increment": false,
+          "default": null,
+          "name": "is_staff",
+          "not_null": true,
+          "primary_key": false,
+          "type_definition": "Boolean",
+          "unique": false
+        },
+        "table": "auth_users",
+        "type": "AddColumn"
+      },
+      {
+        "column": {
+          "auto_increment": false,
+          "default": null,
+          "name": "is_superuser",
+          "not_null": true,
+          "primary_key": false,
+          "type_definition": "Boolean",
+          "unique": false
+        },
+        "table": "auth_users",
+        "type": "AddColumn"
+      }
+    ],
+    "optional_dependencies": [],
+    "replaces": [],
+    "state_only": false,
+    "swappable_dependencies": []
+  },
+  "cloud/auth/0004_add_email_verification_tokens.rs": {
+    "app_label": "auth",
+    "atomic": true,
+    "database_only": false,
+    "dependencies": [
+      [
+        "auth",
+        "0003_initial"
+      ]
+    ],
+    "initial": null,
+    "name": "0004_add_email_verification_tokens",
+    "operations": [
+      {
+        "columns": [
+          {
+            "auto_increment": true,
+            "default": null,
+            "name": "id",
+            "not_null": true,
+            "primary_key": true,
+            "type_definition": "BigInteger",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "user_id",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "Uuid",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "pending_email",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 254
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "token_hash",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 64
+            },
+            "unique": true
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "expires_at",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "consumed_at",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "created_at",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          }
+        ],
+        "constraints": [
+          {
+            "columns": [
+              "token_hash"
+            ],
+            "name": "auth_evt_token_hash_uniq",
+            "type": "Unique"
+          }
+        ],
+        "name": "auth_email_verification_tokens",
+        "type": "CreateTable"
+      },
+      {
+        "columns": [
+          "user_id"
+        ],
+        "concurrently": false,
+        "table": "auth_email_verification_tokens",
+        "type": "CreateIndex",
+        "unique": false,
+        "where_clause": "consumed_at IS NULL"
+      }
+    ],
+    "optional_dependencies": [],
+    "replaces": [],
+    "state_only": false,
+    "swappable_dependencies": []
+  },
+  "cloud/auth/0005_add_social_accounts.rs": {
+    "app_label": "auth",
+    "atomic": true,
+    "database_only": false,
+    "dependencies": [
+      [
+        "auth",
+        "0004_add_email_verification_tokens"
+      ]
+    ],
+    "initial": null,
+    "name": "0005_add_social_accounts",
+    "operations": [
+      {
+        "columns": [
+          {
+            "auto_increment": true,
+            "default": null,
+            "name": "id",
+            "not_null": true,
+            "primary_key": true,
+            "type_definition": "Uuid",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "user_id",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "Uuid",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "provider",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 32
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "provider_user_id",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 255
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "provider_username",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 255
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "created_at",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "updated_at",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          }
+        ],
+        "constraints": [
+          {
+            "columns": [
+              "provider",
+              "provider_user_id"
+            ],
+            "name": "auth_social_account_provider_uid_uniq",
+            "type": "Unique"
+          }
+        ],
+        "name": "auth_social_accounts",
+        "type": "CreateTable"
+      },
+      {
+        "columns": [
+          "user_id"
+        ],
+        "concurrently": false,
+        "table": "auth_social_accounts",
+        "type": "CreateIndex",
+        "unique": false
+      }
+    ],
+    "optional_dependencies": [],
+    "replaces": [],
+    "state_only": false,
+    "swappable_dependencies": []
+  },
+  "cloud/auth/0006_add_social_account_token_metadata.rs": {
+    "app_label": "auth",
+    "atomic": true,
+    "database_only": false,
+    "dependencies": [
+      [
+        "auth",
+        "0005_add_social_accounts"
+      ]
+    ],
+    "initial": false,
+    "name": "0006_add_social_account_token_metadata",
+    "operations": [
+      {
+        "column": {
+          "auto_increment": false,
+          "default": null,
+          "name": "encrypted_access_token",
+          "not_null": false,
+          "primary_key": false,
+          "type_definition": {
+            "VarChar": 4096
+          },
+          "unique": false
+        },
+        "table": "auth_social_accounts",
+        "type": "AddColumn"
+      },
+      {
+        "column": {
+          "auto_increment": false,
+          "default": null,
+          "name": "token_expires_at",
+          "not_null": false,
+          "primary_key": false,
+          "type_definition": "TimestampTz",
+          "unique": false
+        },
+        "table": "auth_social_accounts",
+        "type": "AddColumn"
+      },
+      {
+        "column": {
+          "auto_increment": false,
+          "default": null,
+          "name": "scopes",
+          "not_null": false,
+          "primary_key": false,
+          "type_definition": {
+            "VarChar": 2048
+          },
+          "unique": false
+        },
+        "table": "auth_social_accounts",
+        "type": "AddColumn"
+      }
+    ],
+    "optional_dependencies": [],
+    "replaces": [],
+    "state_only": false,
+    "swappable_dependencies": []
+  },
+  "cloud/auth/0007_add_api_keys.rs": {
+    "app_label": "auth",
+    "atomic": true,
+    "database_only": false,
+    "dependencies": [
+      [
+        "auth",
+        "0006_add_social_account_token_metadata"
+      ]
+    ],
+    "initial": false,
+    "name": "0007_add_api_keys",
+    "operations": [
+      {
+        "columns": [
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "created_at",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "expires_at",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          },
+          {
+            "auto_increment": true,
+            "default": null,
+            "name": "id",
+            "not_null": true,
+            "primary_key": true,
+            "type_definition": "BigInteger",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "label",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 100
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "last_used_at",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "prefix",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 16
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "revoked_at",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "token_hash",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 64
+            },
+            "unique": true
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "user_id",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "Uuid",
+            "unique": false
+          }
+        ],
+        "constraints": [
+          {
+            "columns": [
+              "token_hash"
+            ],
+            "name": "auth_apikey_token_hash_uniq",
+            "type": "Unique"
+          }
+        ],
+        "name": "auth_api_keys",
+        "type": "CreateTable"
+      },
+      {
+        "constraint_sql": "CONSTRAINT auth_apikey_user_fk FOREIGN KEY (user_id) REFERENCES auth_users(id) ON DELETE CASCADE",
+        "table": "auth_api_keys",
+        "type": "AddConstraint"
+      },
+      {
+        "columns": [
+          "user_id"
+        ],
+        "concurrently": false,
+        "table": "auth_api_keys",
+        "type": "CreateIndex",
+        "unique": false
+      }
+    ],
+    "optional_dependencies": [],
+    "replaces": [],
+    "state_only": false,
+    "swappable_dependencies": []
+  },
+  "cloud/clusters/0001_initial.rs": {
+    "app_label": "clusters",
+    "atomic": true,
+    "database_only": false,
+    "dependencies": [],
+    "initial": true,
+    "name": "0001_initial",
+    "operations": [
+      {
+        "columns": [
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "api_url",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 1024
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "created_at",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          },
+          {
+            "auto_increment": true,
+            "default": null,
+            "name": "id",
+            "not_null": true,
+            "primary_key": true,
+            "type_definition": "BigInteger",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "is_active",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "Boolean",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "name",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 255
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "updated_at",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          }
+        ],
+        "constraints": [],
+        "name": "clusters",
+        "type": "CreateTable"
+      }
+    ],
+    "optional_dependencies": [],
+    "replaces": [],
+    "state_only": false,
+    "swappable_dependencies": []
+  },
+  "cloud/clusters/0002_add_user_id.rs": {
+    "app_label": "clusters",
+    "atomic": true,
+    "database_only": false,
+    "dependencies": [
+      [
+        "clusters",
+        "0001_initial"
+      ],
+      [
+        "auth",
+        "0001_initial"
+      ]
+    ],
+    "initial": false,
+    "name": "0002_add_user_id",
+    "operations": [
+      {
+        "column": {
+          "auto_increment": false,
+          "default": null,
+          "name": "user_id",
+          "not_null": true,
+          "primary_key": false,
+          "type_definition": "Uuid",
+          "unique": false
+        },
+        "table": "clusters",
+        "type": "AddColumn"
+      }
+    ],
+    "optional_dependencies": [],
+    "replaces": [],
+    "state_only": false,
+    "swappable_dependencies": []
+  },
+  "cloud/clusters/0003_add_token_hash.rs": {
+    "app_label": "clusters",
+    "atomic": true,
+    "database_only": false,
+    "dependencies": [
+      [
+        "clusters",
+        "0002_add_user_id"
+      ]
+    ],
+    "initial": false,
+    "name": "0003_add_token_hash",
+    "operations": [
+      {
+        "column": {
+          "auto_increment": false,
+          "default": null,
+          "name": "token_hash",
+          "not_null": false,
+          "primary_key": false,
+          "type_definition": {
+            "VarChar": 255
+          },
+          "unique": false
+        },
+        "table": "clusters",
+        "type": "AddColumn"
+      },
+      {
+        "column": {
+          "auto_increment": false,
+          "default": null,
+          "name": "token_last_rotated_at",
+          "not_null": false,
+          "primary_key": false,
+          "type_definition": "TimestampTz",
+          "unique": false
+        },
+        "table": "clusters",
+        "type": "AddColumn"
+      }
+    ],
+    "optional_dependencies": [],
+    "replaces": [],
+    "state_only": false,
+    "swappable_dependencies": []
+  },
+  "cloud/clusters/0004_replace_user_id_with_organization_id.rs": {
+    "app_label": "clusters",
+    "atomic": true,
+    "database_only": false,
+    "dependencies": [
+      [
+        "clusters",
+        "0003_add_token_hash"
+      ],
+      [
+        "organizations",
+        "0001_initial"
+      ]
+    ],
+    "initial": false,
+    "name": "0004_replace_user_id_with_organization_id",
+    "operations": [
+      {
+        "column": "user_id",
+        "table": "clusters",
+        "type": "DropColumn"
+      },
+      {
+        "column": {
+          "auto_increment": false,
+          "default": null,
+          "name": "organization_id",
+          "not_null": true,
+          "primary_key": false,
+          "type_definition": "BigInteger",
+          "unique": false
+        },
+        "table": "clusters",
+        "type": "AddColumn"
+      },
+      {
+        "constraint_sql": "CONSTRAINT clusters_organization_id_fk FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE",
+        "table": "clusters",
+        "type": "AddConstraint"
+      }
+    ],
+    "optional_dependencies": [],
+    "replaces": [],
+    "state_only": false,
+    "swappable_dependencies": []
+  },
+  "cloud/clusters/0005_add_constraint_clusters.rs": {
+    "app_label": "clusters",
+    "atomic": true,
+    "database_only": false,
+    "dependencies": [
+      [
+        "clusters",
+        "0004_replace_user_id_with_organization_id"
+      ]
+    ],
+    "initial": null,
+    "name": "0005_add_constraint_clusters",
+    "operations": [
+      {
+        "constraint_sql": "CONSTRAINT clusters_organization_id_name_uniq UNIQUE (organization_id, name)",
+        "table": "clusters",
+        "type": "AddConstraint"
+      }
+    ],
+    "optional_dependencies": [],
+    "replaces": [],
+    "state_only": false,
+    "swappable_dependencies": []
+  },
+  "cloud/default/0001_initial.rs": {
+    "app_label": "default",
+    "atomic": true,
+    "database_only": false,
+    "dependencies": [],
+    "initial": true,
+    "name": "0001_initial",
+    "operations": [
+      {
+        "columns": [
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "created_at",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "BigInteger",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "expire_date",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "BigInteger",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "last_accessed",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": "BigInteger",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "session_data",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 65535
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": true,
+            "default": null,
+            "name": "session_key",
+            "not_null": true,
+            "primary_key": true,
+            "type_definition": {
+              "VarChar": 255
+            },
+            "unique": false
+          }
+        ],
+        "constraints": [],
+        "name": "sessions",
+        "type": "CreateTable"
+      }
+    ],
+    "optional_dependencies": [],
+    "replaces": [],
+    "state_only": false,
+    "swappable_dependencies": []
+  },
+  "cloud/deployments/0001_initial.rs": {
+    "app_label": "deployments",
+    "atomic": true,
+    "database_only": false,
+    "dependencies": [],
+    "initial": true,
+    "name": "0001_initial",
+    "operations": [
+      {
+        "columns": [
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "app_name",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 255
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "cluster_id",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "BigInteger",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "created_at",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          },
+          {
+            "auto_increment": true,
+            "default": null,
+            "name": "id",
+            "not_null": true,
+            "primary_key": true,
+            "type_definition": "BigInteger",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "image",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 512
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "status",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 50
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "updated_at",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          }
+        ],
+        "constraints": [],
+        "name": "deployments",
+        "type": "CreateTable"
+      }
+    ],
+    "optional_dependencies": [],
+    "replaces": [],
+    "state_only": false,
+    "swappable_dependencies": []
+  },
+  "cloud/deployments/0002_add_user_id.rs": {
+    "app_label": "deployments",
+    "atomic": true,
+    "database_only": false,
+    "dependencies": [
+      [
+        "deployments",
+        "0001_initial"
+      ],
+      [
+        "auth",
+        "0001_initial"
+      ]
+    ],
+    "initial": false,
+    "name": "0002_add_user_id",
+    "operations": [
+      {
+        "column": {
+          "auto_increment": false,
+          "default": null,
+          "name": "user_id",
+          "not_null": true,
+          "primary_key": false,
+          "type_definition": "Uuid",
+          "unique": false
+        },
+        "table": "deployments",
+        "type": "AddColumn"
+      }
+    ],
+    "optional_dependencies": [],
+    "replaces": [],
+    "state_only": false,
+    "swappable_dependencies": []
+  },
+  "cloud/deployments/0003_add_cluster_id_fk.rs": {
+    "app_label": "deployments",
+    "atomic": true,
+    "database_only": false,
+    "dependencies": [
+      [
+        "deployments",
+        "0002_add_user_id"
+      ],
+      [
+        "clusters",
+        "0001_initial"
+      ]
+    ],
+    "initial": false,
+    "name": "0003_add_cluster_id_fk",
+    "operations": [
+      {
+        "constraint_sql": "CONSTRAINT deployments_cluster_id_fk FOREIGN KEY (cluster_id) REFERENCES clusters(id) ON DELETE RESTRICT ON UPDATE CASCADE",
+        "table": "deployments",
+        "type": "AddConstraint"
+      }
+    ],
+    "optional_dependencies": [],
+    "replaces": [],
+    "state_only": false,
+    "swappable_dependencies": []
+  },
+  "cloud/deployments/0004_replace_user_id_with_organization_id.rs": {
+    "app_label": "deployments",
+    "atomic": true,
+    "database_only": false,
+    "dependencies": [
+      [
+        "deployments",
+        "0003_add_cluster_id_fk"
+      ],
+      [
+        "organizations",
+        "0001_initial"
+      ]
+    ],
+    "initial": false,
+    "name": "0004_replace_user_id_with_organization_id",
+    "operations": [
+      {
+        "column": "user_id",
+        "table": "deployments",
+        "type": "DropColumn"
+      },
+      {
+        "column": {
+          "auto_increment": false,
+          "default": null,
+          "name": "organization_id",
+          "not_null": true,
+          "primary_key": false,
+          "type_definition": "BigInteger",
+          "unique": false
+        },
+        "table": "deployments",
+        "type": "AddColumn"
+      },
+      {
+        "constraint_sql": "CONSTRAINT deployments_organization_id_fk FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE",
+        "table": "deployments",
+        "type": "AddConstraint"
+      }
+    ],
+    "optional_dependencies": [],
+    "replaces": [],
+    "state_only": false,
+    "swappable_dependencies": []
+  },
+  "cloud/deployments/0005_add_reinhardt_app_yaml.rs": {
+    "app_label": "deployments",
+    "atomic": true,
+    "database_only": false,
+    "dependencies": [
+      [
+        "deployments",
+        "0004_replace_user_id_with_organization_id"
+      ]
+    ],
+    "initial": false,
+    "name": "0005_add_reinhardt_app_yaml",
+    "operations": [
+      {
+        "column": {
+          "auto_increment": false,
+          "default": null,
+          "name": "reinhardt_app_yaml",
+          "not_null": false,
+          "primary_key": false,
+          "type_definition": {
+            "VarChar": 65535
+          },
+          "unique": false
+        },
+        "table": "deployments",
+        "type": "AddColumn"
+      }
+    ],
+    "optional_dependencies": [],
+    "replaces": [],
+    "state_only": false,
+    "swappable_dependencies": []
+  },
+  "cloud/deployments/0006_rename_deployments_project_name_rename_depl_and_more.rs": {
+    "app_label": "deployments",
+    "atomic": true,
+    "database_only": false,
+    "dependencies": [
+      [
+        "deployments",
+        "0005_add_reinhardt_app_yaml"
+      ]
+    ],
+    "initial": null,
+    "name": "0006_rename_deployments_project_name_rename_depl_and_more",
+    "operations": [
+      {
+        "new_name": "project_name",
+        "old_name": "app_name",
+        "table": "deployments",
+        "type": "RenameColumn"
+      },
+      {
+        "new_name": "project_yaml",
+        "old_name": "reinhardt_app_yaml",
+        "table": "deployments",
+        "type": "RenameColumn"
+      },
+      {
+        "column": "cluster_id",
+        "new_definition": {
+          "auto_increment": false,
+          "default": null,
+          "name": "cluster_id",
+          "not_null": true,
+          "primary_key": false,
+          "type_definition": "BigInteger",
+          "unique": false
+        },
+        "table": "deployments",
+        "type": "AlterColumn"
+      },
+      {
+        "column": "organization_id",
+        "new_definition": {
+          "auto_increment": false,
+          "default": null,
+          "name": "organization_id",
+          "not_null": true,
+          "primary_key": false,
+          "type_definition": "BigInteger",
+          "unique": false
+        },
+        "table": "deployments",
+        "type": "AlterColumn"
+      },
+      {
+        "column": "status",
+        "new_definition": {
+          "auto_increment": false,
+          "default": "'pending'",
+          "name": "status",
+          "not_null": true,
+          "primary_key": false,
+          "type_definition": {
+            "VarChar": 50
+          },
+          "unique": false
+        },
+        "table": "deployments",
+        "type": "AlterColumn"
+      }
+    ],
+    "optional_dependencies": [],
+    "replaces": [],
+    "state_only": false,
+    "swappable_dependencies": []
+  },
+  "cloud/github/0001_initial.rs": {
+    "app_label": "github",
+    "atomic": true,
+    "database_only": false,
+    "dependencies": [
+      [
+        "organizations",
+        "0001_initial"
+      ],
+      [
+        "deployments",
+        "0005_add_reinhardt_app_yaml"
+      ]
+    ],
+    "initial": true,
+    "name": "0001_initial",
+    "operations": [
+      {
+        "columns": [
+          {
+            "auto_increment": true,
+            "default": null,
+            "name": "id",
+            "not_null": true,
+            "primary_key": true,
+            "type_definition": "BigInteger",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "organization_id",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "BigInteger",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "installation_id",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "BigInteger",
+            "unique": true
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "account_id",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "BigInteger",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "account_login",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 255
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "account_type",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 32
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "status",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 32
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "created_at",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "updated_at",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          }
+        ],
+        "constraints": [],
+        "name": "github_installations",
+        "type": "CreateTable"
+      },
+      {
+        "columns": [
+          {
+            "auto_increment": true,
+            "default": null,
+            "name": "id",
+            "not_null": true,
+            "primary_key": true,
+            "type_definition": "BigInteger",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "installation_id",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "BigInteger",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "github_repository_id",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "BigInteger",
+            "unique": true
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "full_name",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 512
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "owner_login",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 255
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "name",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 255
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "default_branch",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 255
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "private",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "Boolean",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "selected",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "Boolean",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "created_at",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "updated_at",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          }
+        ],
+        "constraints": [],
+        "name": "github_repositories",
+        "type": "CreateTable"
+      },
+      {
+        "columns": [
+          {
+            "auto_increment": true,
+            "default": null,
+            "name": "id",
+            "not_null": true,
+            "primary_key": true,
+            "type_definition": "BigInteger",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "organization_id",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "BigInteger",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "repository_id",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "BigInteger",
+            "unique": true
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "deployment_id",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "BigInteger",
+            "unique": true
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "app_name",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 63
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "production_branch",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 255
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "status",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 32
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "created_at",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "updated_at",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          }
+        ],
+        "constraints": [],
+        "name": "github_projects",
+        "type": "CreateTable"
+      },
+      {
+        "constraint_sql": "CONSTRAINT github_installations_organization_id_fk FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE",
+        "table": "github_installations",
+        "type": "AddConstraint"
+      },
+      {
+        "constraint_sql": "CONSTRAINT github_repositories_installation_id_fk FOREIGN KEY (installation_id) REFERENCES github_installations(id) ON DELETE CASCADE",
+        "table": "github_repositories",
+        "type": "AddConstraint"
+      },
+      {
+        "constraint_sql": "CONSTRAINT github_projects_organization_id_fk FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE",
+        "table": "github_projects",
+        "type": "AddConstraint"
+      },
+      {
+        "constraint_sql": "CONSTRAINT github_projects_repository_id_fk FOREIGN KEY (repository_id) REFERENCES github_repositories(id) ON DELETE CASCADE",
+        "table": "github_projects",
+        "type": "AddConstraint"
+      },
+      {
+        "constraint_sql": "CONSTRAINT github_projects_deployment_id_fk FOREIGN KEY (deployment_id) REFERENCES deployments(id) ON DELETE CASCADE",
+        "table": "github_projects",
+        "type": "AddConstraint"
+      },
+      {
+        "columns": [
+          "organization_id"
+        ],
+        "concurrently": false,
+        "table": "github_installations",
+        "type": "CreateIndex",
+        "unique": false
+      },
+      {
+        "columns": [
+          "installation_id"
+        ],
+        "concurrently": false,
+        "table": "github_repositories",
+        "type": "CreateIndex",
+        "unique": false
+      },
+      {
+        "columns": [
+          "organization_id"
+        ],
+        "concurrently": false,
+        "table": "github_projects",
+        "type": "CreateIndex",
+        "unique": false
+      }
+    ],
+    "optional_dependencies": [],
+    "replaces": [],
+    "state_only": false,
+    "swappable_dependencies": []
+  },
+  "cloud/github/0002_rename_github_projects_project_name_alter_g_and_more.rs": {
+    "app_label": "github",
+    "atomic": true,
+    "database_only": false,
+    "dependencies": [
+      [
+        "github",
+        "0001_initial"
+      ]
+    ],
+    "initial": null,
+    "name": "0002_rename_github_projects_project_name_alter_g_and_more",
+    "operations": [
+      {
+        "new_name": "project_name",
+        "old_name": "app_name",
+        "table": "github_projects",
+        "type": "RenameColumn"
+      },
+      {
+        "column": "organization_id",
+        "new_definition": {
+          "auto_increment": false,
+          "default": null,
+          "name": "organization_id",
+          "not_null": true,
+          "primary_key": false,
+          "type_definition": "BigInteger",
+          "unique": false
+        },
+        "table": "github_installations",
+        "type": "AlterColumn"
+      },
+      {
+        "column": "deployment_id",
+        "new_definition": {
+          "auto_increment": false,
+          "default": null,
+          "name": "deployment_id",
+          "not_null": true,
+          "primary_key": false,
+          "type_definition": "BigInteger",
+          "unique": false
+        },
+        "table": "github_projects",
+        "type": "AlterColumn"
+      },
+      {
+        "column": "organization_id",
+        "new_definition": {
+          "auto_increment": false,
+          "default": null,
+          "name": "organization_id",
+          "not_null": true,
+          "primary_key": false,
+          "type_definition": "BigInteger",
+          "unique": false
+        },
+        "table": "github_projects",
+        "type": "AlterColumn"
+      },
+      {
+        "column": "repository_id",
+        "new_definition": {
+          "auto_increment": false,
+          "default": null,
+          "name": "repository_id",
+          "not_null": true,
+          "primary_key": false,
+          "type_definition": "BigInteger",
+          "unique": false
+        },
+        "table": "github_projects",
+        "type": "AlterColumn"
+      },
+      {
+        "column": "installation_id",
+        "new_definition": {
+          "auto_increment": false,
+          "default": null,
+          "name": "installation_id",
+          "not_null": true,
+          "primary_key": false,
+          "type_definition": "BigInteger",
+          "unique": false
+        },
+        "table": "github_repositories",
+        "type": "AlterColumn"
+      }
+    ],
+    "optional_dependencies": [],
+    "replaces": [],
+    "state_only": false,
+    "swappable_dependencies": []
+  },
+  "cloud/organizations/0001_initial.rs": {
+    "app_label": "organizations",
+    "atomic": true,
+    "database_only": false,
+    "dependencies": [
+      [
+        "auth",
+        "0001_initial"
+      ]
+    ],
+    "initial": true,
+    "name": "0001_initial",
+    "operations": [
+      {
+        "columns": [
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "created_at",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          },
+          {
+            "auto_increment": true,
+            "default": null,
+            "name": "id",
+            "not_null": true,
+            "primary_key": true,
+            "type_definition": "BigInteger",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "name",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 100
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "slug",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 63
+            },
+            "unique": true
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "updated_at",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          }
+        ],
+        "constraints": [],
+        "name": "organizations",
+        "type": "CreateTable"
+      },
+      {
+        "columns": [
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "created_at",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          },
+          {
+            "auto_increment": true,
+            "default": null,
+            "name": "id",
+            "not_null": true,
+            "primary_key": true,
+            "type_definition": "BigInteger",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "organization_id",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "BigInteger",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "role",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 20
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "user_id",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "Uuid",
+            "unique": false
+          }
+        ],
+        "constraints": [],
+        "name": "organization_memberships",
+        "type": "CreateTable"
+      },
+      {
+        "constraint_sql": "CONSTRAINT organization_memberships_org_fk FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE",
+        "table": "organization_memberships",
+        "type": "AddConstraint"
+      },
+      {
+        "constraint_sql": "CONSTRAINT organization_memberships_user_fk FOREIGN KEY (user_id) REFERENCES auth_users(id) ON DELETE CASCADE",
+        "table": "organization_memberships",
+        "type": "AddConstraint"
+      },
+      {
+        "constraint_sql": "CONSTRAINT organization_memberships_org_user_unique UNIQUE (organization_id, user_id)",
+        "table": "organization_memberships",
+        "type": "AddConstraint"
+      },
+      {
+        "reverse_sql": "ALTER TABLE organization_memberships DROP CONSTRAINT organization_memberships_role_check",
+        "sql": "ALTER TABLE organization_memberships ADD CONSTRAINT organization_memberships_role_check CHECK (role IN ('owner','admin','developer','viewer'))",
+        "type": "RunSQL"
+      }
+    ],
+    "optional_dependencies": [],
+    "replaces": [],
+    "state_only": false,
+    "swappable_dependencies": []
+  },
+  "cloud/organizations/0002_organizations_created_by_alter_organization_and_more.rs": {
+    "app_label": "organizations",
+    "atomic": true,
+    "database_only": false,
+    "dependencies": [
+      [
+        "organizations",
+        "0001_initial"
+      ]
+    ],
+    "initial": null,
+    "name": "0002_organizations_created_by_alter_organization_and_more",
+    "operations": [
+      {
+        "column": {
+          "auto_increment": false,
+          "default": null,
+          "name": "created_by",
+          "not_null": true,
+          "primary_key": false,
+          "type_definition": "Uuid",
+          "unique": false
+        },
+        "table": "organizations",
+        "type": "AddColumn"
+      },
+      {
+        "column": "id",
+        "new_definition": {
+          "auto_increment": true,
+          "default": null,
+          "name": "id",
+          "not_null": true,
+          "primary_key": true,
+          "type_definition": "BigInteger",
+          "unique": false
+        },
+        "table": "organizations",
+        "type": "AlterColumn"
+      },
+      {
+        "column": "id",
+        "new_definition": {
+          "auto_increment": true,
+          "default": null,
+          "name": "id",
+          "not_null": true,
+          "primary_key": true,
+          "type_definition": "BigInteger",
+          "unique": false
+        },
+        "table": "organization_memberships",
+        "type": "AlterColumn"
+      }
+    ],
+    "optional_dependencies": [],
+    "replaces": [],
+    "state_only": false,
+    "swappable_dependencies": []
+  },
+  "twitter/auth/0001_initial.rs": {
+    "app_label": "auth",
+    "atomic": true,
+    "database_only": false,
+    "dependencies": [],
+    "initial": null,
+    "name": "0001_initial",
+    "operations": [
+      {
+        "columns": [
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "created_at",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "expires_at",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "id",
+            "not_null": true,
+            "primary_key": true,
+            "type_definition": "Uuid",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "is_used",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": "Boolean",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "token",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 255
+            },
+            "unique": true
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "user_id",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": "Uuid",
+            "unique": false
+          }
+        ],
+        "constraints": [
+          {
+            "columns": [
+              "token"
+            ],
+            "name": "auth_passwordresettoken_token_uniq",
+            "type": "Unique"
+          }
+        ],
+        "name": "auth_password_reset_token",
+        "type": "CreateTable"
+      },
+      {
+        "columns": [
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "bio",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 500
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "created_at",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "email",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 255
+            },
+            "unique": true
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "id",
+            "not_null": true,
+            "primary_key": true,
+            "type_definition": "Uuid",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "is_active",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": "Boolean",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": "false",
+            "name": "is_superuser",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "Boolean",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "last_login",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "password_hash",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 255
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "username",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 150
+            },
+            "unique": true
+          }
+        ],
+        "constraints": [
+          {
+            "columns": [
+              "username"
+            ],
+            "name": "auth_user_username_uniq",
+            "type": "Unique"
+          },
+          {
+            "columns": [
+              "email"
+            ],
+            "name": "auth_user_email_uniq",
+            "type": "Unique"
+          }
+        ],
+        "name": "auth_user",
+        "type": "CreateTable"
+      },
+      {
+        "columns": [
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "from_user_id",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "Uuid",
+            "unique": false
+          },
+          {
+            "auto_increment": true,
+            "default": null,
+            "name": "id",
+            "not_null": true,
+            "primary_key": true,
+            "type_definition": "Integer",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "to_user_id",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "Uuid",
+            "unique": false
+          }
+        ],
+        "constraints": [
+          {
+            "columns": [
+              "from_user_id"
+            ],
+            "name": "fk_auth_user_blocked_users_from_user_id",
+            "on_delete": "Cascade",
+            "on_update": "Cascade",
+            "referenced_columns": [
+              "id"
+            ],
+            "referenced_table": "auth_user",
+            "type": "ForeignKey"
+          },
+          {
+            "columns": [
+              "to_user_id"
+            ],
+            "name": "fk_auth_user_blocked_users_to_user_id",
+            "on_delete": "Cascade",
+            "on_update": "Cascade",
+            "referenced_columns": [
+              "id"
+            ],
+            "referenced_table": "auth_user",
+            "type": "ForeignKey"
+          },
+          {
+            "columns": [
+              "from_user_id",
+              "to_user_id"
+            ],
+            "name": "auth_user_blocked_users_unique",
+            "type": "Unique"
+          }
+        ],
+        "name": "auth_user_blocked_users",
+        "type": "CreateTable"
+      },
+      {
+        "columns": [
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "from_user_id",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "Uuid",
+            "unique": false
+          },
+          {
+            "auto_increment": true,
+            "default": null,
+            "name": "id",
+            "not_null": true,
+            "primary_key": true,
+            "type_definition": "Integer",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "to_user_id",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "Uuid",
+            "unique": false
+          }
+        ],
+        "constraints": [
+          {
+            "columns": [
+              "from_user_id"
+            ],
+            "name": "fk_auth_user_following_from_user_id",
+            "on_delete": "Cascade",
+            "on_update": "Cascade",
+            "referenced_columns": [
+              "id"
+            ],
+            "referenced_table": "auth_user",
+            "type": "ForeignKey"
+          },
+          {
+            "columns": [
+              "to_user_id"
+            ],
+            "name": "fk_auth_user_following_to_user_id",
+            "on_delete": "Cascade",
+            "on_update": "Cascade",
+            "referenced_columns": [
+              "id"
+            ],
+            "referenced_table": "auth_user",
+            "type": "ForeignKey"
+          },
+          {
+            "columns": [
+              "from_user_id",
+              "to_user_id"
+            ],
+            "name": "auth_user_following_unique",
+            "type": "Unique"
+          }
+        ],
+        "name": "auth_user_following",
+        "type": "CreateTable"
+      }
+    ],
+    "optional_dependencies": [],
+    "replaces": [],
+    "state_only": false,
+    "swappable_dependencies": []
+  },
+  "twitter/dm/0001_initial.rs": {
+    "app_label": "dm",
+    "atomic": true,
+    "database_only": false,
+    "dependencies": [
+      [
+        "auth",
+        "0001_initial"
+      ]
+    ],
+    "initial": null,
+    "name": "0001_initial",
+    "operations": [
+      {
+        "columns": [
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "content",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 1000
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "created_at",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "id",
+            "not_null": true,
+            "primary_key": true,
+            "type_definition": "Uuid",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "is_read",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": "Boolean",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "room_id",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": "Uuid",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "sender_id",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": "Uuid",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "updated_at",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          }
+        ],
+        "constraints": [],
+        "name": "dm_message",
+        "type": "CreateTable"
+      },
+      {
+        "columns": [
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "created_at",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "id",
+            "not_null": true,
+            "primary_key": true,
+            "type_definition": "Uuid",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "is_group",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": "Boolean",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "name",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 100
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "updated_at",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          }
+        ],
+        "constraints": [],
+        "name": "dm_room",
+        "type": "CreateTable"
+      },
+      {
+        "columns": [
+          {
+            "auto_increment": true,
+            "default": null,
+            "name": "id",
+            "not_null": true,
+            "primary_key": true,
+            "type_definition": "Integer",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "dmroom_id",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "Uuid",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "user_id",
+            "not_null": true,
+            "primary_key": false,
+            "type_definition": "Uuid",
+            "unique": false
+          }
+        ],
+        "constraints": [
+          {
+            "columns": [
+              "dmroom_id"
+            ],
+            "name": "fk_dm_room_members_dmroom_id",
+            "on_delete": "Cascade",
+            "on_update": "Cascade",
+            "referenced_columns": [
+              "id"
+            ],
+            "referenced_table": "dm_room",
+            "type": "ForeignKey"
+          },
+          {
+            "columns": [
+              "user_id"
+            ],
+            "name": "fk_dm_room_members_user_id",
+            "on_delete": "Cascade",
+            "on_update": "Cascade",
+            "referenced_columns": [
+              "id"
+            ],
+            "referenced_table": "auth_user",
+            "type": "ForeignKey"
+          },
+          {
+            "columns": [
+              "dmroom_id",
+              "user_id"
+            ],
+            "name": "dm_room_members_unique",
+            "type": "Unique"
+          }
+        ],
+        "name": "dm_room_members",
+        "type": "CreateTable"
+      }
+    ],
+    "optional_dependencies": [],
+    "replaces": [],
+    "state_only": false,
+    "swappable_dependencies": []
+  },
+  "twitter/profile/0001_initial.rs": {
+    "app_label": "profile",
+    "atomic": true,
+    "database_only": false,
+    "dependencies": [],
+    "initial": null,
+    "name": "0001_initial",
+    "operations": [
+      {
+        "columns": [
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "avatar_url",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 255
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "bio",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 500
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "created_at",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "id",
+            "not_null": true,
+            "primary_key": true,
+            "type_definition": "Uuid",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "location",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 255
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "updated_at",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "user_id",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": "Uuid",
+            "unique": true
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "website",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 255
+            },
+            "unique": false
+          }
+        ],
+        "constraints": [
+          {
+            "columns": [
+              "user_id"
+            ],
+            "name": "profile_profile_user_id_uniq",
+            "type": "Unique"
+          }
+        ],
+        "name": "profile_profile",
+        "type": "CreateTable"
+      }
+    ],
+    "optional_dependencies": [],
+    "replaces": [],
+    "state_only": false,
+    "swappable_dependencies": []
+  },
+  "twitter/tweet/0001_initial.rs": {
+    "app_label": "tweet",
+    "atomic": true,
+    "database_only": false,
+    "dependencies": [],
+    "initial": null,
+    "name": "0001_initial",
+    "operations": [
+      {
+        "columns": [
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "content",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": {
+              "VarChar": 280
+            },
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "created_at",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "id",
+            "not_null": true,
+            "primary_key": true,
+            "type_definition": "Uuid",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "like_count",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": "Integer",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "retweet_count",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": "Integer",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "updated_at",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": "TimestampTz",
+            "unique": false
+          },
+          {
+            "auto_increment": false,
+            "default": null,
+            "name": "user_id",
+            "not_null": false,
+            "primary_key": false,
+            "type_definition": "Uuid",
+            "unique": false
+          }
+        ],
+        "constraints": [],
+        "name": "tweet_tweet",
+        "type": "CreateTable"
+      }
+    ],
+    "optional_dependencies": [],
+    "replaces": [],
+    "state_only": false,
+    "swappable_dependencies": []
+  }
+}

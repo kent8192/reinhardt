@@ -52,7 +52,7 @@ use std::rc::{Rc, Weak};
 use std::task::{Context, Poll};
 
 use crate::reactive::{
-	Action, ActionPhase, Effect, EffectTiming, ReactiveScope, Signal, use_action,
+	Action, ActionPhase, Effect, EffectTiming, ReactiveScope, Signal, untracked, use_action,
 };
 use crate::server_fn::ServerFnError;
 use reinhardt_core::reactive::{ScopeId, current_scope_id, scope::enter_scope};
@@ -1057,10 +1057,11 @@ fn clear_errors_in_state<Form>(
 ) where
 	Form: FormRuntimeSource,
 {
+	form.runtime_clear_server_error();
 	for field in form.runtime_fields() {
 		form.runtime_set_custom_widget_error(*field, None);
 	}
-	custom_widget_error_fields.borrow_mut().clear();
+	*custom_widget_error_fields.borrow_mut() = untracked(|| collect_custom_widget_errors(form));
 	state.field_errors.set(HashMap::new());
 	collection_errors.set(HashMap::new());
 	path_errors.set(HashMap::new());

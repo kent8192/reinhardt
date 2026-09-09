@@ -5946,11 +5946,14 @@ fn generate_into_page(macro_ast: &TypedFormMacro, pages_crate: &TokenStream) -> 
 			},
 			quote! {
 				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-				let form_element = form_element.listener("reset", move |event| {
+				let form_element = form_element.on(
+					#pages_crate::event::KnownEvent::Reset,
+					#pages_crate::typed_event_handler::<#pages_crate::event::ResetEvent, _>(move |event: #pages_crate::event::ResetEvent| {
 					let __radio_form = __radio_form.clone();
 					#(#collection_snapshot_clones)*
 					let __reset_superseded = ::std::rc::Rc::new(::std::cell::Cell::new(false));
-					let __reset_observer = #pages_crate::reactive::Effect::new_with_timing({
+					let __reset_scope = #pages_crate::reactive::ReactiveScope::new();
+					__reset_scope.enter(|| #pages_crate::reactive::Effect::new_with_timing({
 						let __watched_form = __radio_form.clone();
 						let __reset_superseded = ::std::rc::Rc::clone(&__reset_superseded);
 						move || {
@@ -5960,15 +5963,15 @@ fn generate_into_page(macro_ast: &TypedFormMacro, pages_crate: &TokenStream) -> 
 							}
 							__reset_superseded.set(true);
 						}
-					}, #pages_crate::reactive::EffectTiming::Layout);
+					}, #pages_crate::reactive::EffectTiming::Layout));
 					// The first read installs subscriptions; later writes supersede this reset.
 					__reset_superseded.set(false);
 					// Run after the native reset and honor cancellation by other listeners.
 					#pages_crate::platform::spawn_task(async move {
-						let _reset_observer = __reset_observer;
+						let _reset_scope = __reset_scope;
 						if !event.default_prevented() {
 							use ::wasm_bindgen::JsCast;
-							let __reset_form = event.target()
+							let __reset_form = event.raw().target()
 								.and_then(|target| target.dyn_into::<::web_sys::HtmlFormElement>().ok());
 							let __sync_dom = || {
 								if let Some(__reset_form) = __reset_form.as_ref() {
@@ -5991,7 +5994,7 @@ fn generate_into_page(macro_ast: &TypedFormMacro, pages_crate: &TokenStream) -> 
 							__sync_dom();
 						}
 					});
-				});
+				}));
 			},
 		)
 	};
@@ -6826,6 +6829,38 @@ fn generate_collection_view(
 		.iter()
 		.map(|field| generate_collection_field_view(field, pages_crate, &collection_name_str))
 		.collect();
+	// Radio bindings update retained controls; other collection widgets still render values.
+	let (shape_setup, item_read) = if item_fields
+		.iter()
+		.all(|field| field.bind && matches!(field.widget, TypedWidget::RadioInput))
+	{
+		(
+			quote! {
+				let __shape_scope = ::std::rc::Rc::new(#pages_crate::reactive::ReactiveScope::new());
+				let __shape = __shape_scope.enter(|| {
+				let __shape = #pages_crate::reactive::Signal::new(::std::vec::Vec::new());
+				let _shape_effect = #pages_crate::reactive::Effect::new_with_timing({
+					let collection = __collection_signal;
+					move || {
+						let next = collection.get().iter().map(|item| (item.key(), item.index())).collect::<::std::vec::Vec<_>>();
+						if __shape.get_untracked() != next { __shape.set(next); }
+					}
+				}, #pages_crate::reactive::EffectTiming::Layout);
+				__shape
+				});
+			},
+			quote! {
+				let _ = &__shape_scope;
+				let _ = __shape.get();
+				let __items = __collection_signal.get_untracked();
+			},
+		)
+	} else {
+		(
+			TokenStream::new(),
+			quote! { let __items = __collection_signal.get(); },
+		)
+	};
 	let legend = collection.label.as_deref().unwrap_or(&collection_name_str);
 	let min_items_attr = collection.min_items.map(|min| {
 		let value = min.to_string();
@@ -6840,9 +6875,10 @@ fn generate_collection_view(
 		{
 			let __collection_signal = self.#collection_name.clone();
 			let __path_signals = self.__path_signals.clone();
+			#shape_setup
 			#pages_crate::component::Page::reactive(move || {
 				let _ = &__path_signals;
-				let __items = __collection_signal.get();
+				#item_read
 				let mut __item_pages = ::std::vec::Vec::new();
 				for item in __items {
 					let item_value = item.value().clone();
@@ -6920,6 +6956,7 @@ fn generate_collection_field_view(
 	let input_element = match &field.widget {
 		TypedWidget::RadioInput => {
 			let disabled = field.display.disabled;
+			let binding = generate_collection_radio_binding(field, pages_crate, collection_name);
 			quote! {
 				PageElement::new("input")
 					.attr("type", "radio")
@@ -6932,7 +6969,7 @@ fn generate_collection_field_view(
 					.bool_attr("disabled", #disabled)
 					#checked_attr
 					#custom_attrs
-					#listener
+					#binding
 			}
 		}
 		TypedWidget::Textarea => {
@@ -7114,34 +7151,76 @@ fn collection_field_checked_expr(field: &TypedFormFieldDef) -> TokenStream {
 	}
 }
 
-fn generate_collection_bind_listener(
+fn generate_collection_radio_binding(
 	field: &TypedFormFieldDef,
 	pages_crate: &TokenStream,
 	collection_name: &str,
 ) -> TokenStream {
+	if !field.bind {
+		return TokenStream::new();
+	}
 	let field_name = &field.name;
-	let field_name_str = ident_to_wire_name(&field.name);
+	let value = radio_input_value(field);
+	let assignment = collection_field_assignment(field, pages_crate, collection_name);
+	quote! {
+		.control_binding({
+			let __binding_scope = ::std::rc::Rc::new(#pages_crate::reactive::ReactiveScope::new());
+			let __binding_target = __binding_scope.enter(|| #pages_crate::reactive::Signal::new(()));
+			let __item_key = item.key();
+			let __read = move || __collection_signal.get().iter()
+				.find(|entry| entry.key() == __item_key)
+				.map(|entry| entry.value().#field_name.clone()).unwrap_or_default();
+			let __write = {
+				let __field_collection_signal = __collection_signal;
+				let __field_path_signals = __path_signals.clone();
+				move |__new_value: ::std::string::String| { #assignment }
+			};
+			let __restore = __write.clone();
+			#pages_crate::component::ControlBinding::from_parts(
+				#pages_crate::component::ControlKind::Radio,
+				Some(::std::string::String::from(#value)),
+				__binding_target.id(),
+				move || {
+					let _ = &__binding_scope;
+					// Register this field's identity in the controlled effect's dependency graph.
+					__binding_target.get();
+					#pages_crate::component::ControlValue::Checked(__read() == #value)
+				},
+				move |value| match value {
+					#pages_crate::component::ControlValue::Checked(true) => {
+						__write(::std::string::String::from(#value));
+						Ok(#pages_crate::component::ControlWriteOutcome::Committed)
+					}
+					#pages_crate::component::ControlValue::Checked(false) =>
+						Ok(#pages_crate::component::ControlWriteOutcome::Ignored),
+					actual => Err(#pages_crate::component::ControlBindingError::ValueKindMismatch {
+						control: #pages_crate::component::ControlKind::Radio,
+						actual: match actual {
+							#pages_crate::component::ControlValue::Text(_) => "text",
+							#pages_crate::component::ControlValue::SelectedValues(_) => "selected-values",
+							#pages_crate::component::ControlValue::Checked(_) => unreachable!(),
+						},
+					}),
+				},
+				move || {
+					let previous = __read();
+					let restore = __restore.clone();
+					::std::boxed::Box::new(move || restore(previous))
+				},
+			)
+		})
+	}
+}
+
+fn collection_field_assignment(
+	field: &TypedFormFieldDef,
+	pages_crate: &TokenStream,
+	collection_name_str: &str,
+) -> TokenStream {
+	let field_name = &field.name;
+	let field_name_str = ident_to_wire_name(field_name);
 	let field_type = field_type_to_value_type(&field.field_type);
-	let collection_name_str = collection_name.to_string();
-	let (event_type, payload_type) = match field.widget {
-		TypedWidget::Textarea => (
-			quote! { #pages_crate::event::KnownEvent::Input },
-			quote! { #pages_crate::event::InputEvent },
-		),
-		TypedWidget::Select
-		| TypedWidget::SelectMultiple
-		| TypedWidget::CheckboxInput
-		| TypedWidget::RadioInput
-		| TypedWidget::RadioSelect => (
-			quote! { #pages_crate::event::KnownEvent::Change },
-			quote! { #pages_crate::event::ChangeEvent },
-		),
-		_ => (
-			quote! { #pages_crate::event::KnownEvent::Input },
-			quote! { #pages_crate::event::InputEvent },
-		),
-	};
-	let assignment = quote! {
+	quote! {
 		let mut __items = __field_collection_signal.get();
 		if let ::core::option::Option::Some(__position) =
 			__items.iter().position(|entry| entry.key() == __item_key)
@@ -7174,7 +7253,34 @@ fn generate_collection_bind_listener(
 				__path_signal.set(__path_value);
 			}
 		}
+	}
+}
+
+fn generate_collection_bind_listener(
+	field: &TypedFormFieldDef,
+	pages_crate: &TokenStream,
+	collection_name: &str,
+) -> TokenStream {
+	let field_name_str = ident_to_wire_name(&field.name);
+	let (event_type, payload_type) = match field.widget {
+		TypedWidget::Textarea => (
+			quote! { #pages_crate::event::KnownEvent::Input },
+			quote! { #pages_crate::event::InputEvent },
+		),
+		TypedWidget::Select
+		| TypedWidget::SelectMultiple
+		| TypedWidget::CheckboxInput
+		| TypedWidget::RadioInput
+		| TypedWidget::RadioSelect => (
+			quote! { #pages_crate::event::KnownEvent::Change },
+			quote! { #pages_crate::event::ChangeEvent },
+		),
+		_ => (
+			quote! { #pages_crate::event::KnownEvent::Input },
+			quote! { #pages_crate::event::InputEvent },
+		),
 	};
+	let assignment = collection_field_assignment(field, pages_crate, collection_name);
 	let typed_update = collection_field_typed_update(
 		&field.field_type,
 		&field.widget,
@@ -7494,6 +7600,18 @@ fn generate_field_view(
 		TypedWidget::RadioInput => {
 			let value = radio_input_value(field);
 			let disabled = field.display.disabled;
+			let binding = signal_ident.map(|signal| {
+				quote! {
+					.control_binding(
+						#pages_crate::component::ControlBinding::radio(
+							#signal, ::std::string::String::from(#value),
+						).prefer_source_on_hydration({
+							let explicitly_reset = __radio_explicitly_reset.clone();
+							move || explicitly_reset.get()
+						})
+					)
+				}
+			});
 			let input = quote! {
 				PageElement::new("input")
 					.attr("type", "radio")
@@ -7507,14 +7625,17 @@ fn generate_field_view(
 					.bool_attr("checked", __radio_checked)
 					#native_attrs
 					#custom_attrs
-					#event_listener
+					#binding
 			};
 			if let Some(signal_ident) = signal_ident {
 				quote! {
+					{
+					let __radio_explicitly_reset = self.__explicitly_reset.clone();
 					#pages_crate::component::Page::reactive(move || {
-						let __radio_checked = #signal_ident.get() == #value;
+						let __radio_checked = #signal_ident.get_untracked() == #value;
 						#input.into_page()
 					})
+					}
 				}
 			} else {
 				quote! {

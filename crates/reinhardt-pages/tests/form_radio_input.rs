@@ -9,7 +9,7 @@ use wasm_bindgen_test::*;
 wasm_bindgen_test_configure!(run_in_browser);
 
 #[cfg_attr(wasm, wasm_bindgen_test)]
-#[cfg_attr(not(wasm), test)]
+#[cfg_attr(not(wasm), rstest::rstest)]
 fn radio_input_renders_fixed_value_and_reactive_checked_state() {
 	// Arrange
 	let radio = form! {
@@ -27,7 +27,7 @@ fn radio_input_renders_fixed_value_and_reactive_checked_state() {
 	let unchecked = concat!(
 		"<form id=\"radio-form\" action=\"/answer\" method=\"get\" class=\"reinhardt-form\">",
 		"<div class=\"reinhardt-field\"><label for=\"answer\" class=\"reinhardt-label\">Answer</label>",
-		"<input type=\"radio\" name=\"answer\" id=\"answer\" value=\"on\" class=\"reinhardt-input\" />",
+		"<input type=\"radio\" name=\"answer\" id=\"answer\" class=\"reinhardt-input\" value=\"on\" />",
 		"</div></form>",
 	);
 
@@ -37,17 +37,14 @@ fn radio_input_renders_fixed_value_and_reactive_checked_state() {
 	radio.answer().set("on".into());
 	assert_eq!(
 		page.render_to_string(),
-		unchecked.replace(
-			"class=\"reinhardt-input\"",
-			"class=\"reinhardt-input\" checked=\"checked\""
-		),
+		unchecked.replace("value=\"on\"", "value=\"on\" checked=\"checked\""),
 	);
 	radio.answer().set("other".into());
 	assert_eq!(page.render_to_string(), unchecked);
 }
 
 #[cfg_attr(wasm, wasm_bindgen_test)]
-#[cfg_attr(not(wasm), test)]
+#[cfg_attr(not(wasm), rstest::rstest)]
 fn radio_input_renders_option_labels_disabled_and_unbound_defaults() {
 	// Arrange
 	let radio = form! {
@@ -75,7 +72,7 @@ fn radio_input_renders_option_labels_disabled_and_unbound_defaults() {
 	let expected = concat!(
 		"<form id=\"radio-options\" action=\"/answer\" method=\"get\" class=\"reinhardt-form\">",
 		"<div class=\"reinhardt-field\"><label for=\"answer\" class=\"reinhardt-label\">Yes</label>",
-		"<input type=\"radio\" name=\"answer\" id=\"answer\" value=\"yes\" class=\"reinhardt-input\" autocomplete=\"off\" required=\"required\" disabled=\"disabled\" checked=\"checked\" />",
+		"<input type=\"radio\" name=\"answer\" id=\"answer\" class=\"reinhardt-input\" autocomplete=\"off\" required=\"required\" disabled=\"disabled\" value=\"yes\" checked=\"checked\" />",
 		"</div><div class=\"reinhardt-field\"><label for=\"snapshot\" class=\"reinhardt-label\">Explicit label</label>",
 		"<input type=\"radio\" name=\"snapshot\" id=\"snapshot\" value=\"accepted\" class=\"reinhardt-input\" checked=\"checked\" />",
 		"</div></form>",
@@ -98,7 +95,7 @@ fn input_tags(html: &str) -> Vec<String> {
 }
 
 #[cfg_attr(wasm, wasm_bindgen_test)]
-#[cfg_attr(not(wasm), test)]
+#[cfg_attr(not(wasm), rstest::rstest)]
 fn collection_radio_input_renders_indexed_names_and_programmatic_values() {
 	// Arrange
 	let radio = form! {
@@ -121,7 +118,7 @@ fn collection_radio_input_renders_indexed_names_and_programmatic_values() {
 	let key = runtime.push_item(radio.answers_collection(), radio.new_answers_item());
 	let path = radio.answers_answer_path(key);
 	let page = radio.into_page();
-	let unchecked = "<input type=\"radio\" name=\"answers[0][answer]\" id=\"answers_0_answer\" value=\"yes\" class=\"reinhardt-input\" autocomplete=\"off\" />";
+	let unchecked = "<input type=\"radio\" name=\"answers[0][answer]\" id=\"answers_0_answer\" class=\"reinhardt-input\" autocomplete=\"off\" value=\"yes\" />";
 
 	// Act and assert
 	assert_eq!(input_tags(&page.render_to_string()), [unchecked]);
@@ -133,8 +130,9 @@ fn collection_radio_input_renders_indexed_names_and_programmatic_values() {
 }
 
 #[cfg_attr(wasm, wasm_bindgen_test)]
-#[cfg_attr(not(wasm), test)]
-fn native_radio_reset_epoch_clears_runtime_state_after_nested_batches() {
+#[cfg_attr(not(wasm), rstest::rstest)]
+#[cfg_attr(not(wasm), tokio::test)]
+async fn native_radio_reset_epoch_clears_runtime_state_after_nested_batches() {
 	use reinhardt_pages::{FieldError, RevalidateOn, reactive::batch};
 	use std::{cell::Cell, rc::Rc};
 
@@ -170,6 +168,9 @@ fn native_radio_reset_epoch_clears_runtime_state_after_nested_batches() {
 				.update(|epoch| *epoch = epoch.wrapping_add(1));
 		});
 	});
+
+	#[cfg(wasm)]
+	gloo_timers::future::TimeoutFuture::new(0).await;
 
 	// Assert: native reset preserves unrelated values and clears every touched/error map.
 	assert_eq!(runtime.get_values().answer, "");
@@ -218,14 +219,20 @@ mod browser {
 	use std::{cell::Cell, rc::Rc};
 	use wasm_bindgen::JsCast;
 
-	struct TestContainer(web_sys::Element);
+	struct TestContainer(web_sys::Element, reinhardt_pages::reactive::ReactiveScope);
 
 	impl TestContainer {
 		fn mount(page: Page) -> Self {
 			let document = web_sys::window().unwrap().document().unwrap();
-			let container = Self(document.create_element("div").unwrap());
+			let container = Self(
+				document.create_element("div").unwrap(),
+				reinhardt_pages::reactive::ReactiveScope::new(),
+			);
 			document.body().unwrap().append_child(&container.0).unwrap();
-			page.mount(&Element::new(container.0.clone())).unwrap();
+			container
+				.1
+				.enter(|| page.mount(&Element::new(container.0.clone())))
+				.unwrap();
 			container
 		}
 
@@ -568,7 +575,8 @@ mod browser {
 		second_item.name = String::from("second row");
 		let second_key = runtime.push_item(radio.answers_collection(), second_item);
 		let name_path = radio.answers_name_path(key);
-		let name_watch = runtime.watch_path::<String>(name_path.clone());
+		let watch_scope = reinhardt_pages::reactive::ReactiveScope::new();
+		let name_watch = watch_scope.enter(|| runtime.watch_path::<String>(name_path.clone()));
 		let container = TestContainer::mount(radio.clone().into_page());
 		radio.unbound().set(String::from("unbound scalar kept"));
 		runtime.set_path_value(
@@ -632,7 +640,7 @@ mod browser {
 			runtime.move_item(radio.answers_collection(), key, 1),
 			Some((0, 1))
 		);
-		let name_watch = runtime.watch_path::<String>(name_path.clone());
+		let name_watch = watch_scope.enter(|| runtime.watch_path::<String>(name_path.clone()));
 		runtime.reset_default_values();
 		runtime.set_value(radio.name_field(), String::from("changed again"));
 		runtime.set_value(radio.enabled_field(), true);
@@ -750,11 +758,16 @@ mod browser {
 		};
 		let runtime = use_form(&radio).build();
 		let key = runtime.push_item(radio.answers_collection(), radio.new_answers_item());
-		let container = TestContainer::mount(radio.clone().into_page());
+		let focus_source = radio.clone();
+		let container = TestContainer::mount(Page::reactive(move || {
+			let _ = focus_source.answer().get();
+			focus_source.clone().into_page()
+		}));
 		let document = web_sys::window().unwrap().document().unwrap();
 
 		// Act and assert: both a root radio and a radio below a collection wrapper keep focus.
-		container.input("answer").focus().unwrap();
+		let previous_scalar = container.input("answer");
+		previous_scalar.focus().unwrap();
 		radio.answer().set(String::from("yes"));
 		assert!(
 			document
@@ -762,15 +775,19 @@ mod browser {
 				.unwrap()
 				.is_same_node(Some(&container.input("answer")))
 		);
+		assert!(!previous_scalar.is_same_node(Some(&container.input("answer"))));
 		assert!(!unrelated.input("answer").checked());
-		container.input("answers_0_answer").focus().unwrap();
+		let previous_collection = container.input("answers_0_answer");
+		previous_collection.focus().unwrap();
 		runtime.set_path_value(radio.answers_answer_path(key), String::from("yes"));
+		let _second = runtime.push_item(radio.answers_collection(), radio.new_answers_item());
 		assert!(
 			document
 				.active_element()
 				.unwrap()
 				.is_same_node(Some(&container.input("answers_0_answer")))
 		);
+		assert!(!previous_collection.is_same_node(Some(&container.input("answers_0_answer"))));
 		assert!(!unrelated.input("answers_0_answer").checked());
 	}
 
@@ -822,7 +839,7 @@ mod browser {
 	}
 
 	#[wasm_bindgen_test]
-	fn collection_radio_input_updates_only_its_item_and_resets() {
+	async fn collection_radio_input_updates_only_its_item_and_resets() {
 		// Arrange
 		let radio = form! {
 			name: BrowserCollectionRadios,
@@ -878,16 +895,25 @@ mod browser {
 		);
 
 		// Act and assert: independent item names prevent browser radio grouping.
-		container.input("answers_0_answer").click();
+		let first_input = container.input("answers_0_answer");
+		let second_input = container.input("answers_1_answer");
+		first_input.click();
 		assert_eq!(runtime.get_values().answers[0].answer, "yes");
 		assert_eq!(runtime.get_values().answers[1].answer, "");
 		runtime.set_path_value(radio.answers_answer_path(second), String::from("yes"));
+		gloo_timers::future::TimeoutFuture::new(0).await;
 		assert!(container.input("answers_0_answer").checked());
 		assert!(container.input("answers_1_answer").checked());
 		runtime.set_path_value(radio.answers_answer_path(first), String::new());
+		gloo_timers::future::TimeoutFuture::new(0).await;
 		assert!(!container.input("answers_0_answer").checked());
 		assert!(container.input("answers_1_answer").checked());
+		assert!(first_input.is_same_node(Some(&container.input("answers_0_answer"))));
+		assert!(second_input.is_same_node(Some(&container.input("answers_1_answer"))));
+
+		// Explicit runtime reset rebuilds the collection with its default keys.
 		runtime.reset();
+		gloo_timers::future::TimeoutFuture::new(0).await;
 		assert_eq!(runtime.get_values().answers.len(), 2);
 		assert_eq!(runtime.get_values().answers[0].answer, "");
 		assert_eq!(runtime.get_values().answers[1].answer, "");

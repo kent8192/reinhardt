@@ -332,12 +332,6 @@ impl ReactiveIfNode {
 		then_view: std::sync::Arc<dyn Fn() -> Page + 'static>,
 		else_view: std::sync::Arc<dyn Fn() -> Page + 'static>,
 	) -> Self {
-		use wasm_bindgen::JsCast;
-
-		let document = marker
-			.owner_document()
-			.expect("marker should have a document");
-
 		// Shared state for the Effect
 		let current_nodes: Rc<RefCell<Vec<web_sys::Node>>> = Rc::new(RefCell::new(Vec::new()));
 		let last_condition: Rc<RefCell<Option<bool>>> = Rc::new(RefCell::new(None));
@@ -375,14 +369,6 @@ impl ReactiveIfNode {
 						let mut nodes = current_nodes_clone.borrow_mut();
 						nodes.drain(..).collect::<Vec<_>>()
 					};
-					let focused_radio = document
-						.active_element()
-						.and_then(|element| element.dyn_into::<web_sys::HtmlInputElement>().ok())
-						.filter(|input| {
-							input.type_() == "radio"
-								&& !input.id().is_empty()
-								&& old_nodes.iter().any(|node| node.contains(Some(input)))
-						});
 					for node in old_nodes {
 						if let Some(parent_node) = node.parent_node() {
 							let _ = parent_node.remove_child(&node);
@@ -405,37 +391,7 @@ impl ReactiveIfNode {
 					with_reactive_node_store(&branch_reactive_node_store, || {
 						store_reactive_scope(scope)
 					});
-					let focus_target = focused_radio.and_then(|previous| {
-						let matches_previous = |input: &web_sys::HtmlInputElement| {
-							input.type_() == "radio"
-								&& input.id() == previous.id()
-								&& input.name() == previous.name()
-								&& input.value() == previous.value()
-						};
-						new_nodes.iter().find_map(|node| {
-							if let Some(input) = node
-								.dyn_ref::<web_sys::HtmlInputElement>()
-								.filter(|input| matches_previous(input))
-							{
-								return Some(input.clone());
-							}
-							let descendants = node
-								.dyn_ref::<web_sys::Element>()?
-								.query_selector_all("input[type=radio]")
-								.ok()?;
-							(0..descendants.length()).find_map(|index| {
-								descendants
-									.item(index)?
-									.dyn_into::<web_sys::HtmlInputElement>()
-									.ok()
-									.filter(&matches_previous)
-							})
-						})
-					});
 					*current_nodes_clone.borrow_mut() = new_nodes;
-					if let Some(input) = focus_target {
-						let _ = input.focus();
-					}
 				});
 			},
 			EffectTiming::Layout, // Use Layout timing for synchronous DOM updates
@@ -677,6 +633,12 @@ impl ReactiveNode {
 		start_marker: Option<web_sys::Comment>,
 		render: std::sync::Arc<dyn Fn() -> Page + 'static>,
 	) -> Self {
+		use wasm_bindgen::JsCast;
+
+		let document = marker
+			.owner_document()
+			.expect("marker should have a document");
+
 		// Shared state for the Effect
 		let current_nodes: Rc<RefCell<Vec<web_sys::Node>>> = Rc::new(RefCell::new(Vec::new()));
 
@@ -697,6 +659,18 @@ impl ReactiveNode {
 			move || {
 				let update = || {
 					with_reactive_node_store(&effect_reactive_node_store, || {
+						let focused_radio = document
+							.active_element()
+							.and_then(|element| {
+								element.dyn_into::<web_sys::HtmlInputElement>().ok()
+							})
+							.filter(|input| {
+								input.type_() == "radio"
+									&& !input.id().is_empty() && current_nodes_clone
+									.borrow()
+									.iter()
+									.any(|node| node.contains(Some(input)))
+							});
 						let candidate_render_store = new_reactive_node_store();
 						// Render into a candidate store so an Activity attribute-only update
 						// retains the owners for the already-mounted content.
@@ -722,6 +696,7 @@ impl ReactiveNode {
 							let mut nodes = current_nodes_clone.borrow_mut();
 							nodes.drain(..).collect::<Vec<_>>()
 						};
+
 						for node in old_nodes {
 							if let Some(parent_node) = node.parent_node() {
 								let _ = parent_node.remove_child(&node);
@@ -737,7 +712,37 @@ impl ReactiveNode {
 						with_reactive_node_store(&mount_reactive_node_store, || {
 							store_reactive_scope(scope)
 						});
+						let focus_target = focused_radio.and_then(|previous| {
+							let matches_previous = |input: &web_sys::HtmlInputElement| {
+								input.type_() == "radio"
+									&& input.id() == previous.id()
+									&& input.name() == previous.name()
+									&& input.value() == previous.value()
+							};
+							new_nodes.iter().find_map(|node| {
+								if let Some(input) = node
+									.dyn_ref::<web_sys::HtmlInputElement>()
+									.filter(|input| matches_previous(input))
+								{
+									return Some(input.clone());
+								}
+								let descendants = node
+									.dyn_ref::<web_sys::Element>()?
+									.query_selector_all("input[type=radio]")
+									.ok()?;
+								(0..descendants.length()).find_map(|index| {
+									descendants
+										.item(index)?
+										.dyn_into::<web_sys::HtmlInputElement>()
+										.ok()
+										.filter(&matches_previous)
+								})
+							})
+						});
 						*current_nodes_clone.borrow_mut() = new_nodes;
+						if let Some(input) = focus_target {
+							let _ = input.focus();
+						}
 					});
 				};
 				#[cfg(feature = "i18n")]

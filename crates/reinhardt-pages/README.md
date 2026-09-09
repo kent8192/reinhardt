@@ -819,6 +819,10 @@ writes. Custom widget errors remain reactive after reset. `autocomplete` is
 preserved on scalar and collection radios,
 and reactive replacements retain focus within their own subtree. For scalar
 fields, `bind: false` renders the current value without installing two-way binding.
+Bound radios use controlled bindings and typed `ResetEvent` handling. Collections
+containing only bound `RadioInput` fields retain their controls while item keys
+and indices remain unchanged; other collection widgets keep their existing
+reactive rendering behavior.
 
 Typed native attributes are accepted for the controls that support them:
 

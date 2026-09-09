@@ -15,140 +15,37 @@ the current source converter or parser. The Twitter fixtures predate this
 capture and are reused byte-for-byte, so the old framework identifies the
 compatible execution baseline rather than their generator version.
 
-Run the capture from the Reinhardt workspace root. The first command only
-prints and validates the proposed 27-file inventory. The second command runs
-the independent oracle before writing any fixture:
+## Reproduce the fixtures
+
+The checked-in [capture script](capture-fixtures.py) requires Python 3.12 or
+newer, Git, Rust/Cargo, and local Reinhardt and Cloud repositories containing
+the pinned commits above. Full clones contain that history; shallow clones
+must fetch those commits first. Oracle compilation also requires access to
+Cargo dependencies. Run from the Reinhardt workspace root and set the Cloud
+repository path for your machine:
 
 ```bash
-python3 /tmp/reinhardt-6143-sdd-xlhw1o2t/capture-fixtures.py
-python3 /tmp/reinhardt-6143-sdd-xlhw1o2t/capture-fixtures.py --write
+CLOUD_REPO=/absolute/path/to/reinhardt-cloud
+python3 tests/integration/tests/fixtures/migration_source/capture-fixtures.py --cloud-repo "$CLOUD_REPO"
+python3 tests/integration/tests/fixtures/migration_source/capture-fixtures.py --cloud-repo "$CLOUD_REPO" --write
 ```
 
-The exact capture program is:
+The first command validates and prints the proposed 27-file inventory without
+writing files. The second executes the original migration functions against
+the pinned old framework, validates every existing artifact, and only then
+creates missing fixtures. Existing sources and expected semantics must match
+exactly. Existing files are never overwritten. The recorded
+`oracle_lock_sha256` describes the original capture; validation with a newly
+resolved dependency graph preserves that provenance while requiring identical
+migration semantics. Temporary source exports are removed when the command
+exits; Cargo caches follow the local Cargo configuration. `--workspace` selects
+another Reinhardt repository; by default it is inferred from the script location.
 
-```python
-import argparse
-import hashlib
-import io
-import json
-from pathlib import Path, PurePosixPath
-import subprocess
-import tarfile
-import tempfile
+## Acceptance gates
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--write", action="store_true")
-args = parser.parse_args()
-workspace = Path.cwd().resolve()
-cloud = Path("/Users/kent8192/Projects/reinhardt-cloud")
-cloud_commit = "f562c5942c567e273dd02f350858db97189ec015"
-twitter_commit = "46033a5937dbd2e5f7cfdeea1cd2ef96d65cf834"
-framework_ref = "reinhardt-web@v0.3.0-rc.2"
-destination = workspace / "tests/integration/tests/fixtures/migration_source"
-
-def git(repo, *arguments):
-    return subprocess.check_output(["git", "-C", str(repo), *arguments])
-
-cloud_paths = sorted(
-    p for p in git(cloud, "ls-tree", "-r", "--name-only", cloud_commit,
-                   "dashboard/migrations").decode().splitlines()
-    if PurePosixPath(p).suffix == ".rs"
-    and PurePosixPath(p).name[0].isdigit()
-)
-assert len(cloud_paths) == 23, cloud_paths
-inputs = [
-    (cloud, "kent8192/reinhardt-cloud", cloud_commit, p,
-     "cloud/" + p.removeprefix("dashboard/migrations/"))
-    for p in cloud_paths
-]
-twitter_prefix = "crates/reinhardt-db/tests/fixtures/migration_source/v0_1_4/twitter/"
-inputs += [
-    (workspace, "kent8192/reinhardt-web", twitter_commit,
-     twitter_prefix + app + "/0001_initial.rs",
-     "twitter/" + app + "/0001_initial.rs")
-    for app in ["auth", "dm", "profile", "tweet"]
-]
-rows, sources = [], {}
-for repo, repository, commit, original_path, relative_path in inputs:
-    source = git(repo, "show", commit + ":" + original_path)
-    fixture_path = (
-        "tests/integration/tests/fixtures/migration_source/" + relative_path
-        if relative_path.startswith("cloud/") else original_path
-    )
-    if relative_path.startswith("twitter/"):
-        assert (workspace / fixture_path).read_bytes() == source
-    sources[relative_path] = source
-    rows.append({
-        "relative_path": relative_path, "fixture_path": fixture_path,
-        "repository": repository, "commit": commit, "original_path": original_path,
-        "sha256": hashlib.sha256(source).hexdigest(),
-    })
-framework_commit = git(
-    workspace, "rev-parse", framework_ref + "^{commit}"
-).decode().strip()
-manifest = {"framework_commit": framework_commit, "files": rows}
-print(json.dumps(manifest, indent=2))
-if not args.write:
-    raise SystemExit(0)
-
-with tempfile.TemporaryDirectory(prefix="reinhardt-6143-oracle-") as temporary:
-    temporary = Path(temporary)
-    framework = temporary / "framework"
-    framework.mkdir()
-    archive = git(workspace, "archive", "--format=tar", framework_commit)
-    with tarfile.open(fileobj=io.BytesIO(archive)) as packed:
-        packed.extractall(framework, filter="data")
-    oracle = temporary / "oracle"
-    (oracle / "src").mkdir(parents=True)
-    modules, entries = [], []
-    for index, row in enumerate(rows):
-        relative_path = row["relative_path"]
-        source_path = oracle / "src" / ("migration_" + str(index) + ".rs")
-        source_path.write_bytes(sources[relative_path])
-        modules.append("mod migration_" + str(index) + ";")
-        entries.append(
-            "(" + json.dumps(relative_path) + ", migration_" + str(index) + "::migration())"
-        )
-    main = "\n".join(modules) + "\nfn main() {\n"
-    main += "let migrations = std::collections::BTreeMap::from(["
-    main += ",\n".join(entries) + "]);\n"
-    main += 'println!("{}", serde_json::to_string(&migrations).unwrap());\n}\n'
-    (oracle / "src/main.rs").write_text(main)
-    (oracle / "Cargo.toml").write_text(
-        '[package]\nname="legacy-migration-oracle"\nversion="0.0.0"\nedition="2024"\n'
-        '[dependencies]\nreinhardt={package="reinhardt-web",path='
-        + json.dumps(str(framework))
-        + ',default-features=false,features=["database"]}\nserde_json="1"\n'
-    )
-    output = subprocess.run(
-        ["cargo", "run", "--quiet", "--manifest-path", str(oracle / "Cargo.toml")],
-        cwd=oracle, capture_output=True, text=True, check=True,
-    )
-    expected = json.loads(output.stdout)
-    assert sorted(expected) == sorted(sources)
-    manifest["oracle_lock_sha256"] = hashlib.sha256(
-        (oracle / "Cargo.lock").read_bytes()
-    ).hexdigest()
-
-# No fixture mutation occurs before the independent oracle succeeds.
-destination.mkdir(parents=True, exist_ok=True)
-for row in rows:
-    if row["relative_path"].startswith("cloud/"):
-        output_path = workspace / row["fixture_path"]
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        source = sources[row["relative_path"]]
-        if output_path.exists():
-            assert output_path.read_bytes() == source
-        else:
-            output_path.write_bytes(source)
-for name, value in [("manifest.json", manifest), ("expected.json", expected)]:
-    target = destination / name
-    content = json.dumps(value, indent=2, sort_keys=True) + "\n"
-    if target.exists():
-        assert json.loads(target.read_text()) == value
-    else:
-        target.write_text(content)
-```
+The pre-0.4 acceptance cases use `rstest`. The public-facade regression compares
+the complete upgraded source, including the format marker, comments,
+whitespace, and surrounding text, before compiling and checking the operation.
 
 Run the acceptance gates with:
 
@@ -169,7 +66,7 @@ Normal tests use only checked-in fixture data. They do not require the local
 Cloud checkout or GitHub network access. The public-facade compiler check still
 requires its Cargo dependencies to be available.
 
-## Task 4 downstream acceptance
+## Downstream acceptance
 
 The controlled model boundary uses an independently authored
 `ModelMetadata::new("legacy", "Items", "items")` target. It does not derive the
@@ -189,13 +86,20 @@ again reported no drift. Adding one nullable integer `extra` field returned the
 exact diagnostic `Execution error: 1 migration(s) would be created`; check mode
 left the sole migration filename and its bytes unchanged.
 
-The pinned Cloud snapshot check was previewed and then run from the same
-framework worktree:
+The checked-in [Cloud snapshot checker](check-cloud-snapshot.py) uses the same
+prerequisites and Cloud repository path. Its default mode validates the paths
+and pinned commit, then prints the proposed steps. `--run` exports an isolated
+temporary snapshot, runs the local CLI conversion and repeat check, then
+attempts the real Cloud compilation and model check. `--framework` can select
+another framework workspace. The original Cloud checkout is only read.
 
 ```bash
-python3 /tmp/reinhardt-6143-sdd-xlhw1o2t/check-cloud-snapshot.py
-python3 /tmp/reinhardt-6143-sdd-xlhw1o2t/check-cloud-snapshot.py --run
+CLOUD_REPO=/absolute/path/to/reinhardt-cloud
+python3 tests/integration/tests/fixtures/migration_source/check-cloud-snapshot.py --cloud-repo "$CLOUD_REPO"
+python3 tests/integration/tests/fixtures/migration_source/check-cloud-snapshot.py --cloud-repo "$CLOUD_REPO" --run
 ```
+
+The following result was recorded against the framework revision above:
 
 The preview exited 0. The run used `kent8192/reinhardt-cloud` commit
 `f562c5942c567e273dd02f350858db97189ec015` and exited 1. It upgraded all 23

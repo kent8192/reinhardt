@@ -1,5 +1,7 @@
 //! Owned values shared by typed event payloads on native and WASM targets.
 
+pub use reinhardt_core::types::page::EventFile;
+
 /// Keyboard modifier flags active when an event was dispatched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Modifiers {
@@ -127,91 +129,3 @@ impl From<String> for PointerKind {
 		}
 	}
 }
-
-/// Owned metadata for a file selected by an event target.
-#[derive(Clone)]
-pub struct EventFile {
-	name: String,
-	media_type: String,
-	size: u64,
-	last_modified: i64,
-	#[cfg(wasm)]
-	raw: web_sys::File,
-}
-
-impl EventFile {
-	/// Returns the file name without a path.
-	#[must_use]
-	pub fn name(&self) -> &str {
-		&self.name
-	}
-
-	/// Returns the reported media type.
-	#[must_use]
-	pub fn media_type(&self) -> &str {
-		&self.media_type
-	}
-
-	/// Returns the file size in bytes.
-	#[must_use]
-	pub const fn size(&self) -> u64 {
-		self.size
-	}
-
-	/// Returns the last-modified timestamp in milliseconds since the Unix epoch.
-	#[must_use]
-	pub const fn last_modified(&self) -> i64 {
-		self.last_modified
-	}
-
-	/// Returns the source browser file.
-	#[cfg(wasm)]
-	#[must_use]
-	pub const fn raw(&self) -> &web_sys::File {
-		&self.raw
-	}
-
-	#[cfg(native)]
-	pub(crate) fn from_native(file: &reinhardt_core::types::page::NativeEventFile) -> Self {
-		Self {
-			name: file.name.clone(),
-			media_type: file.media_type.clone(),
-			size: file.size,
-			last_modified: file.last_modified,
-		}
-	}
-
-	#[cfg(wasm)]
-	pub(crate) fn from_web_file(file: web_sys::File) -> Self {
-		Self {
-			name: file.name(),
-			media_type: file.type_(),
-			size: file.size() as u64,
-			last_modified: file.last_modified() as i64,
-			raw: file,
-		}
-	}
-}
-
-impl std::fmt::Debug for EventFile {
-	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		formatter
-			.debug_struct("EventFile")
-			.field("name", &self.name)
-			.field("media_type", &self.media_type)
-			.field("size", &self.size)
-			.field("last_modified", &self.last_modified)
-			.finish()
-	}
-}
-
-impl PartialEq for EventFile {
-	fn eq(&self, other: &Self) -> bool {
-		self.name == other.name
-			&& self.media_type == other.media_type
-			&& self.size == other.size
-			&& self.last_modified == other.last_modified
-	}
-}
-
-impl Eq for EventFile {}

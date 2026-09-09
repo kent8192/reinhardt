@@ -4,9 +4,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::{cell::Cell, rc::Rc};
 
+use reinhardt_core::types::page::NativeEventFile;
 use reinhardt_pages::component::{ControlBinding, ControlBindingError, NumberParseErrorKind};
 use reinhardt_pages::event::{
-	ChangeEvent, CompositionEndEvent, CompositionStartEvent, EventPayload, typed_event_handler,
+	ChangeEvent, CompositionEndEvent, CompositionStartEvent, EventFile, EventPayload,
+	typed_event_handler,
 };
 use reinhardt_pages::prelude::spawn_task;
 use reinhardt_pages::reactive::hooks::use_layout_effect;
@@ -23,6 +25,136 @@ fn reactive_scope() -> ReactiveScope {
 
 fn signal_in_scope<T: 'static>(scope: &ReactiveScope, value: T) -> Signal<T> {
 	scope.enter(|| Signal::new(value))
+}
+
+fn event_file(name: &str) -> EventFile {
+	EventFile::from(&NativeEventFile::new(name, "text/plain", 12, 1_000))
+}
+
+#[rstest]
+fn bound_file_input_preserves_single_file_selection(reactive_scope: ReactiveScope) {
+	// Arrange
+	let files = signal_in_scope(&reactive_scope, Vec::<EventFile>::new());
+	let screen = render(
+		PageElement::new("input")
+			.attr("aria-label", "Upload")
+			.attr("type", "file")
+			.control_binding(ControlBinding::file(files.clone())),
+	);
+
+	// Act
+	screen
+		.get_by_label("Upload")
+		.dispatch(EventFixture::change().file("only.txt", "text/plain", 12, 1_000))
+		.expect("file fixture should dispatch");
+
+	// Assert
+	assert_eq!(files.get(), vec![event_file("only.txt")]);
+}
+
+#[rstest]
+fn bound_file_input_preserves_selection_order_and_updates_before_change_handler(
+	reactive_scope: ReactiveScope,
+) {
+	// Arrange
+	let files = signal_in_scope(&reactive_scope, Vec::<EventFile>::new());
+	let observed = Arc::new(Mutex::new(Vec::new()));
+	let observed_handler = Arc::clone(&observed);
+	let files_handler = files.clone();
+	let screen = render(page!({
+		input {
+			aria_label: "Upload",
+			type: "file",
+			multiple: true,
+			bind: files,
+			@change: move |_| *observed_handler.lock().unwrap() = files_handler.get(),
+		}
+	}));
+	let input = screen.get_by_label("Upload");
+
+	// Act
+	input
+		.dispatch(
+			EventFixture::change()
+				.file("first.txt", "text/plain", 12, 1_000)
+				.file("second.txt", "text/plain", 24, 2_000),
+		)
+		.expect("file fixture should dispatch");
+
+	// Assert
+	assert_eq!(
+		files
+			.get()
+			.iter()
+			.map(|file| file.name())
+			.collect::<Vec<_>>(),
+		vec!["first.txt", "second.txt"]
+	);
+	assert_eq!(
+		observed
+			.lock()
+			.unwrap()
+			.iter()
+			.map(|file| file.name())
+			.collect::<Vec<_>>(),
+		vec!["first.txt", "second.txt"]
+	);
+}
+
+#[rstest]
+fn bound_file_input_mount_normalizes_nonempty_signal_to_empty_fixture(
+	reactive_scope: ReactiveScope,
+) {
+	// Arrange
+	let files = signal_in_scope(&reactive_scope, vec![event_file("stale.txt")]);
+
+	// Act
+	let screen = render(
+		PageElement::new("input")
+			.attr("aria-label", "Upload")
+			.attr("type", "file")
+			.control_binding(ControlBinding::file(files.clone())),
+	);
+
+	// Assert
+	assert!(files.get().is_empty());
+	assert_eq!(screen.get_by_label("Upload").value(), None);
+}
+
+#[rstest]
+#[tokio::test]
+async fn bound_file_input_clears_selected_fixture_when_signal_becomes_empty(
+	reactive_scope: ReactiveScope,
+) {
+	// Arrange
+	let files = signal_in_scope(&reactive_scope, Vec::<EventFile>::new());
+	let observed = Arc::new(Mutex::new(Vec::new()));
+	let observed_handler = Arc::clone(&observed);
+	let screen = render(page!({
+		input {
+			aria_label: "Upload",
+			type: "file",
+			bind: files,
+			@change: move |event: ChangeEvent| {
+				*observed_handler.lock().unwrap() = event.files().expect("fixture files");
+			},
+		}
+	}));
+	let input = screen.get_by_label("Upload");
+	input
+		.dispatch(EventFixture::change().file("selected.txt", "text/plain", 12, 1_000))
+		.expect("file fixture should dispatch");
+	assert_eq!(files.get(), vec![event_file("selected.txt")]);
+
+	// Act
+	files.set(Vec::new());
+	screen.settle().await;
+	input
+		.dispatch(EventFixture::change())
+		.expect("cleared file fixture should dispatch");
+
+	// Assert
+	assert!(observed.lock().unwrap().is_empty());
 }
 
 #[rstest]

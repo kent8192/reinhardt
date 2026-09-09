@@ -199,7 +199,7 @@ impl EventTarget {
 			value: target.value().map(ToOwned::to_owned),
 			checked: target.checked(),
 			selected_values: target.selected_values().to_vec(),
-			files: target.files().iter().map(EventFile::from_native).collect(),
+			files: target.files().iter().map(EventFile::from).collect(),
 			text_content: target.text_content().map(ToOwned::to_owned),
 			content_editable: target.is_content_editable(),
 		}
@@ -244,7 +244,7 @@ impl EventTarget {
 		if let Some(file_list) = input.and_then(web_sys::HtmlInputElement::files) {
 			for index in 0..file_list.length() {
 				if let Some(file) = file_list.get(index) {
-					files.push(EventFile::from_web_file(file));
+					files.push(EventFile::from(file));
 				}
 			}
 		}

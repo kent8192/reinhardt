@@ -465,12 +465,15 @@
 //! `password`, `color`, `date`, `datetime-local`, `month`, `week`, and `time`)
 //! and radio groups use `Signal<String>`, checkboxes use `Signal<bool>`, numeric
 //! inputs use a primitive implementing [`NumberValue`], and multiple selects
-//! use `Signal<Vec<String>>`. Date/time inputs use the browser's serialized
+//! use `Signal<Vec<String>>`. File inputs, whether single or `multiple`, use
+//! `Signal<Vec<event::EventFile>>`. Date/time inputs use the browser's serialized
 //! value, with `""` for an empty or browser-rejected editor value. Browser
 //! normalization of a valid application write updates the signal, such as
 //! `2026-08-31 10:30` becoming `2026-08-31T10:30` for `datetime-local`. When an
 //! invalid application value is sanitized to `""`, the original signal is
 //! preserved.
+//! This `page!` contract does not expand `form!`, `ClientForm`, or `ModelForm`;
+//! their file fields retain the existing `Option<web_sys::File>` contract.
 //! Password values stay out of HTML attributes. Resetting a connected password
 //! form reconciles its signal in a deferred task; cancelled resets and
 //! unmounted controls do not change the signal.
@@ -499,7 +502,9 @@
 //! select projects every match.
 //!
 //! ```rust
+//! use reinhardt_pages::event::EventFile;
 //! use reinhardt_pages::prelude::*;
+//! use reinhardt_pages::reactive::Signal;
 //! use reinhardt_pages::reactive::ReactiveScope;
 //!
 //! ReactiveScope::run(|| {
@@ -509,6 +514,8 @@
 //!     let amount = Signal::new(0_f64);
 //!     let amount_error = Signal::new(None::<NumberParseError>);
 //!     let targets = Signal::new(Vec::<String>::new());
+//!     let files = Signal::new(Vec::<EventFile>::new());
+//!     let attachments = Signal::new(Vec::<EventFile>::new());
 //!
 //!     let _form = page!({
 //!         input { aria_label: "Search", bind: query }
@@ -531,9 +538,21 @@
 //!             option { value: "native", "Native" }
 //!             option { value: "wasm", "WebAssembly" }
 //!         }
+//!         input { aria_label: "Avatar", type: "file", bind: files }
+//!         input { aria_label: "Attachments", type: "file", multiple: true, bind: attachments }
 //!     });
 //! });
 //! ```
+//!
+//! A file-input change replaces its signal with the full ordered browser
+//! selection. File bindings observe the browser-owned selection. Clearing the
+//! Signal clears its input; a non-empty Signal cannot populate the control.
+//! Successful form reset synchronizes the live selection after a browser task,
+//! so reset handlers and their microtasks can still observe the previous Signal.
+//! Cancelled reset and disposed bindings do not receive a reset-driven write.
+//! Listener ownership is shared with password bindings and released when the
+//! controller is dropped. Hydration likewise adopts live DOM files. SSR emits
+//! neither file metadata nor a file value.
 //!
 //! ## Forms
 //!

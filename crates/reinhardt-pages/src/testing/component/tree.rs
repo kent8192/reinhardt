@@ -566,6 +566,16 @@ impl TestDom {
 					dedupe_next_input: false,
 				}),
 			)),
+			ControlKind::File if event_name == "change" => Ok((
+				true,
+				Some(PendingControlBindingWrite {
+					node_id,
+					binding,
+					value: ControlValue::Files(node.files.iter().map(Into::into).collect()),
+					raw: None,
+					dedupe_next_input: false,
+				}),
+			)),
 			_ => Ok((false, None)),
 		}
 	}
@@ -629,7 +639,17 @@ impl TestDom {
 				&& element.pending_raw.is_some()
 				&& element.last_observed_control_value.as_ref() == Some(&value)
 				&& element.last_observed_signal_revision == Some(signal_revision);
-			if !retain_invalid_raw {
+			if binding.kind() == ControlKind::File {
+				if let ControlValue::Files(ref files) = value {
+					if files.is_empty() {
+						element.files.clear();
+					} else if *files != element.files.iter().map(Into::into).collect::<Vec<_>>() {
+						let _ = binding.write(ControlValue::Files(
+							element.files.iter().map(Into::into).collect(),
+						));
+					}
+				}
+			} else if !retain_invalid_raw {
 				element.pending_raw = None;
 				element.apply_control_value(&binding, applied);
 			}
@@ -783,12 +803,15 @@ impl TestDom {
 						normalized,
 						normalization_write_back_allowed,
 					);
+					element_node.apply_control_value(&binding, applied);
+					if binding.kind() == ControlKind::File {
+						let _ = binding.write(ControlValue::Files(Vec::new()));
+					}
 					element_node.last_observed_control_value = Some(binding.read());
 					element_node.last_observed_signal_revision =
 						Some(reinhardt_core::reactive::with_runtime(|runtime| {
 							runtime.signal_revision(binding.target())
 						}));
-					element_node.apply_control_value(&binding, applied);
 				}
 				if let Some(raw) = rejected_number_raw {
 					element_node.value = Some(raw);
@@ -1138,6 +1161,12 @@ impl ElementNode {
 				self.tag.eq_ignore_ascii_case("select")
 					&& self.attr("multiple").is_some_and(is_boolean_attr_truthy)
 			}
+			ControlKind::File => {
+				self.tag.eq_ignore_ascii_case("input")
+					&& self
+						.attr("type")
+						.is_some_and(crate::control_binding::is_file_input_type)
+			}
 		};
 		if supported {
 			Ok(())
@@ -1184,6 +1213,11 @@ impl ElementNode {
 			ControlValue::SelectedValues(values) => {
 				self.value = Some(values.first().cloned().unwrap_or_default());
 				self.selected_values = values;
+			}
+			ControlValue::Files(files) => {
+				if files.is_empty() {
+					self.files.clear();
+				}
 			}
 		}
 	}

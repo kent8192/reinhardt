@@ -2599,6 +2599,7 @@ fn generate_model_form(
 						#pages_crate::component::ControlValue::Text(_) => "text",
 						#pages_crate::component::ControlValue::Checked(_) => "checked",
 						#pages_crate::component::ControlValue::SelectedValues(_) => "selected-values",
+						#pages_crate::component::ControlValue::Files(_) => "files",
 					}
 				}
 
@@ -2730,7 +2731,8 @@ fn generate_model_form(
 										.expect("validated model form radio field");
 									#pages_crate::component::ControlWriteOutcome::Committed
 								}
-								#pages_crate::component::ControlKind::SelectMany => {
+								#pages_crate::component::ControlKind::SelectMany
+								| #pages_crate::component::ControlKind::File => {
 									return ::core::result::Result::Err(mismatch());
 								}
 							};

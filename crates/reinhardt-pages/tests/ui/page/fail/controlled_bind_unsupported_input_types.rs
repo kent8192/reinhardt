@@ -4,7 +4,7 @@ fn main() {
 	page!(|| {
 		input {
 			a11y: off,
-			type: "file",
+			type: "submit",
 			bind: (),
 		}
 	});

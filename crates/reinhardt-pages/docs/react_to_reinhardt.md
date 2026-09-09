@@ -254,18 +254,27 @@ a `Signal`, providing the Reinhardt equivalent of a React controlled input.
 | `textarea` | `Signal<String>` |
 | `select` with no `multiple` or static `multiple: false` | `Signal<String>` |
 | `select` with static `multiple: true` | `Signal<Vec<String>>` |
+| `input` with static `type: "file"`, with or without `multiple` | `Signal<Vec<EventFile>>` |
 
-Other input types, including `file`, are not binding shapes. The obsolete
+This table describes the `page!` binding contract. It does not expand `form!`,
+`ClientForm`, or `ModelForm`; their file fields retain the existing
+`Option<web_sys::File>` contract.
+
+Other input types are not binding shapes. The obsolete
 `datetime` type is not an alias for `datetime-local`. Bound input `type` and
 select `multiple` classifiers must be static so the macro can validate the
 signal type at compile time.
 
 ```rust
+use reinhardt_pages::event::EventFile;
 use reinhardt_pages::prelude::*;
+use reinhardt_pages::reactive::Signal;
 
 let query = Signal::new(String::new());
 let parse_error = Signal::new(None::<NumberParseError>);
 let amount = Signal::new(0_f64);
+let files = Signal::new(Vec::<EventFile>::new());
+let attachments = Signal::new(Vec::<EventFile>::new());
 
 page!({
     input { aria_label: "Search", bind: query, placeholder: "Search" }
@@ -274,6 +283,8 @@ page!({
         type: "number",
         bind: number(amount, parse_error),
     }
+    input { aria_label: "Avatar", type: "file", bind: files }
+    input { aria_label: "Attachments", type: "file", multiple: true, bind: attachments }
 })
 ```
 
@@ -281,7 +292,13 @@ The ownership transition during hydration is deliberate. The live DOM wins
 initially: Reinhardt adopts browser-restored values and user edits made before
 hydration instead of overwriting them with the server-time signal snapshot.
 After hydration, the signal wins: application writes update the corresponding
-DOM property. User input updates the signal before an explicit handler for the
+DOM property, except for file inputs. File-input hydration adopts the live DOM
+files; a browser change replaces `Signal<Vec<EventFile>>` with the full ordered
+selection. An empty file signal clears the control, but a non-empty signal
+cannot populate it and is normalized to the live DOM selection. Normal form
+reset handling clears the file signal; preventing reset preserves the selection.
+SSR emits neither file metadata nor a file value. User input updates the signal
+before an explicit handler for the
 same event runs, so the handler observes the new signal value. Password values
 are written only to the live DOM property, never to SSR or the `value` content
 attribute. Reactive attributes that cannot affect a control value also leave

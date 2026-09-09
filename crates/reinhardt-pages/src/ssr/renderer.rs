@@ -1436,14 +1436,8 @@ impl SsrRenderer {
 					}
 					html
 				}
-				Page::Empty => String::new(),
 				Page::WithHead { view, head } => {
 					self.record_rendered_head(head);
-					self.render_stream_shell_page_with_selection(view, boundaries, selection)
-						.await
-				}
-				#[cfg(feature = "hmr")]
-				Page::DevTemplate { view, .. } | Page::DevSlot { view, .. } => {
 					self.render_stream_shell_page_with_selection(view, boundaries, selection)
 						.await
 				}
@@ -1633,6 +1627,16 @@ impl SsrRenderer {
 						String::new()
 					}
 				}
+				// Core may expose development wrappers even when Pages' HMR is disabled.
+				// Preserve traversal state through wrappers; Empty has no wrapped view.
+				_ => {
+					if let Some(view) = view.as_dev_view() {
+						self.render_stream_shell_page_with_selection(view, boundaries, selection)
+							.await
+					} else {
+						String::new()
+					}
+				}
 			}
 		})
 	}
@@ -1718,16 +1722,10 @@ impl SsrRenderer {
 					}
 					html
 				}
-				Page::Empty => String::new(),
 				Page::WithHead { view, head } => {
 					if !matches!(mode, AsyncRenderMode::Discovery) {
 						self.record_rendered_head(head);
 					}
-					self.render_async_page_with_selection(view, mode, selection)
-						.await
-				}
-				#[cfg(feature = "hmr")]
-				Page::DevTemplate { view, .. } | Page::DevSlot { view, .. } => {
 					self.render_async_page_with_selection(view, mode, selection)
 						.await
 				}
@@ -1928,6 +1926,16 @@ impl SsrRenderer {
 				Page::Outlet(outlet) => {
 					if let Some(child) = outlet.child() {
 						self.render_async_page_with_selection(child, mode, selection)
+							.await
+					} else {
+						String::new()
+					}
+				}
+				// Core may expose development wrappers even when Pages' HMR is disabled.
+				// Preserve traversal state through wrappers; Empty has no wrapped view.
+				_ => {
+					if let Some(view) = view.as_dev_view() {
+						self.render_async_page_with_selection(view, mode, selection)
 							.await
 					} else {
 						String::new()
@@ -2247,10 +2255,15 @@ fn render_element_opening(
 		&& element
 			.bound_control()
 			.is_some_and(|binding| binding.kind() == ControlKind::Text);
+	let omits_bound_file_value = element.tag_name().eq_ignore_ascii_case("input")
+		&& element
+			.bound_control()
+			.is_some_and(|binding| binding.kind() == ControlKind::File);
 
 	let projects_value = element.tag_name().eq_ignore_ascii_case("input")
 		&& projection.value.is_some()
-		&& !omits_bound_password_value;
+		&& !omits_bound_password_value
+		&& !omits_bound_file_value;
 	let projects_checked = element.bound_control().is_some_and(|binding| {
 		matches!(binding.kind(), ControlKind::Checkbox | ControlKind::Radio)
 	});
@@ -2270,7 +2283,8 @@ fn render_element_opening(
 				|| reactive_input_type_is_supported)
 			&& (!(name.eq_ignore_ascii_case("multiple") && reactive_select_multiple.is_some())
 				|| reactive_select_multiple_is_supported);
-		if (name.eq_ignore_ascii_case("value") && (projects_value || omits_bound_password_value))
+		if (name.eq_ignore_ascii_case("value")
+			&& (projects_value || omits_bound_password_value || omits_bound_file_value))
 			|| (name.eq_ignore_ascii_case("checked") && projects_checked)
 			|| (name.eq_ignore_ascii_case("selected") && projected_option_selection.is_some())
 			|| (omits_bound_password_value
@@ -2287,6 +2301,9 @@ fn render_element_opening(
 		push_escaped_attribute(&mut html, name, value);
 	}
 	for (index, attribute) in element.reactive_attrs().iter().enumerate() {
+		if omits_bound_file_value && attribute.name().eq_ignore_ascii_case("value") {
+			continue;
+		}
 		if crate::component::into_page::controlled_attribute_is_overridden(
 			element.bound_control(),
 			attribute.name(),
@@ -2626,9 +2643,64 @@ mod tests {
 	use crate::reactive::hooks::use_retained_effect;
 	use crate::reactive::runtime::with_runtime;
 	use reinhardt_core::deps;
-	use reinhardt_core::types::page::DeferredNode;
+	use reinhardt_core::types::page::{DeferredNode, EventFile, NativeEventFile};
 	use rstest::rstest;
 	use serial_test::serial;
+
+	#[cfg(feature = "hmr")]
+	#[rstest::fixture]
+	fn dev_wrapped_select() -> (ReactiveScope, Page) {
+		let scope = ReactiveScope::new();
+		let view = scope.enter(|| {
+			let option = PageElement::new("option")
+				.child(
+					Page::text(" Alpha ")
+						.with_dev_slot(1)
+						.with_dev_template_metadata("option text"),
+				)
+				.into_page();
+			PageElement::new("select")
+				.control_binding(ControlBinding::select_one(Signal::new("Alpha".to_owned())))
+				.child(option.clone().with_dev_slot(2))
+				.child(option.with_dev_template_metadata("duplicate option"))
+				.child(Page::empty().with_dev_slot(3))
+				.into_page()
+				.with_dev_template_metadata("select")
+				.with_dev_slot(4)
+		});
+		(scope, view)
+	}
+
+	#[cfg(feature = "hmr")]
+	#[rstest]
+	#[case::buffered(false)]
+	#[case::streaming(true)]
+	#[tokio::test]
+	async fn dev_wrappers_preserve_inferred_option_selection(
+		dev_wrapped_select: (ReactiveScope, Page),
+		#[case] streaming: bool,
+	) {
+		// Arrange
+		let (_scope, view) = dev_wrapped_select;
+		let mut renderer = SsrRenderer::new();
+
+		// Act
+		let html = if streaming {
+			renderer
+				.render_stream_shell_page(&view, &mut Vec::new())
+				.await
+		} else {
+			renderer
+				.render_async_page(&view, AsyncRenderMode::Buffered)
+				.await
+		};
+
+		// Assert
+		assert_eq!(
+			html,
+			"<select><option selected=\"selected\"> Alpha </option><option> Alpha </option></select>"
+		);
+	}
 
 	struct TestComponent {
 		message: String,
@@ -2715,6 +2787,39 @@ mod tests {
 			assert_eq!(
 				render_element_opening(&element, &projection, None),
 				"<input type=\"password\" data-rh-password-omitted=\"true\""
+			);
+		});
+	}
+
+	#[cfg(native)]
+	#[rstest]
+	fn render_element_opening_omits_bound_file_values() {
+		ReactiveScope::run(|| {
+			// Arrange
+			let file =
+				EventFile::from(&NativeEventFile::new("secret.txt", "text/plain", 12, 1_000));
+			let empty = PageElement::new("input")
+				.attr("type", "file")
+				.attr("value", "secret.txt")
+				.control_binding(ControlBinding::file(Signal::new(Vec::new())));
+			let selected = PageElement::new("input")
+				.attr("type", "file")
+				.attr("multiple", "multiple")
+				.reactive_attr("value", || Some("secret.txt".into()))
+				.control_binding(ControlBinding::file(Signal::new(vec![file])));
+
+			// Act
+			let openings = [empty, selected].map(|element| {
+				render_element_opening(&element, &project(element.bound_control()), None)
+			});
+
+			// Assert
+			assert_eq!(
+				openings,
+				[
+					r#"<input type="file""#.to_owned(),
+					r#"<input type="file" multiple="multiple""#.to_owned(),
+				]
 			);
 		});
 	}

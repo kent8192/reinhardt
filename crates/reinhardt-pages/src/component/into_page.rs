@@ -28,7 +28,7 @@ use crate::component::reactive_if::{
 	clear_reactive_node_store, new_reactive_node_store, with_reactive_node_store,
 };
 #[cfg(wasm)]
-use crate::dom::control_binding::ControlBindingController;
+use crate::dom::control_binding::{ControlBindingController, validate_control};
 #[cfg(wasm)]
 use crate::dom::{Element, EventHandle};
 #[cfg(all(wasm, feature = "hmr"))]
@@ -139,17 +139,30 @@ pub trait PageExt {
 #[cfg(wasm)]
 impl PageExt for Page {
 	fn mount(self, parent: &Element) -> Result<(), MountError> {
+		let form_owner = containing_form(parent.as_web_sys());
 		let manager = crate::document_head::ensure_browser_document_head_manager()
 			.map_err(|error| error.into_mount_error())?;
 		manager.begin_batch();
 		let result = crate::document_head::with_document_head_manager(&manager, || {
-			mount_inner(self, parent)
+			mount_inner(self, parent, form_owner)
 		});
 		let reconcile = manager
 			.end_batch(result.is_ok())
 			.map_err(|error| error.into_mount_error());
 		result.and(reconcile)
 	}
+}
+
+#[cfg(wasm)]
+fn containing_form(element: &web_sys::Element) -> Option<web_sys::HtmlFormElement> {
+	let mut current = Some(element.clone());
+	while let Some(element) = current {
+		if element.tag_name().eq_ignore_ascii_case("form") {
+			return element.dyn_into().ok();
+		}
+		current = element.parent_element();
+	}
+	None
 }
 
 #[cfg(wasm)]
@@ -162,6 +175,8 @@ pub(crate) fn controlled_attribute_is_overridden(
 ) -> bool {
 	binding.is_some_and(|binding| match binding.kind() {
 		ControlKind::Text | ControlKind::Number => name.eq_ignore_ascii_case("value"),
+		// File selection is browser-owned and must never be projected through an attribute.
+		ControlKind::File => name.eq_ignore_ascii_case("value"),
 		ControlKind::Checkbox => name.eq_ignore_ascii_case("checked"),
 		ControlKind::Radio => {
 			name.eq_ignore_ascii_case("checked") || name.eq_ignore_ascii_case("value")
@@ -217,7 +232,7 @@ pub(crate) fn controlled_attribute_affects_value(
 			.iter()
 			.any(|attribute| name.eq_ignore_ascii_case(attribute)),
 		ControlKind::SelectOne | ControlKind::SelectMany => name.eq_ignore_ascii_case("multiple"),
-		ControlKind::Checkbox | ControlKind::Radio => false,
+		ControlKind::Checkbox | ControlKind::Radio | ControlKind::File => false,
 	}
 }
 
@@ -275,12 +290,17 @@ pub(crate) fn initialize_control_default(element: &Element, binding: &ControlBin
 				}
 			}
 		}
+		(ControlKind::File, ControlValue::Files(_)) => {}
 		_ => {}
 	}
 }
 
 #[cfg(wasm)]
-fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
+fn mount_inner(
+	page: Page,
+	parent: &Element,
+	form_owner: Option<web_sys::HtmlFormElement>,
+) -> Result<(), MountError> {
 	use crate::dom::document;
 
 	match page {
@@ -290,7 +310,7 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 				el.into_parts_with_control_binding();
 			if !is_safe_html_element_name(&tag) {
 				for child in children {
-					mount_inner(child, parent)?;
+					mount_inner(child, parent, form_owner.clone())?;
 				}
 				return Ok(());
 			}
@@ -298,6 +318,15 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 			let element = doc
 				.create_element(&tag)
 				.map_err(|_| MountError::CreateElementFailed)?;
+			let child_form_owner = if tag.eq_ignore_ascii_case("form") {
+				element
+					.as_web_sys()
+					.clone()
+					.dyn_into::<web_sys::HtmlFormElement>()
+					.ok()
+			} else {
+				form_owner.clone()
+			};
 
 			for (index, (name, value)) in attrs.iter().enumerate() {
 				if !static_attribute_is_effective(&attrs, index) {
@@ -339,11 +368,14 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 			let mount_children_before_binding = tag.eq_ignore_ascii_case("select");
 			let skip_bound_textarea_children =
 				control_binding.is_some() && tag.eq_ignore_ascii_case("textarea");
+			let append_file_binding_before_controller = control_binding
+				.as_ref()
+				.is_some_and(|binding| binding.kind() == ControlKind::File);
 			let mount_element = || {
 				let mut children = children.into_iter();
 				if mount_children_before_binding {
 					for child in children.by_ref() {
-						mount_inner(child, &element)?;
+						mount_inner(child, &element, child_form_owner.clone())?;
 					}
 				}
 
@@ -425,9 +457,27 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 						crate::dom::control_binding::reconcile_control_binding(&element, binding)?;
 					}
 				}
+				if append_file_binding_before_controller {
+					if let Some(binding) = control_binding.as_ref() {
+						validate_control(&element, binding.kind())?;
+					}
+					parent
+						.append_child(element.clone())
+						.map_err(|_| MountError::AppendChildFailed)?;
+				}
 				let binding_controller = control_binding
 					.clone()
-					.map(|binding| ControlBindingController::mount(element.clone(), binding))
+					.map(|binding| {
+						if form_owner.is_some() {
+							ControlBindingController::mount_with_form_owner(
+								element.clone(),
+								binding,
+								form_owner.clone(),
+							)
+						} else {
+							ControlBindingController::mount(element.clone(), binding)
+						}
+					})
 					.transpose()?;
 				let mut event_handles: Vec<EventHandle> = Vec::new();
 
@@ -453,13 +503,15 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 
 				if !skip_bound_textarea_children {
 					for child in children {
-						mount_inner(child, &element)?;
+						mount_inner(child, &element, child_form_owner.clone())?;
 					}
 				}
 
-				parent
-					.append_child(element.clone())
-					.map_err(|_| MountError::AppendChildFailed)?;
+				if !append_file_binding_before_controller {
+					parent
+						.append_child(element.clone())
+						.map_err(|_| MountError::AppendChildFailed)?;
+				}
 				store_reactive_node((
 					binding_controller,
 					event_handles,
@@ -480,18 +532,18 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 		}
 		Page::Fragment(children) => {
 			for child in children {
-				mount_inner(child, parent)?;
+				mount_inner(child, parent, form_owner.clone())?;
 			}
 		}
 		Page::KeyedFragment(children) => {
 			for (_, child) in children {
-				mount_inner(child, parent)?;
+				mount_inner(child, parent, form_owner.clone())?;
 			}
 		}
 		Page::Outlet(outlet) => {
 			let id = outlet.id().map(str::to_string);
 			if let Some(child) = outlet.into_child() {
-				mount_inner(child, parent)?;
+				mount_inner(child, parent, form_owner)?;
 			} else if let Some(id) = id {
 				let doc = document();
 				let host = doc
@@ -513,7 +565,7 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 					.and_then(|manager| manager.register_static_page(head))
 					.map_err(|error| error.into_mount_error())?;
 				store_reactive_node(registration);
-				mount_inner(*view, parent)
+				mount_inner(*view, parent, form_owner)
 			})?;
 		}
 		#[cfg(feature = "hmr")]
@@ -523,7 +575,7 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 				.cloned();
 			let registry = crate::hmr::bridge::active_registry();
 			let (Some(descriptor), Some(registry)) = (descriptor, registry) else {
-				mount_inner(*view, parent)?;
+				mount_inner(*view, parent, form_owner)?;
 				return Ok(());
 			};
 
@@ -544,7 +596,8 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 				.inner()
 				.append_child(&start)
 				.map_err(|_| MountError::AppendChildFailed)?;
-			let mounted = with_template_mount_context(|| mount_inner(*view, parent));
+			let mounted =
+				with_template_mount_context(|| mount_inner(*view, parent, form_owner.clone()));
 			let ((), slots) = match mounted {
 				Ok(value) => value,
 				Err(error) => {
@@ -575,7 +628,7 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 			let captures_slot =
 				TEMPLATE_MOUNT_CONTEXTS.with(|contexts| !contexts.borrow().is_empty());
 			if !captures_slot {
-				mount_inner(*view, parent)?;
+				mount_inner(*view, parent, form_owner)?;
 				return Ok(());
 			}
 
@@ -590,7 +643,8 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 				.append_child(&start)
 				.map_err(|_| MountError::AppendChildFailed)?;
 			let store = new_reactive_node_store();
-			let mounted = with_reactive_node_store(&store, || mount_inner(*view, parent));
+			let mounted =
+				with_reactive_node_store(&store, || mount_inner(*view, parent, form_owner.clone()));
 			if let Err(error) = mounted {
 				clear_reactive_node_store(&store);
 				let _ = parent.inner().remove_child(&start);
@@ -620,7 +674,9 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 			// Create a ReactiveIfNode that manages DOM updates reactively.
 			// The node uses an Effect to monitor condition changes and swaps
 			// DOM nodes when the condition value changes.
-			let node = ReactiveIfNode::new(parent, condition, then_view, else_view);
+			let node = ReactiveIfNode::new_with_form_owner(
+				parent, condition, then_view, else_view, form_owner,
+			);
 			// Store the node to keep it alive for the lifetime of the DOM element
 			store_reactive_node(node);
 		}
@@ -631,15 +687,15 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 			// Create a ReactiveNode that manages DOM updates reactively.
 			// The node uses an Effect to monitor dependency changes and
 			// re-renders when they change.
-			let node = ReactiveNode::new(parent, render);
+			let node = ReactiveNode::new_with_form_owner(parent, render, form_owner);
 			// Store the node to keep it alive for the lifetime of the DOM element
 			store_reactive_node(node);
 		}
 		Page::Suspense(node) => {
-			mount_inner(node.render_branch(), parent)?;
+			mount_inner(node.render_branch(), parent, form_owner)?;
 		}
 		Page::Deferred(node) => {
-			mount_inner(node.content(), parent)?;
+			mount_inner(node.content(), parent, form_owner)?;
 		}
 	}
 

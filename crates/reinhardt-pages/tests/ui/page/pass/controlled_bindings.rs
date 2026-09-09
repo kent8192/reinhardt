@@ -1,4 +1,5 @@
 use reinhardt_core::types::page::NumberParseError;
+use reinhardt_pages::event::EventFile;
 use reinhardt_pages::page;
 use reinhardt_pages::reactive::{ReactiveScope, Signal};
 
@@ -22,6 +23,7 @@ fn main() {
 		let number_error = Signal::new(None::<NumberParseError>);
 		let selected = Signal::new(String::new());
 		let selected_many = Signal::new(Vec::<String>::new());
+		let files = Signal::new(Vec::<EventFile>::new());
 		let fields = Fields {
 			name: Signal::new(String::new()),
 		};
@@ -115,6 +117,17 @@ fn main() {
 				aria_label: "Borrowed number with parse error",
 				type: "number",
 				bind: number(&number, &number_error)
+			}
+			input {
+				a11y: off,
+				type: "file",
+				bind: files
+			}
+			input {
+				a11y: off,
+				type: "file",
+				multiple: true,
+				bind: files
 			}
 			select {
 				a11y: off,

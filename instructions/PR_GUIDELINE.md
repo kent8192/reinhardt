@@ -494,8 +494,14 @@ result is independent of warning-comment delivery or deduplication; an existing
 warning never makes an invalid target pass. Retarget the breaking change to the
 appropriate develop branch, or correct an inaccurate classification.
 
-`Warn Invalid Breaking Change Target` posts to the PR conversation through the
-issue-comment API and requires `pull-requests: write` alongside `issues: write`.
+The trusted `pull_request_target` workflow publishes this named check explicitly
+on the current `pr.head.sha` through the Checks API with `checks: write`. Both
+success and failure are published before comment delivery. The automatic job
+check belongs to the base commit and has a distinct name,
+`Publish Breaking Change Target Check`; it is not the required PR check.
+
+The workflow also posts to the PR conversation through the issue-comment API
+and requires `pull-requests: write` alongside `issues: write`.
 A `403 Resource not accessible by integration` during comment creation is a
 workflow permission failure. This `pull_request_target` workflow runs from the
 base branch, so permission repairs must reach that branch before a new PR event

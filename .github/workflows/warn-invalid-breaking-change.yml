@@ -11,13 +11,15 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
+  checks: write
   issues: write
   # The issue-comment endpoint also requires access to the PR conversation.
   pull-requests: write
 
 jobs:
   warn:
-    name: Warn Invalid Breaking Change Target
+    # Only the explicitly published PR-head check uses the required check name.
+    name: Publish Breaking Change Target Check
     runs-on: ubuntu-latest
     steps:
       - name: Check breaking-change target
@@ -36,17 +38,35 @@ jobs:
             const breakingTitle = /^(?:[a-z][a-z0-9-]*!(?:\([^)]*\))?|[a-z][a-z0-9-]*\([^)]*\)!)\s*:/i.test(pr.title);
             const breakingChange = labels.includes('breaking-change') || breakingTitle;
             const validDevelopBranch = /^develop\/\d+\.\d+\.\d+$/.test(sourceBranch);
+            const invalidTarget = pr.base.ref === 'main' && breakingChange && !validDevelopBranch;
+            const summary = invalidTarget
+              ? `Breaking change from '${sourceBranch}' must target a versioned develop/X.Y.Z branch, not main.`
+              : 'No invalid breaking-change target detected.';
 
-            if (pr.base.ref !== 'main' || !breakingChange || validDevelopBranch) {
-              core.info('No invalid breaking-change target detected.');
+            // pull_request_target's automatic job check belongs to the base
+            // commit. Publish both policy outcomes on the current PR head before
+            // attempting optional warning delivery.
+            await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'Warn Invalid Breaking Change Target',
+              head_sha: pr.head.sha,
+              status: 'completed',
+              conclusion: invalidTarget ? 'failure' : 'success',
+              output: {
+                title: invalidTarget ? 'Invalid breaking-change target' : 'Valid breaking-change target',
+                summary,
+              },
+            });
+
+            if (!invalidTarget) {
+              core.info(summary);
               return;
             }
 
             // Fail before comment delivery or deduplication: neither approves
             // a breaking change targeting the stable branch.
-            core.setFailed(
-              `Breaking change from '${sourceBranch}' must target a versioned develop/X.Y.Z branch, not main.`
-            );
+            core.setFailed(summary);
 
             const marker = '<!-- invalid-breaking-change-target-warning -->';
             const comments = await github.paginate(github.rest.issues.listComments, {

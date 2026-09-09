@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.15...reinhardt-web@v0.3.16) - 2026-09-08
+
+### Fixed
+
+- *(views)* omit unused syntect parser dependencies
+- *(core)* defer layout effects within explicit batches
+- *(pages)* preserve textarea and select state during hydration
+- *(pages)* preserve form ownership across hydration and reset
+- *(core)* flush batched layout work before passive effects
+- *(pages)* retain custom widget subscriptions after native reset
+- *(core)* deduplicate layout callbacks while flushing batches
+- *(pages)* preserve pristine textarea state through newline normalization
+- *(pages)* evaluate static select choice expressions once
+- *(pages)* preserve reconciled defaults during hydration
+- *(pages)* reconcile unbound textarea snapshots
+- *(ci)* grant PR access to breaking-change warnings
+
+### Maintenance
+
+- merge main into radio group accessibility
+- *(pages)* merge main field metadata and radio groups
+
+### Testing
+
+- *(urls)* enforce inactive WASM server routing
+- *(commands)* restore admin script process state
+- *(conf)* isolate in-memory audit databases
+- *(commands)* inject shared fixtures into admin suites
+- *(conf)* compose audit backend fixtures with test helpers
+
 ## [0.3.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.14...reinhardt-web@v0.3.15) - 2026-09-01
 
 ### Documentation
